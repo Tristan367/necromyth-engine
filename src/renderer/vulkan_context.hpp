@@ -2,8 +2,10 @@
 
 #include "renderer/buffer.hpp"
 #include "renderer/depth_image.hpp"
+#include "renderer/descriptors.hpp"
 #include "renderer/graphics_pipeline.hpp"
 #include "renderer/image_barrier.hpp"
+#include "renderer/uniform_buffer.hpp"
 #include "renderer/vertex.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -117,7 +119,10 @@ public:
     create_swapchain_image_views();
     create_depth_image();
     create_command_pool();
+    create_descriptor_set_layout();
     create_vertex_buffer();
+    create_uniform_buffers();
+    create_descriptor_pool_and_sets();
     create_graphics_pipeline();
     create_command_buffers();
     create_sync_objects();
@@ -174,6 +179,10 @@ public:
       throw std::runtime_error("Failed to acquire swapchain image");
 
     device_.resetFences(*in_flight_fences_[frame_index_]);
+
+    uniform_buffers_.write(
+        frame_index_,
+        UniformBufferSet::make_rotating_ubo(swapchain_extent_));
 
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
@@ -473,6 +482,24 @@ private:
     depth_image_.create(physical_device_, device_, swapchain_extent_);
   }
 
+  void create_descriptor_set_layout() {
+    descriptor_resources_.create_layout(device_);
+  }
+
+  void create_uniform_buffers() {
+    uniform_buffers_.create(physical_device_, device_, detail::max_frames_in_flight);
+  }
+
+  void create_descriptor_pool_and_sets() {
+    descriptor_resources_.create_pool(device_, detail::max_frames_in_flight);
+
+    std::array<vk::Buffer, detail::max_frames_in_flight> buffers{};
+    for (std::uint32_t i = 0; i < detail::max_frames_in_flight; ++i)
+      buffers[i] = uniform_buffers_.buffer(i);
+
+    descriptor_resources_.allocate_sets(device_, buffers);
+  }
+
   void create_vertex_buffer() {
     const auto vertices = triangle_vertices();
     vertex_count_ = static_cast<std::uint32_t>(vertices.size());
@@ -493,6 +520,7 @@ private:
         swapchain_image_format_,
         depth_image_.format(),
         ENGINE_SHADER_SPIRV,
+        descriptor_resources_.layout(),
         ColoredVertex::binding_description(),
         attributes);
   }
@@ -586,6 +614,12 @@ private:
     };
     command_buffer.beginRendering(rendering_info);
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline_.pipeline());
+    command_buffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        *graphics_pipeline_.layout(),
+        0,
+        descriptor_resources_.set(frame_index_),
+        nullptr);
     const vk::Buffer vertex_buffers[] = {vertex_buffer_.handle()};
     const vk::DeviceSize offsets[] = {0};
     command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
@@ -744,6 +778,8 @@ private:
   std::vector<vk::raii::Fence> in_flight_fences_;
   DepthImage depth_image_;
   DeviceLocalBuffer vertex_buffer_;
+  UniformBufferSet uniform_buffers_;
+  DescriptorResources descriptor_resources_;
   std::uint32_t vertex_count_{};
   GraphicsPipeline graphics_pipeline_;
   std::uint32_t frame_index_{};

@@ -19,6 +19,7 @@ public:
       vk::Format color_format,
       vk::Format depth_format,
       std::string_view spirv_path,
+      vk::DescriptorSetLayout descriptor_set_layout,
       vk::VertexInputBindingDescription binding,
       std::span<const vk::VertexInputAttributeDescription> attributes) {
     const auto spirv = read_spirv_file(spirv_path);
@@ -53,7 +54,7 @@ public:
     const vk::PipelineRasterizationStateCreateInfo rasterizer{
         .polygonMode = vk::PolygonMode::eFill,
         .cullMode = vk::CullModeFlagBits::eBack,
-        .frontFace = vk::FrontFace::eClockwise,
+        .frontFace = vk::FrontFace::eCounterClockwise,
         .lineWidth = 1.0F,
     };
     const vk::PipelineMultisampleStateCreateInfo multisampling{
@@ -82,7 +83,12 @@ public:
 
     vk::Format color_attachment_format = color_format;
     vk::Format depth_attachment_format = depth_format;
-    pipeline_layout_ = vk::raii::PipelineLayout(device, vk::PipelineLayoutCreateInfo{});
+    pipeline_layout_ = vk::raii::PipelineLayout(
+        device,
+        vk::PipelineLayoutCreateInfo{
+            .setLayoutCount = 1,
+            .pSetLayouts = &descriptor_set_layout,
+        });
 
     vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipeline_chain{
         vk::GraphicsPipelineCreateInfo{

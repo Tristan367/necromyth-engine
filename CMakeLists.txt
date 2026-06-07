@@ -24,6 +24,7 @@ endif()
 
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
 
 find_program(SLANGC_EXECUTABLE slangc
     HINTS
@@ -67,6 +68,8 @@ add_executable(${NAME}
     src/renderer/depth_image.hpp
     src/renderer/buffer.hpp
     src/renderer/vertex.hpp
+    src/renderer/uniform_buffer.hpp
+    src/renderer/descriptors.hpp
 )
 
 add_dependencies(${NAME} shaders)
@@ -86,6 +89,7 @@ target_include_directories(${NAME} PRIVATE
 target_link_libraries(${NAME} PRIVATE
     SDL3::SDL3
     Vulkan::Vulkan
+    glm::glm
 )
 
 if(MSVC)
