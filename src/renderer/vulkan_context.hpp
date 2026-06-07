@@ -64,6 +64,11 @@ public:
   VulkanContext(VulkanContext &&) = delete;
   auto operator=(VulkanContext &&) -> VulkanContext & = delete;
 
+  ~VulkanContext() {
+    if (*device_.device() != nullptr)
+      device_.wait_idle();
+  }
+
   [[nodiscard]] auto gpu_name() const -> const std::string & {
     return device_.gpu_name();
   }
