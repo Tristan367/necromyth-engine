@@ -98,7 +98,8 @@ set_target_properties(${NAME} PROPERTIES
 set(_run_env_vars "")
 if(VULKAN_SDK_ROOT AND IS_DIRECTORY "${VULKAN_SDK_ROOT}/lib")
     list(APPEND _run_env_vars "VULKAN_SDK=${VULKAN_SDK_ROOT}")
-    list(APPEND _run_env_vars "LD_LIBRARY_PATH=${VULKAN_SDK_ROOT}/lib:$ENV{LD_LIBRARY_PATH}")
+    list(APPEND _run_env_vars "LD_LIBRARY_PATH=${VULKAN_SDK_ROOT}/lib")
+    list(APPEND _run_env_vars "VK_ADD_LAYER_PATH=${VULKAN_SDK_ROOT}/share/vulkan/explicit_layer.d")
 endif()
 
 add_custom_target(run

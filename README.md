@@ -20,19 +20,26 @@ CMake discovers dependencies through standard paths and environment variables:
 | Vulkan | `VULKAN_SDK` environment variable, or system install |
 | SDL3 | `CMAKE_PREFIX_PATH`, or system install |
 
-Example with locally installed dependencies:
+By default the Makefile uses `~/opt/vulkan-sdk/default/x86_64`. Override for one build:
 
 ```bash
-export VULKAN_SDK="$HOME/opt/vulkan-sdk/default/x86_64"
+make VULKAN_SDK_ROOT="$HOME/opt/vulkan-sdk/default/x86_64" debug
+```
+
+Example with locally installed SDL:
+
+```bash
 export CMAKE_PREFIX_PATH="$HOME/opt/SDL"
-cmake -S . -B build
+cmake -S . -B build -DVULKAN_SDK_ROOT="$HOME/opt/vulkan-sdk/default/x86_64"
 ```
 
-You can also pass the Vulkan path directly:
+**Shell setup is optional.** `make run` / `make debug` set `VULKAN_SDK`, `LD_LIBRARY_PATH`, and `VK_ADD_LAYER_PATH` from the CMake SDK path. You do not need `source setup-env.sh` in `.bashrc` for this project. If you keep a global SDK in `.bashrc`, point it at the `default` symlink so it stays in sync:
 
 ```bash
-cmake -S . -B build -DVULKAN_SDK_ROOT="$VULKAN_SDK"
+source ~/opt/vulkan-sdk/default/setup-env.sh
 ```
+
+Older SDK installs (e.g. `1.4.313.0`) can be removed once nothing references them; run `make clean` and reconfigure after switching SDKs.
 
 If SDL3 is installed system-wide (e.g. Arch `sdl3` package), no extra prefix is needed.
 
@@ -40,8 +47,9 @@ If SDL3 is installed system-wide (e.g. Arch `sdl3` package), no extra prefix is 
 
 ```bash
 make              # Release build (default)
-make debug        # Debug build with Vulkan validation layers
+make debug        # Debug build + run (Vulkan validation layers enabled)
 make release      # Release build explicitly
+make run          # Release build + run
 make clean        # Remove build directory
 ```
 
@@ -50,7 +58,8 @@ Shaders are written in Slang (Khronos tutorial style) and compiled automatically
 ## Run
 
 ```bash
-make run
+make run          # Release
+make debug        # Debug with validation
 ```
 
 Prefer an external terminal for running the app. Close the window or press Ctrl+C to exit.
@@ -93,3 +102,29 @@ if (framebuffer_resized_) {
 ```
 
 Keep braces when the body is multiple statements.
+
+## Vulkan Conventions
+
+These are project defaults. If a change contradicts them, there should be a deliberate reason.
+
+**Runtime API baseline is Vulkan 1.3** (`vk::ApiVersion13`, `dynamicRendering`, `synchronization2`, `submit2`). Do not hard-require Vulkan 1.4 or `maintenance5`. Shader `-profile spirv_1_4` is SPIR-V bytecode version, not the runtime API level.
+
+**Do not define `VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS`.** Handle `vk::Result::eErrorOutOfDateKHR` and `eSuboptimalKHR` explicitly in the frame loop and swapchain recreation path.
+
+**Physical device selection** filters first (`is_device_suitable`), then scores:
+- `+1000` for discrete GPU
+- `+ maxImageDimension2D` as a capability tie-breaker
+
+Both score terms are required. Do not pick the first suitable device.
+
+**Queue families:** first-match for graphics/compute/transfer/present, then prefer a unified family that supports graphics, compute, transfer, and present together.
+
+**Swapchain:** prefer `Mailbox`, fall back to `FIFO`; recreate with `oldSwapchain`; debounce window resize (~100 ms); wait for non-zero extent before recreating.
+
+**Synchronization:** signal semaphores at `eColorAttachmentOutput`, not `eAllGraphics`. Dynamic rendering color attachments use `eColorAttachmentOptimal`.
+
+**Validation:** Debug builds require `VK_LAYER_KHRONOS_validation` and fail fast if it is missing. Release builds run without validation. No validation output on startup usually means the layer is active and found nothing wrong — debug builds print `Vulkan validation: enabled` to confirm.
+
+**Extensions:** verify required instance and device extensions exist before create, not only at link time.
+
+**Helper order:** define lower-level helpers (e.g. `has_name`) before helpers that call them (e.g. `supports_all_names`).

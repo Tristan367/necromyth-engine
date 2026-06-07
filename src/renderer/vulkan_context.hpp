@@ -116,6 +116,11 @@ public:
     create_command_pool();
     create_command_buffers();
     create_sync_objects();
+
+#ifndef NDEBUG
+    if (validation_enabled_)
+      std::cout << "Vulkan validation: enabled\n";
+#endif
   }
 
   ~VulkanContext() {
