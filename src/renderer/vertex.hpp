@@ -4,46 +4,52 @@
 
 #include <array>
 #include <cstddef>
-#include <vector>
+#include <cstdint>
+#include <cstring>
 
 namespace engine {
 
-struct ColoredVertex {
-  float pos[2];
+struct MeshVertex {
+  float pos[3];
   float color[3];
+  float tex_coord[2];
+
+  [[nodiscard]] auto operator==(const MeshVertex &other) const -> bool {
+    return std::memcmp(pos, other.pos, sizeof(pos)) == 0 &&
+           std::memcmp(color, other.color, sizeof(color)) == 0 &&
+           std::memcmp(tex_coord, other.tex_coord, sizeof(tex_coord)) == 0;
+  }
 
   [[nodiscard]] static auto binding_description() -> vk::VertexInputBindingDescription {
     return {
         .binding = 0,
-        .stride = sizeof(ColoredVertex),
+        .stride = sizeof(MeshVertex),
         .inputRate = vk::VertexInputRate::eVertex,
     };
   }
 
-  [[nodiscard]] static auto attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 2> {
+  [[nodiscard]] static auto attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 3> {
     return {{
         {
             .location = 0,
             .binding = 0,
-            .format = vk::Format::eR32G32Sfloat,
-            .offset = offsetof(ColoredVertex, pos),
+            .format = vk::Format::eR32G32B32Sfloat,
+            .offset = offsetof(MeshVertex, pos),
         },
         {
             .location = 1,
             .binding = 0,
             .format = vk::Format::eR32G32B32Sfloat,
-            .offset = offsetof(ColoredVertex, color),
+            .offset = offsetof(MeshVertex, color),
+        },
+        {
+            .location = 2,
+            .binding = 0,
+            .format = vk::Format::eR32G32Sfloat,
+            .offset = offsetof(MeshVertex, tex_coord),
         },
     }};
   }
 };
-
-[[nodiscard]] inline auto triangle_vertices() -> std::vector<ColoredVertex> {
-  return {
-      {{0.0F, -0.5F}, {1.0F, 0.0F, 0.0F}},
-      {{0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}},
-      {{-0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}},
-  };
-}
 
 } // namespace engine

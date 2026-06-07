@@ -20,6 +20,7 @@ public:
       vk::Format depth_format,
       std::string_view spirv_path,
       vk::DescriptorSetLayout descriptor_set_layout,
+      vk::SampleCountFlagBits sample_count,
       vk::VertexInputBindingDescription binding,
       std::span<const vk::VertexInputAttributeDescription> attributes) {
     const auto spirv = read_spirv_file(spirv_path);
@@ -58,7 +59,7 @@ public:
         .lineWidth = 1.0F,
     };
     const vk::PipelineMultisampleStateCreateInfo multisampling{
-        .rasterizationSamples = vk::SampleCountFlagBits::e1,
+        .rasterizationSamples = sample_count,
     };
     const vk::PipelineColorBlendAttachmentState color_blend_attachment{
         .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |

@@ -26,6 +26,11 @@ find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
+find_path(STB_INCLUDE_DIR NAMES stb_image.h PATH_SUFFIXES stb)
+if(NOT STB_INCLUDE_DIR)
+  message(FATAL_ERROR "stb_image.h not found; install the stb package")
+endif()
+
 find_program(SLANGC_EXECUTABLE slangc
     HINTS
         "${VULKAN_SDK_ROOT}/bin"
@@ -62,14 +67,19 @@ add_executable(${NAME}
     src/main.cpp
     src/app.hpp
     src/platform/sdl_window.hpp
+    src/renderer/vulkan_device.hpp
+    src/renderer/swapchain.hpp
     src/renderer/vulkan_context.hpp
     src/renderer/graphics_pipeline.hpp
     src/renderer/image_barrier.hpp
     src/renderer/depth_image.hpp
+    src/renderer/msaa_color_image.hpp
     src/renderer/buffer.hpp
     src/renderer/vertex.hpp
+    src/renderer/model_loader.hpp
     src/renderer/uniform_buffer.hpp
     src/renderer/descriptors.hpp
+    src/renderer/texture_image.hpp
 )
 
 add_dependencies(${NAME} shaders)
@@ -80,10 +90,14 @@ target_compile_definitions(${NAME} PRIVATE
     VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
     ENGINE_SHADER_SPIRV="${SHADER_SPIRV}"
+    ENGINE_MODEL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/models/viking_room.obj"
+    ENGINE_TEXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/textures/viking_room.png"
 )
 
 target_include_directories(${NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+    "${STB_INCLUDE_DIR}"
 )
 
 target_link_libraries(${NAME} PRIVATE

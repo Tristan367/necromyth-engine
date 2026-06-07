@@ -4,6 +4,7 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -13,25 +14,39 @@ namespace engine {
 class DescriptorResources {
 public:
   void create_layout(vk::raii::Device &device) {
-    const vk::DescriptorSetLayoutBinding ubo_binding{
-        .binding = 0,
-        .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eVertex,
+    const std::array bindings{
+        vk::DescriptorSetLayoutBinding{
+            .binding = 0,
+            .descriptorType = vk::DescriptorType::eUniformBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex,
+        },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
     };
 
     descriptor_set_layout_ = vk::raii::DescriptorSetLayout(
         device,
         vk::DescriptorSetLayoutCreateInfo{
-            .bindingCount = 1,
-            .pBindings = &ubo_binding,
+            .bindingCount = static_cast<std::uint32_t>(bindings.size()),
+            .pBindings = bindings.data(),
         });
   }
 
   void create_pool(vk::raii::Device &device, std::uint32_t frame_count) {
-    const vk::DescriptorPoolSize pool_size{
-        .type = vk::DescriptorType::eUniformBuffer,
-        .descriptorCount = frame_count,
+    const std::array pool_sizes{
+        vk::DescriptorPoolSize{
+            .type = vk::DescriptorType::eUniformBuffer,
+            .descriptorCount = frame_count,
+        },
+        vk::DescriptorPoolSize{
+            .type = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = frame_count,
+        },
     };
 
     descriptor_pool_ = vk::raii::DescriptorPool(
@@ -39,12 +54,16 @@ public:
         vk::DescriptorPoolCreateInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
             .maxSets = frame_count,
-            .poolSizeCount = 1,
-            .pPoolSizes = &pool_size,
+            .poolSizeCount = static_cast<std::uint32_t>(pool_sizes.size()),
+            .pPoolSizes = pool_sizes.data(),
         });
   }
 
-  void allocate_sets(vk::raii::Device &device, std::span<const vk::Buffer> uniform_buffers) {
+  void allocate_sets(
+      vk::raii::Device &device,
+      std::span<const vk::Buffer> uniform_buffers,
+      vk::Sampler texture_sampler,
+      vk::ImageView texture_view) {
     std::vector<vk::DescriptorSetLayout> layouts(uniform_buffers.size(), *descriptor_set_layout_);
 
     const vk::DescriptorSetAllocateInfo allocate_info{
@@ -61,16 +80,32 @@ public:
           .offset = 0,
           .range = sizeof(UniformBufferObject),
       };
-      const vk::WriteDescriptorSet write{
-          .dstSet = descriptor_sets_[i],
-          .dstBinding = 0,
-          .dstArrayElement = 0,
-          .descriptorCount = 1,
-          .descriptorType = vk::DescriptorType::eUniformBuffer,
-          .pBufferInfo = &buffer_info,
+      const vk::DescriptorImageInfo image_info{
+          .sampler = texture_sampler,
+          .imageView = texture_view,
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
       };
 
-      device.updateDescriptorSets(write, nullptr);
+      const std::array writes{
+          vk::WriteDescriptorSet{
+              .dstSet = descriptor_sets_[i],
+              .dstBinding = 0,
+              .dstArrayElement = 0,
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eUniformBuffer,
+              .pBufferInfo = &buffer_info,
+          },
+          vk::WriteDescriptorSet{
+              .dstSet = descriptor_sets_[i],
+              .dstBinding = 1,
+              .dstArrayElement = 0,
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &image_info,
+          },
+      };
+
+      device.updateDescriptorSets(writes, nullptr);
     }
   }
 

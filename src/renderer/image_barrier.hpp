@@ -13,7 +13,9 @@ inline void transition_image_layout(
     vk::AccessFlags2 dst_access_mask,
     vk::PipelineStageFlags2 src_stage_mask,
     vk::PipelineStageFlags2 dst_stage_mask,
-    vk::ImageAspectFlags aspect_mask = vk::ImageAspectFlagBits::eColor) {
+    vk::ImageAspectFlags aspect_mask = vk::ImageAspectFlagBits::eColor,
+    std::uint32_t base_mip_level = 0,
+    std::uint32_t mip_level_count = 1) {
   const vk::ImageMemoryBarrier2 barrier{
       .srcStageMask = src_stage_mask,
       .srcAccessMask = src_access_mask,
@@ -26,8 +28,8 @@ inline void transition_image_layout(
       .image = image,
       .subresourceRange = {
           .aspectMask = aspect_mask,
-          .baseMipLevel = 0,
-          .levelCount = 1,
+          .baseMipLevel = base_mip_level,
+          .levelCount = mip_level_count,
           .baseArrayLayer = 0,
           .layerCount = 1,
       },

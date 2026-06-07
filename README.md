@@ -87,7 +87,7 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (orchestrator), `graphics_pipeline`, `depth_image`, `buffer`, `vertex`, `image_barrier`, `platform/sdl_window`.
+Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swapchain`, `graphics_pipeline`, `depth_image`, `msaa_color_image`, `buffer`, `vertex`, `model_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`.
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
@@ -128,7 +128,7 @@ Both score terms are required. Do not pick the first suitable device.
 
 **Queue families:** first-match for graphics/compute/transfer/present, then prefer a unified family that supports graphics, compute, transfer, and present together.
 
-**Swapchain:** prefer `Mailbox`, fall back to `FIFO`; recreate with `oldSwapchain`; debounce window resize (~100 ms); wait for non-zero extent before recreating; recreate depth image on swapchain resize (Khronos ch. 27, HowToVulkan, Sascha `trianglevulkan13`).
+**Swapchain:** prefer `FIFO` (vsync to display refresh); fall back to `Mailbox` if unavailable; recreate with `oldSwapchain`; debounce window resize (~100 ms); wait for non-zero extent before recreating; recreate depth image on swapchain resize (Khronos ch. 27, HowToVulkan, Sascha `trianglevulkan13`).
 
 **Depth:** format selection tries `D32_SFLOAT`, then `D32_SFLOAT_S8_UINT`, then `D24_UNORM_S8_UINT`; device-local optimal image; clear to 1.0; `CompareOp::eLessOrEqual` (Sascha, HowToVulkan).
 

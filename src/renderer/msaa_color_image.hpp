@@ -2,23 +2,22 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
-#include <array>
 #include <stdexcept>
-#include <utility>
 #include <vector>
 
 namespace engine {
 
-class DepthImage {
+class MsaaColorImage {
 public:
   void create(
       const vk::raii::PhysicalDevice &physical_device,
       vk::raii::Device &device,
       vk::Extent2D extent,
-      vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1) {
+      vk::Format format,
+      vk::SampleCountFlagBits samples) {
     physical_device_ = &physical_device;
     device_ = &device;
-    format_ = find_depth_format(physical_device);
+    format_ = format;
     samples_ = samples;
     create_resources(extent);
   }
@@ -30,20 +29,12 @@ public:
     create_resources(extent);
   }
 
-  [[nodiscard]] auto format() const -> vk::Format {
-    return format_;
-  }
-
   [[nodiscard]] auto image() const -> vk::Image {
     return *image_;
   }
 
   [[nodiscard]] auto view() const -> const vk::raii::ImageView & {
     return view_;
-  }
-
-  [[nodiscard]] auto aspect_mask() const -> vk::ImageAspectFlags {
-    return aspect_mask_;
   }
 
 private:
@@ -56,7 +47,7 @@ private:
         .arrayLayers = 1,
         .samples = samples_,
         .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+        .usage = vk::ImageUsageFlagBits::eTransientAttachment | vk::ImageUsageFlagBits::eColorAttachment,
         .sharingMode = vk::SharingMode::eExclusive,
     };
 
@@ -74,16 +65,12 @@ private:
     memory_ = vk::raii::DeviceMemory(*device_, allocate_info);
     image_.bindMemory(*memory_, 0);
 
-    aspect_mask_ = vk::ImageAspectFlagBits::eDepth;
-    if (format_ >= vk::Format::eD16UnormS8Uint)
-      aspect_mask_ |= vk::ImageAspectFlagBits::eStencil;
-
     const vk::ImageViewCreateInfo view_info{
         .image = *image_,
         .viewType = vk::ImageViewType::e2D,
         .format = format_,
         .subresourceRange = {
-            .aspectMask = aspect_mask_,
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
@@ -92,31 +79,6 @@ private:
     };
 
     view_ = vk::raii::ImageView(*device_, view_info);
-  }
-
-  [[nodiscard]] static auto find_depth_format(const vk::raii::PhysicalDevice &physical_device) -> vk::Format {
-    return find_supported_format(
-        physical_device,
-        {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},
-        vk::ImageTiling::eOptimal,
-        vk::FormatFeatureFlagBits::eDepthStencilAttachment);
-  }
-
-  [[nodiscard]] static auto find_supported_format(
-      const vk::raii::PhysicalDevice &physical_device,
-      const std::vector<vk::Format> &candidates,
-      vk::ImageTiling tiling,
-      vk::FormatFeatureFlags features) -> vk::Format {
-    for (const vk::Format format : candidates) {
-      const vk::FormatProperties properties = physical_device.getFormatProperties(format);
-      const vk::FormatFeatureFlags supported = tiling == vk::ImageTiling::eLinear
-                                                   ? properties.linearTilingFeatures
-                                                   : properties.optimalTilingFeatures;
-      if ((supported & features) == features)
-        return format;
-    }
-
-    throw std::runtime_error("No supported depth format found");
   }
 
   [[nodiscard]] static auto find_memory_type(
@@ -129,14 +91,13 @@ private:
         return i;
     }
 
-    throw std::runtime_error("Failed to find suitable memory type for depth image");
+    throw std::runtime_error("Failed to find suitable memory type for MSAA color image");
   }
 
   const vk::raii::PhysicalDevice *physical_device_{};
   vk::raii::Device *device_{};
   vk::Format format_{vk::Format::eUndefined};
   vk::SampleCountFlagBits samples_{vk::SampleCountFlagBits::e1};
-  vk::ImageAspectFlags aspect_mask_{};
   vk::raii::Image image_{nullptr};
   vk::raii::DeviceMemory memory_{nullptr};
   vk::raii::ImageView view_{nullptr};
