@@ -21,11 +21,10 @@ public:
         while (running_) {
             SDL_Event event{};
             while (SDL_PollEvent(&event)) {
-                if (event.type == SDL_EVENT_QUIT) {
+                if (event.type == SDL_EVENT_QUIT)
                     running_ = false;
-                } else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
+                else if (event.type == SDL_EVENT_WINDOW_RESIZED)
                     vulkan_.mark_framebuffer_resized();
-                }
             }
 
             vulkan_.draw_frame();

@@ -25,6 +25,36 @@ endif()
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 
+find_program(SLANGC_EXECUTABLE slangc
+    HINTS
+        "${VULKAN_SDK_ROOT}/bin"
+        "$ENV{VULKAN_SDK}/bin"
+    REQUIRED
+)
+
+set(SHADER_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.slang")
+set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+set(SHADER_SPIRV "${SHADER_OUTPUT_DIR}/slang.spv")
+
+add_custom_command(
+    OUTPUT "${SHADER_SPIRV}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+    COMMAND "${SLANGC_EXECUTABLE}"
+        "${SHADER_SOURCE}"
+        -target spirv
+        -profile spirv_1_4
+        -emit-spirv-directly
+        -fvk-use-entrypoint-name
+        -entry vertMain
+        -entry fragMain
+        -o "${SHADER_SPIRV}"
+    DEPENDS "${SHADER_SOURCE}"
+    COMMENT "Compiling Slang shaders"
+    VERBATIM
+)
+
+add_custom_target(shaders DEPENDS "${SHADER_SPIRV}")
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 add_executable(${NAME}
@@ -32,14 +62,18 @@ add_executable(${NAME}
     src/app.hpp
     src/platform/sdl_window.hpp
     src/renderer/vulkan_context.hpp
+    src/renderer/graphics_pipeline.hpp
+    src/renderer/image_barrier.hpp
 )
+
+add_dependencies(${NAME} shaders)
 
 target_compile_features(${NAME} PRIVATE cxx_std_23)
 
 target_compile_definitions(${NAME} PRIVATE
     VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-    VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS=1
+    ENGINE_SHADER_SPIRV="${SHADER_SPIRV}"
 )
 
 target_include_directories(${NAME} PRIVATE

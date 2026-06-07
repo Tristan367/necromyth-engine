@@ -20,9 +20,8 @@ namespace detail {
 class SdlContext {
 public:
     SdlContext() {
-        if (!SDL_Init(SDL_INIT_VIDEO)) {
+        if (!SDL_Init(SDL_INIT_VIDEO))
             throw detail::sdl_error("Failed to initialize SDL");
-        }
     }
 
     ~SdlContext() {
@@ -45,15 +44,13 @@ public:
             height,
             SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 
-        if (window_ == nullptr) {
+        if (window_ == nullptr)
             throw detail::sdl_error("Failed to create SDL window");
-        }
     }
 
     ~SdlWindow() {
-        if (window_ != nullptr) {
+        if (window_ != nullptr)
             SDL_DestroyWindow(window_);
-        }
     }
 
     SdlWindow(const SdlWindow&) = delete;
@@ -66,9 +63,8 @@ public:
 
     auto operator=(SdlWindow&& other) noexcept -> SdlWindow& {
         if (this != &other) {
-            if (window_ != nullptr) {
+            if (window_ != nullptr)
                 SDL_DestroyWindow(window_);
-            }
 
             window_ = other.window_;
             other.window_ = nullptr;

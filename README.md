@@ -45,6 +45,8 @@ make release      # Release build explicitly
 make clean        # Remove build directory
 ```
 
+Shaders are written in Slang (Khronos tutorial style) and compiled automatically by CMake via `slangc` from the Vulkan SDK. SPIR-V output goes to `build/shaders/slang.spv`.
+
 ## Run
 
 ```bash
@@ -76,3 +78,18 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 Keep the project uncluttered. Avoid hundreds of tiny files, but also avoid one massive source file. Use minimal abstractions that make ownership and rendering flow clear.
 
 Prefer modern C++ and modern Vulkan (`vk::raii::*`). Single `main.cpp` with engine code in `.hpp` files. Use RAII for all resource ownership.
+
+Omit braces on single-statement `if`, `else`, and loop bodies:
+
+```cpp
+if (condition)
+  do_one_thing();
+
+if (framebuffer_resized_) {
+  recreate_swapchain();
+  framebuffer_resized_ = false;
+  return;
+}
+```
+
+Keep braces when the body is multiple statements.
