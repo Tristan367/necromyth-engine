@@ -12,7 +12,8 @@ inline void transition_image_layout(
     vk::AccessFlags2 src_access_mask,
     vk::AccessFlags2 dst_access_mask,
     vk::PipelineStageFlags2 src_stage_mask,
-    vk::PipelineStageFlags2 dst_stage_mask) {
+    vk::PipelineStageFlags2 dst_stage_mask,
+    vk::ImageAspectFlags aspect_mask = vk::ImageAspectFlagBits::eColor) {
   const vk::ImageMemoryBarrier2 barrier{
       .srcStageMask = src_stage_mask,
       .srcAccessMask = src_access_mask,
@@ -24,7 +25,7 @@ inline void transition_image_layout(
       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .image = image,
       .subresourceRange = {
-          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .aspectMask = aspect_mask,
           .baseMipLevel = 0,
           .levelCount = 1,
           .baseArrayLayer = 0,

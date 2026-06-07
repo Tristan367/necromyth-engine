@@ -33,13 +33,7 @@ export CMAKE_PREFIX_PATH="$HOME/opt/SDL"
 cmake -S . -B build -DVULKAN_SDK_ROOT="$HOME/opt/vulkan-sdk/default/x86_64"
 ```
 
-**Shell setup is optional.** `make run` / `make debug` set `VULKAN_SDK`, `LD_LIBRARY_PATH`, and `VK_ADD_LAYER_PATH` from the CMake SDK path. You do not need `source setup-env.sh` in `.bashrc` for this project. If you keep a global SDK in `.bashrc`, point it at the `default` symlink so it stays in sync:
-
-```bash
-source ~/opt/vulkan-sdk/default/setup-env.sh
-```
-
-Older SDK installs (e.g. `1.4.313.0`) can be removed once nothing references them; run `make clean` and reconfigure after switching SDKs.
+**Shell setup is optional.** `make run` / `make debug` set `VULKAN_SDK`, `LD_LIBRARY_PATH`, and `VK_ADD_LAYER_PATH` from the CMake SDK path.
 
 If SDL3 is installed system-wide (e.g. Arch `sdl3` package), no extra prefix is needed.
 
@@ -47,26 +41,39 @@ If SDL3 is installed system-wide (e.g. Arch `sdl3` package), no extra prefix is 
 
 ```bash
 make              # Release build (default)
-make debug        # Debug build + run (Vulkan validation layers enabled)
+make debug        # Debug build and run (validation layers)
 make release      # Release build explicitly
-make run          # Release build + run
+make run          # Release build and run
 make clean        # Remove build directory
 ```
 
-Shaders are written in Slang (Khronos tutorial style) and compiled automatically by CMake via `slangc` from the Vulkan SDK. SPIR-V output goes to `build/shaders/slang.spv`.
+To compile without launching the app: `make BUILD_TYPE=Debug build` or `make BUILD_TYPE=Release build`.
+
+Shaders are written in Slang and compiled by CMake via `slangc` from the Vulkan SDK. SPIR-V output goes to `build/shaders/slang.spv`.
 
 ## Run
 
 ```bash
-make run          # Release
-make debug        # Debug with validation
+make run          # Release build and run
+make debug        # Debug build and run (validation layers)
 ```
 
 Prefer an external terminal for running the app. Close the window or press Ctrl+C to exit.
 
 ## Reference Projects
 
-Several Vulkan reference projects are available locally at `/home/tristan/Projects/vulkan examples/` for architecture study. These are not required to build or run this project.
+Several Vulkan reference projects live at `/home/tristan/Projects/vulkan examples/` for study. They are not required to build this project.
+
+Use them with intent:
+
+| Repo | Use for |
+|---|---|
+| **Khronos Vulkan-Tutorial** | Step-by-step feature sequence (what to build next). Not engine architecture — each chapter is a self-contained demo. |
+| **Sascha Willems `Vulkan/`** | Engine-adjacent patterns: split modules, dynamic rendering (`trianglevulkan13`), depth, buffers, descriptors. |
+| **Vulkan-Tutorial `simple_engine`** | Holochip's split layout (`VulkanDevice`, `SwapChain`, `Renderer`) — closer to a real engine than the chapter attachments. |
+| **HowToVulkan** | SDL3 + modern Vulkan 1.3 in one file; good for swapchain/depth resize behavior, not structure. |
+
+**Two-repo rule:** adopt a technique only when at least two reference projects do it the same way (or one repo does it clearly and a second confirms the pattern). If only the tutorial does it, treat it as a learning step, not a permanent convention.
 
 ## Project Goals
 
@@ -79,6 +86,8 @@ The engine stays minimal:
 - Shadow mapping, 3D animation, Blender-to-game asset workflow
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
+
+Current renderer modules: `vulkan_context` (orchestrator), `graphics_pipeline`, `depth_image`, `buffer`, `vertex`, `image_barrier`, `platform/sdl_window`.
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
@@ -119,7 +128,9 @@ Both score terms are required. Do not pick the first suitable device.
 
 **Queue families:** first-match for graphics/compute/transfer/present, then prefer a unified family that supports graphics, compute, transfer, and present together.
 
-**Swapchain:** prefer `Mailbox`, fall back to `FIFO`; recreate with `oldSwapchain`; debounce window resize (~100 ms); wait for non-zero extent before recreating.
+**Swapchain:** prefer `Mailbox`, fall back to `FIFO`; recreate with `oldSwapchain`; debounce window resize (~100 ms); wait for non-zero extent before recreating; recreate depth image on swapchain resize (Khronos ch. 27, HowToVulkan, Sascha `trianglevulkan13`).
+
+**Depth:** format selection tries `D32_SFLOAT`, then `D32_SFLOAT_S8_UINT`, then `D24_UNORM_S8_UINT`; device-local optimal image; clear to 1.0; `CompareOp::eLessOrEqual` (Sascha, HowToVulkan).
 
 **Synchronization:** signal semaphores at `eColorAttachmentOutput`, not `eAllGraphics`. Dynamic rendering color attachments use `eColorAttachmentOptimal`.
 

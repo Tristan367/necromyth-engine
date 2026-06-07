@@ -64,6 +64,9 @@ add_executable(${NAME}
     src/renderer/vulkan_context.hpp
     src/renderer/graphics_pipeline.hpp
     src/renderer/image_barrier.hpp
+    src/renderer/depth_image.hpp
+    src/renderer/buffer.hpp
+    src/renderer/vertex.hpp
 )
 
 add_dependencies(${NAME} shaders)

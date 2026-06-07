@@ -6,6 +6,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -13,7 +14,13 @@ namespace engine {
 
 class GraphicsPipeline {
 public:
-  void create(vk::raii::Device &device, vk::Format color_format, std::string_view spirv_path) {
+  void create(
+      vk::raii::Device &device,
+      vk::Format color_format,
+      vk::Format depth_format,
+      std::string_view spirv_path,
+      vk::VertexInputBindingDescription binding,
+      std::span<const vk::VertexInputAttributeDescription> attributes) {
     const auto spirv = read_spirv_file(spirv_path);
     const vk::raii::ShaderModule shader_module = create_shader_module(device, spirv);
 
@@ -30,7 +37,12 @@ public:
         },
     };
 
-    const vk::PipelineVertexInputStateCreateInfo vertex_input_info;
+    const vk::PipelineVertexInputStateCreateInfo vertex_input_info{
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding,
+        .vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size()),
+        .pVertexAttributeDescriptions = attributes.data(),
+    };
     const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
         .topology = vk::PrimitiveTopology::eTriangleList,
     };
@@ -56,6 +68,12 @@ public:
         .pAttachments = &color_blend_attachment,
     };
 
+    const vk::PipelineDepthStencilStateCreateInfo depth_stencil{
+        .depthTestEnable = vk::True,
+        .depthWriteEnable = vk::True,
+        .depthCompareOp = vk::CompareOp::eLessOrEqual,
+    };
+
     const std::array dynamic_states{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
     const vk::PipelineDynamicStateCreateInfo dynamic_state{
         .dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size()),
@@ -63,6 +81,7 @@ public:
     };
 
     vk::Format color_attachment_format = color_format;
+    vk::Format depth_attachment_format = depth_format;
     pipeline_layout_ = vk::raii::PipelineLayout(device, vk::PipelineLayoutCreateInfo{});
 
     vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipeline_chain{
@@ -74,6 +93,7 @@ public:
             .pViewportState = &viewport_state,
             .pRasterizationState = &rasterizer,
             .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_stencil,
             .pColorBlendState = &color_blending,
             .pDynamicState = &dynamic_state,
             .layout = *pipeline_layout_,
@@ -82,6 +102,7 @@ public:
         vk::PipelineRenderingCreateInfo{
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &color_attachment_format,
+            .depthAttachmentFormat = depth_attachment_format,
         },
     };
 

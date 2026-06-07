@@ -1,7 +1,10 @@
 #pragma once
 
+#include "renderer/buffer.hpp"
+#include "renderer/depth_image.hpp"
 #include "renderer/graphics_pipeline.hpp"
 #include "renderer/image_barrier.hpp"
+#include "renderer/vertex.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -112,8 +115,10 @@ public:
     create_logical_device();
     create_swapchain();
     create_swapchain_image_views();
-    create_graphics_pipeline();
+    create_depth_image();
     create_command_pool();
+    create_vertex_buffer();
+    create_graphics_pipeline();
     create_command_buffers();
     create_sync_objects();
 
@@ -464,8 +469,32 @@ private:
     }
   }
 
+  void create_depth_image() {
+    depth_image_.create(physical_device_, device_, swapchain_extent_);
+  }
+
+  void create_vertex_buffer() {
+    const auto vertices = triangle_vertices();
+    vertex_count_ = static_cast<std::uint32_t>(vertices.size());
+    vertex_buffer_.upload(
+        physical_device_,
+        device_,
+        command_pool_,
+        graphics_queue_,
+        static_cast<vk::DeviceSize>(sizeof(ColoredVertex) * vertices.size()),
+        vk::BufferUsageFlagBits::eVertexBuffer,
+        vertices.data());
+  }
+
   void create_graphics_pipeline() {
-    graphics_pipeline_.create(device_, swapchain_image_format_, ENGINE_SHADER_SPIRV);
+    const auto attributes = ColoredVertex::attribute_descriptions();
+    graphics_pipeline_.create(
+        device_,
+        swapchain_image_format_,
+        depth_image_.format(),
+        ENGINE_SHADER_SPIRV,
+        ColoredVertex::binding_description(),
+        attributes);
   }
 
   void create_command_pool() {
@@ -521,7 +550,19 @@ private:
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::PipelineStageFlagBits2::eColorAttachmentOutput);
 
+    transition_image_layout(
+        command_buffer,
+        depth_image_.image(),
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eDepthAttachmentOptimal,
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        depth_image_.aspect_mask());
+
     const vk::ClearValue clear_value{vk::ClearColorValue{std::array{0.02F, 0.03F, 0.05F, 1.0F}}};
+    const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
     const vk::RenderingAttachmentInfo color_attachment{
         .imageView = *swapchain_image_views_[image_index],
         .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
@@ -529,14 +570,25 @@ private:
         .storeOp = vk::AttachmentStoreOp::eStore,
         .clearValue = clear_value,
     };
+    const vk::RenderingAttachmentInfo depth_attachment{
+        .imageView = *depth_image_.view(),
+        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eDontCare,
+        .clearValue = clear_depth,
+    };
     const vk::RenderingInfo rendering_info{
         .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain_extent_},
         .layerCount = 1,
         .colorAttachmentCount = 1,
         .pColorAttachments = &color_attachment,
+        .pDepthAttachment = &depth_attachment,
     };
     command_buffer.beginRendering(rendering_info);
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline_.pipeline());
+    const vk::Buffer vertex_buffers[] = {vertex_buffer_.handle()};
+    const vk::DeviceSize offsets[] = {0};
+    command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
     command_buffer.setViewport(
         0,
         vk::Viewport{
@@ -548,7 +600,7 @@ private:
             1.0F,
         });
     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain_extent_});
-    command_buffer.draw(3, 1, 0, 0);
+    command_buffer.draw(vertex_count_, 1, 0, 0);
     command_buffer.endRendering();
 
     transition_image_layout(
@@ -587,6 +639,7 @@ private:
     const vk::SwapchainKHR old_swapchain = *swapchain_;
     create_swapchain(old_swapchain);
     create_swapchain_image_views();
+    depth_image_.recreate(swapchain_extent_);
     create_render_finished_semaphores();
   }
 
@@ -689,6 +742,9 @@ private:
   std::vector<vk::raii::Semaphore> image_available_semaphores_;
   std::vector<vk::raii::Semaphore> render_finished_semaphores_;
   std::vector<vk::raii::Fence> in_flight_fences_;
+  DepthImage depth_image_;
+  DeviceLocalBuffer vertex_buffer_;
+  std::uint32_t vertex_count_{};
   GraphicsPipeline graphics_pipeline_;
   std::uint32_t frame_index_{};
   QueueFamilyIndices queue_families_{};
