@@ -36,6 +36,12 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 3,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
     };
 
     descriptor_set_layout_ = vk::raii::DescriptorSetLayout(
@@ -61,7 +67,7 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = set_count * 2,
+            .descriptorCount = set_count * 3,
         },
     };
 
@@ -80,7 +86,9 @@ public:
       std::span<const vk::Buffer> uniform_buffers,
       std::span<const TextureImage *const> textures,
       vk::Sampler texture_array_sampler,
-      vk::ImageView texture_array_view) {
+      vk::ImageView texture_array_view,
+      vk::Sampler shadow_sampler,
+      vk::ImageView shadow_view) {
     if (uniform_buffers.size() != frame_count_)
       throw std::runtime_error("Uniform buffer count does not match frame count");
     if (textures.size() != texture_count_)
@@ -102,6 +110,11 @@ public:
         .sampler = texture_array_sampler,
         .imageView = texture_array_view,
         .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+    const vk::DescriptorImageInfo shadow_image_info{
+        .sampler = shadow_sampler,
+        .imageView = shadow_view,
+        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
     };
 
     for (std::uint32_t texture_index = 0; texture_index < texture_count_; ++texture_index) {
@@ -142,6 +155,14 @@ public:
                 .descriptorCount = 1,
                 .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                 .pImageInfo = &array_image_info,
+            },
+            vk::WriteDescriptorSet{
+                .dstSet = descriptor_set,
+                .dstBinding = 3,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .pImageInfo = &shadow_image_info,
             },
         };
 

@@ -2,6 +2,7 @@
 
 #include "scene/camera.hpp"
 #include "scene/directional_light.hpp"
+#include "scene/shadow_utils.hpp"
 #include "scene/mesh_instance.hpp"
 #include "scene/mesh_source.hpp"
 
@@ -49,6 +50,14 @@ public:
     return directional_light_;
   }
 
+  [[nodiscard]] auto shadow_settings() -> DirectionalLightShadowSettings & {
+    return shadow_settings_;
+  }
+
+  [[nodiscard]] auto shadow_settings() const -> const DirectionalLightShadowSettings & {
+    return shadow_settings_;
+  }
+
   [[nodiscard]] auto add_mesh(MeshSource mesh) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(meshes_.size());
     meshes_.push_back(std::move(mesh));
@@ -76,6 +85,7 @@ public:
 private:
   Camera camera_;
   DirectionalLight directional_light_{};
+  DirectionalLightShadowSettings shadow_settings_{};
   std::vector<MeshSource> meshes_;
   std::vector<std::string> texture_paths_;
   std::vector<std::string> texture_array_layer_paths_;

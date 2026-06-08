@@ -3,6 +3,7 @@
 #include "renderer/graphics_pipeline.hpp"
 #include "renderer/pipeline_id.hpp"
 #include "renderer/vertex.hpp"
+#include "scene/shadow_utils.hpp"
 
 #include <array>
 #include <cstddef>
@@ -17,17 +18,23 @@ public:
       vk::raii::Device &device,
       vk::Format color_format,
       vk::Format depth_format,
+      vk::Format shadow_depth_format,
       std::string_view textured_mesh_spirv,
       std::string_view background_spirv,
+      std::string_view shadow_depth_spirv,
       vk::DescriptorSetLayout descriptor_set_layout,
       vk::SampleCountFlagBits sample_count,
+      const DirectionalLightShadowSettings &shadow_settings,
       const vk::raii::PipelineCache &pipeline_cache) {
     descriptor_set_layout_ = descriptor_set_layout;
     color_format_ = color_format;
     depth_format_ = depth_format;
+    shadow_depth_format_ = shadow_depth_format;
     sample_count_ = sample_count;
     textured_mesh_spirv_ = textured_mesh_spirv;
     background_spirv_ = background_spirv;
+    shadow_depth_spirv_ = shadow_depth_spirv;
+    shadow_settings_ = shadow_settings;
     pipeline_cache_ = &pipeline_cache;
 
     rebuild(device);
@@ -61,6 +68,7 @@ private:
     const auto mesh_attributes = MeshVertex::attribute_descriptions();
 
     const std::array sky_attributes{MeshVertex::attribute_descriptions()[0]};
+    const std::array shadow_attributes{MeshVertex::attribute_descriptions()[0]};
 
     pipelines_[static_cast<std::size_t>(PipelineId::Background)] = create_graphics_pipeline(
         device,
@@ -89,17 +97,40 @@ private:
         mesh_binding,
         mesh_attributes,
         *pipeline_cache_);
+
+    pipelines_[static_cast<std::size_t>(PipelineId::ShadowDepth)] = create_depth_only_graphics_pipeline(
+        device,
+        shadow_depth_format_,
+        shadow_depth_spirv_,
+        *pipeline_layout_,
+        *pipeline_cache_,
+        mesh_binding,
+        shadow_attributes,
+        {
+            .cull_mode = vk::CullModeFlagBits::eNone,
+            .front_face = vk::FrontFace::eCounterClockwise,
+            .depth_test = true,
+            .depth_write = true,
+            .depth_compare = vk::CompareOp::eLessOrEqual,
+            .depth_bias_enable = true,
+            .depth_bias_constant = shadow_settings_.depth_bias_constant,
+            .depth_bias_slope = shadow_settings_.depth_bias_slope,
+        });
   }
 
   vk::DescriptorSetLayout descriptor_set_layout_{nullptr};
   vk::Format color_format_{};
   vk::Format depth_format_{};
+  vk::Format shadow_depth_format_{};
   vk::SampleCountFlagBits sample_count_{};
   std::string_view textured_mesh_spirv_{};
   std::string_view background_spirv_{};
+  std::string_view shadow_depth_spirv_{};
+  DirectionalLightShadowSettings shadow_settings_{};
   const vk::raii::PipelineCache *pipeline_cache_{nullptr};
   vk::raii::PipelineLayout pipeline_layout_{nullptr};
   std::array<vk::raii::Pipeline, pipeline_count()> pipelines_{
+      vk::raii::Pipeline{nullptr},
       vk::raii::Pipeline{nullptr},
       vk::raii::Pipeline{nullptr},
   };

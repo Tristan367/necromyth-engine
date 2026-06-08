@@ -43,33 +43,54 @@ file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/
 set(SHADER_SPIRV_OUTPUTS "")
 set(VCE_SHADER_SPIRV "")
 set(VCE_SKY_SHADER_SPIRV "")
+set(VCE_SHADOW_DEPTH_SPIRV "")
 
 foreach(SHADER_SOURCE ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME_WE)
     set(SHADER_SPIRV "${SHADER_OUTPUT_DIR}/${SHADER_NAME}.spv")
 
-    add_custom_command(
-        OUTPUT "${SHADER_SPIRV}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
-        COMMAND "${SLANGC_EXECUTABLE}"
-            "${SHADER_SOURCE}"
-            -target spirv
-            -profile spirv_1_4
-            -emit-spirv-directly
-            -fvk-use-entrypoint-name
-            -entry vertMain
-            -entry fragMain
-            -o "${SHADER_SPIRV}"
-        DEPENDS "${SHADER_SOURCE}"
-        COMMENT "Compiling ${SHADER_NAME}.slang"
-        VERBATIM
-    )
+    if(SHADER_NAME STREQUAL "shadow_depth")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMain
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}"
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    else()
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMain
+                -entry fragMain
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}"
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    endif()
 
     list(APPEND SHADER_SPIRV_OUTPUTS "${SHADER_SPIRV}")
     if(SHADER_NAME STREQUAL "triangle")
         set(VCE_SHADER_SPIRV "${SHADER_SPIRV}")
     elseif(SHADER_NAME STREQUAL "sky")
         set(VCE_SKY_SHADER_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "shadow_depth")
+        set(VCE_SHADOW_DEPTH_SPIRV "${SHADER_SPIRV}")
     endif()
 endforeach()
 
@@ -79,6 +100,10 @@ endif()
 
 if(NOT VCE_SKY_SHADER_SPIRV)
     message(FATAL_ERROR "Expected shaders/sky.slang")
+endif()
+
+if(NOT VCE_SHADOW_DEPTH_SPIRV)
+    message(FATAL_ERROR "Expected shaders/shadow_depth.slang")
 endif()
 
 add_custom_target(vce_shaders DEPENDS ${SHADER_SPIRV_OUTPUTS})
@@ -93,6 +118,7 @@ target_compile_definitions(vce_engine INTERFACE
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
     ENGINE_SHADER_SPIRV="${VCE_SHADER_SPIRV}"
     ENGINE_SKY_SHADER_SPIRV="${VCE_SKY_SHADER_SPIRV}"
+    ENGINE_SHADOW_DEPTH_SPIRV="${VCE_SHADOW_DEPTH_SPIRV}"
 )
 
 target_include_directories(vce_engine SYSTEM INTERFACE

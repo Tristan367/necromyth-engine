@@ -11,6 +11,7 @@
 #include "renderer/pipeline_id.hpp"
 #include "renderer/pipeline_registry.hpp"
 #include "renderer/render_settings.hpp"
+#include "renderer/shadow_map.hpp"
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_array.hpp"
 #include "renderer/texture_table.hpp"
@@ -20,6 +21,7 @@
 #include "renderer/vulkan_device.hpp"
 #include "scene/mesh_source.hpp"
 #include "scene/scene.hpp"
+#include "scene/shadow_utils.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -52,6 +54,7 @@ public:
     create_pipeline_cache();
     create_msaa_color_image();
     create_depth_image();
+    create_shadow_map();
     create_command_pool();
     upload_scene_meshes(scene);
     load_scene_textures(scene);
@@ -59,7 +62,7 @@ public:
     create_descriptor_set_layout();
     create_uniform_buffers();
     create_descriptor_pool_and_sets();
-    create_pipelines();
+    create_pipelines(scene);
     create_command_buffers();
     create_sync_objects();
 
@@ -146,13 +149,18 @@ public:
             .light_color = glm::vec4(
                 scene.directional_light().color * scene.directional_light().intensity,
                 scene.directional_light().ambient),
+            .light_view_proj = directional_light_view_projection(
+                scene.directional_light(),
+                scene.shadow_settings()),
         });
 
     build_draw_list(scene, draw_list_);
 
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
-    record_draw_commands(command_buffer, image_index, draw_list_);
+    command_buffer.begin({});
+    record_shadow_pass(command_buffer, draw_list_, scene.shadow_settings());
+    record_main_pass(command_buffer, image_index, draw_list_);
 
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
@@ -213,6 +221,10 @@ private:
         swapchain_.extent(),
         swapchain_.image_format(),
         device_.msaa_samples());
+  }
+
+  void create_shadow_map() {
+    shadow_map_.create(device_.physical_device(), device_.device());
   }
 
   void create_depth_image() {
@@ -286,18 +298,23 @@ private:
         buffers,
         texture_pointers,
         texture_array_.sampler(),
-        texture_array_.view());
+        texture_array_.view(),
+        shadow_map_.sampler(),
+        shadow_map_.view());
   }
 
-  void create_pipelines() {
+  void create_pipelines(const Scene &scene) {
     pipelines_.create(
         device_.device(),
         swapchain_.image_format(),
         depth_image_.format(),
+        shadow_map_.format(),
         ENGINE_SHADER_SPIRV,
         ENGINE_SKY_SHADER_SPIRV,
+        ENGINE_SHADOW_DEPTH_SPIRV,
         descriptor_resources_.layout(),
         device_.msaa_samples(),
+        scene.shadow_settings(),
         pipeline_cache_);
   }
 
@@ -341,11 +358,187 @@ private:
     }
   }
 
-  void record_draw_commands(
+  void draw_mesh(
+      vk::raii::CommandBuffer &command_buffer,
+      const DrawCommand &draw,
+      std::optional<PipelineId> &bound_pipeline,
+      std::optional<TextureSource> &bound_texture_source,
+      std::optional<std::uint32_t> &bound_texture_index) const {
+    if (draw.mesh_index >= mesh_gpus_.size())
+      return;
+
+    if (!bound_pipeline || *bound_pipeline != draw.pipeline) {
+      command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines_.pipeline(draw.pipeline));
+      bound_pipeline = draw.pipeline;
+      bound_texture_source.reset();
+      bound_texture_index.reset();
+    }
+
+    if (draw.pipeline == PipelineId::TexturedMesh) {
+      const std::uint32_t descriptor_texture_index =
+          draw.texture_source == TextureSource::Table ? draw.texture_index : 0;
+
+      if (draw.texture_source == TextureSource::Table && draw.texture_index >= texture_table_.count())
+        return;
+      if (draw.texture_source == TextureSource::ArrayLayer && draw.texture_index >= texture_array_.layer_count())
+        return;
+
+      if (!bound_texture_source || *bound_texture_source != draw.texture_source ||
+          !bound_texture_index || *bound_texture_index != descriptor_texture_index) {
+        command_buffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            pipelines_.layout(),
+            0,
+            descriptor_resources_.set(frame_index_, descriptor_texture_index),
+            nullptr);
+        bound_texture_source = draw.texture_source;
+        bound_texture_index = descriptor_texture_index;
+      }
+
+      const TexturedPushConstants push_constants{
+          .model = draw.model,
+          .texture_array_layer = draw.texture_index,
+          .sample_texture_array = draw.texture_source == TextureSource::ArrayLayer ? 1U : 0U,
+      };
+      command_buffer.pushConstants(
+          pipelines_.layout(),
+          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+          0,
+          sizeof(TexturedPushConstants),
+          &push_constants);
+    } else if (draw.pipeline == PipelineId::Background) {
+      if (!bound_texture_index) {
+        command_buffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            pipelines_.layout(),
+            0,
+            descriptor_resources_.set(frame_index_, 0),
+            nullptr);
+        bound_texture_index = 0;
+      }
+
+      const TexturedPushConstants sky_push_constants{.model = draw.model};
+      command_buffer.pushConstants(
+          pipelines_.layout(),
+          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+          0,
+          sizeof(TexturedPushConstants),
+          &sky_push_constants);
+    } else if (draw.pipeline == PipelineId::ShadowDepth) {
+      if (!bound_texture_index) {
+        command_buffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            pipelines_.layout(),
+            0,
+            descriptor_resources_.set(frame_index_, 0),
+            nullptr);
+        bound_texture_index = 0;
+      }
+
+      const TexturedPushConstants shadow_push_constants{.model = draw.model};
+      command_buffer.pushConstants(
+          pipelines_.layout(),
+          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+          0,
+          sizeof(TexturedPushConstants),
+          &shadow_push_constants);
+    }
+
+    const MeshGpu &mesh = mesh_gpus_[draw.mesh_index];
+    const vk::Buffer vertex_buffers[] = {mesh.vertex_buffer()};
+    const vk::DeviceSize offsets[] = {0};
+    command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
+    command_buffer.bindIndexBuffer(mesh.index_buffer(), 0, vk::IndexType::eUint32);
+    command_buffer.drawIndexed(mesh.index_count(), 1, 0, 0, 0);
+  }
+
+  void record_shadow_pass(
+      vk::raii::CommandBuffer &command_buffer,
+      const std::vector<DrawCommand> &draw_list,
+      const DirectionalLightShadowSettings &shadow_settings) const {
+    const vk::ImageLayout previous_layout = shadow_image_layout_;
+    const vk::AccessFlags2 previous_access =
+        previous_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead;
+    const vk::PipelineStageFlags2 previous_stage =
+        previous_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe
+                                                       : vk::PipelineStageFlagBits2::eFragmentShader;
+
+    transition_image_layout(
+        command_buffer,
+        shadow_map_.image(),
+        previous_layout,
+        vk::ImageLayout::eDepthAttachmentOptimal,
+        previous_access,
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        previous_stage,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        shadow_map_.aspect_mask());
+
+    const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
+    const vk::RenderingAttachmentInfo depth_attachment{
+        .imageView = shadow_map_.view(),
+        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = clear_depth,
+    };
+    const vk::RenderingInfo rendering_info{
+        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = shadow_map_.extent()},
+        .layerCount = 1,
+        .colorAttachmentCount = 0,
+        .pDepthAttachment = &depth_attachment,
+    };
+
+    command_buffer.beginRendering(rendering_info);
+    command_buffer.setViewport(
+        0,
+        vk::Viewport{
+            0.0F,
+            0.0F,
+            static_cast<float>(shadow_map_.extent().width),
+            static_cast<float>(shadow_map_.extent().height),
+            0.0F,
+            1.0F,
+        });
+    command_buffer.setScissor(0, vk::Rect2D{{0, 0}, shadow_map_.extent()});
+    command_buffer.setDepthBias(
+        shadow_settings.depth_bias_constant,
+        0.0F,
+        shadow_settings.depth_bias_slope);
+
+    std::optional<PipelineId> bound_pipeline;
+    std::optional<TextureSource> bound_texture_source;
+    std::optional<std::uint32_t> bound_texture_index;
+
+    for (const DrawCommand &draw : draw_list) {
+      if (draw.pipeline != PipelineId::TexturedMesh)
+        continue;
+
+      DrawCommand shadow_draw = draw;
+      shadow_draw.pipeline = PipelineId::ShadowDepth;
+      draw_mesh(command_buffer, shadow_draw, bound_pipeline, bound_texture_source, bound_texture_index);
+    }
+
+    command_buffer.endRendering();
+
+    transition_image_layout(
+        command_buffer,
+        shadow_map_.image(),
+        vk::ImageLayout::eDepthAttachmentOptimal,
+        vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::AccessFlagBits2::eShaderRead,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        vk::PipelineStageFlagBits2::eFragmentShader,
+        shadow_map_.aspect_mask());
+
+    shadow_image_layout_ = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+  }
+
+  void record_main_pass(
       vk::raii::CommandBuffer &command_buffer,
       std::uint32_t image_index,
       const std::vector<DrawCommand> &draw_list) const {
-    command_buffer.begin({});
 
     transition_image_layout(
         command_buffer,
@@ -432,76 +625,8 @@ private:
     std::optional<TextureSource> bound_texture_source;
     std::optional<std::uint32_t> bound_texture_index;
 
-    for (const DrawCommand &draw : draw_list) {
-      if (draw.mesh_index >= mesh_gpus_.size())
-        continue;
-
-      if (!bound_pipeline || *bound_pipeline != draw.pipeline) {
-        command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines_.pipeline(draw.pipeline));
-        bound_pipeline = draw.pipeline;
-        bound_texture_source.reset();
-        bound_texture_index.reset();
-      }
-
-      if (draw.pipeline == PipelineId::TexturedMesh) {
-        const std::uint32_t descriptor_texture_index =
-            draw.texture_source == TextureSource::Table ? draw.texture_index : 0;
-
-        if (draw.texture_source == TextureSource::Table && draw.texture_index >= texture_table_.count())
-          continue;
-        if (draw.texture_source == TextureSource::ArrayLayer && draw.texture_index >= texture_array_.layer_count())
-          continue;
-
-        if (!bound_texture_source || *bound_texture_source != draw.texture_source ||
-            !bound_texture_index || *bound_texture_index != descriptor_texture_index) {
-          command_buffer.bindDescriptorSets(
-              vk::PipelineBindPoint::eGraphics,
-              pipelines_.layout(),
-              0,
-              descriptor_resources_.set(frame_index_, descriptor_texture_index),
-              nullptr);
-          bound_texture_source = draw.texture_source;
-          bound_texture_index = descriptor_texture_index;
-        }
-
-        const TexturedPushConstants push_constants{
-            .model = draw.model,
-            .texture_array_layer = draw.texture_index,
-            .sample_texture_array = draw.texture_source == TextureSource::ArrayLayer ? 1U : 0U,
-        };
-        command_buffer.pushConstants(
-            pipelines_.layout(),
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-            0,
-            sizeof(TexturedPushConstants),
-            &push_constants);
-      } else {
-        if (!bound_texture_index) {
-          command_buffer.bindDescriptorSets(
-              vk::PipelineBindPoint::eGraphics,
-              pipelines_.layout(),
-              0,
-              descriptor_resources_.set(frame_index_, 0),
-              nullptr);
-          bound_texture_index = 0;
-        }
-
-        const TexturedPushConstants sky_push_constants{.model = draw.model};
-        command_buffer.pushConstants(
-            pipelines_.layout(),
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-            0,
-            sizeof(TexturedPushConstants),
-            &sky_push_constants);
-      }
-
-      const MeshGpu &mesh = mesh_gpus_[draw.mesh_index];
-      const vk::Buffer vertex_buffers[] = {mesh.vertex_buffer()};
-      const vk::DeviceSize offsets[] = {0};
-      command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
-      command_buffer.bindIndexBuffer(mesh.index_buffer(), 0, vk::IndexType::eUint32);
-      command_buffer.drawIndexed(mesh.index_count(), 1, 0, 0, 0);
-    }
+    for (const DrawCommand &draw : draw_list)
+      draw_mesh(command_buffer, draw, bound_pipeline, bound_texture_source, bound_texture_index);
 
     command_buffer.endRendering();
 
@@ -553,6 +678,7 @@ private:
   std::vector<vk::raii::Fence> in_flight_fences_;
   MsaaColorImage msaa_color_image_;
   DepthImage depth_image_;
+  ShadowMap shadow_map_;
   TextureTable texture_table_;
   TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;
@@ -563,6 +689,7 @@ private:
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};
   std::uint64_t last_resize_ticks_{};
+  mutable vk::ImageLayout shadow_image_layout_{vk::ImageLayout::eUndefined};
 };
 
 } // namespace engine

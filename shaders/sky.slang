@@ -9,6 +9,7 @@ struct FrameUniforms {
     float4x4 viewSky;
     float4 lightDirection;
     float4 lightColor;
+    float4x4 lightViewProj;
 };
 ConstantBuffer<FrameUniforms> ubo;
 
