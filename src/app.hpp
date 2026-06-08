@@ -32,7 +32,10 @@ public:
         vulkan_(window_.handle(), config_, scene_) {
     std::signal(SIGINT, on_quit_signal);
     std::signal(SIGTERM, on_quit_signal);
-    std::cout << "Selected GPU: " << vulkan_.gpu_name() << '\n';
+    std::cout << "Selected GPU: " << vulkan_.gpu_name();
+    if (config_.gpu_device_index)
+      std::cout << " (requested index " << *config_.gpu_device_index << ')';
+    std::cout << '\n';
   }
 
   void run() {

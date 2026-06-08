@@ -9,11 +9,13 @@
 
 auto main(int argc, char **argv) -> int {
   try {
-    const engine::CliParseResult cli = engine::parse_engine_cli(argc, argv);
+    engine::CliParseResult cli = engine::parse_engine_cli(argc, argv);
     if (cli.exit_after_list_gpus) {
       engine::list_physical_devices();
       return EXIT_SUCCESS;
     }
+
+    engine::resolve_gpu_selection(cli.config, cli.interactive_gpu_pick);
 
     engine::App app(cli.config);
     app.run();

@@ -131,7 +131,7 @@ These are project defaults. If a change contradicts them, there should be a deli
 - `+ maxImageDimension2D` as a capability tie-breaker
 - `+1` per GiB of device-local VRAM (simple_engine pattern)
 
-Both score terms are required. Do not pick the first suitable device. Override with `-g <index>` or list devices with `-gl` / `--listgpus` (Sascha-style CLI, parsed in `main` before the window opens).
+Both score terms are required. Do not pick the first suitable device. Override with `-g <index>`, list with `-gl`, or interactively pick when multiple GPUs are present and stdin is a TTY (`--pick-gpu` forces the prompt).
 
 **Queue families:** first-match for graphics/compute/transfer/present, then prefer a unified family that supports graphics, compute, transfer, and present together.
 

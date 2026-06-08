@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unistd.h>
 #include <vector>
 
 namespace engine {
@@ -22,6 +23,14 @@ namespace engine {
 struct CliParseResult {
   EngineConfig config{};
   bool exit_after_list_gpus{false};
+  bool interactive_gpu_pick{false};
+};
+
+struct GpuDeviceInfo {
+  std::uint32_t index{};
+  std::string name;
+  std::string type_label;
+  std::string api_version;
 };
 
 namespace detail {
@@ -41,63 +50,149 @@ namespace detail {
   }
 }
 
+struct VulkanListContext {
+  vk::raii::Context context;
+  vk::raii::Instance instance{nullptr};
+  bool sdl_initialized{false};
+
+  VulkanListContext() {
+    if (!SDL_Init(SDL_INIT_VIDEO))
+      throw std::runtime_error(std::string("Failed to initialize SDL: ") + SDL_GetError());
+    sdl_initialized = true;
+
+    if (!SDL_Vulkan_LoadLibrary(nullptr))
+      throw std::runtime_error(std::string("Failed to load Vulkan through SDL: ") + SDL_GetError());
+
+    std::uint32_t extension_count{};
+    const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&extension_count);
+    if (sdl_extensions == nullptr || extension_count == 0)
+      throw std::runtime_error(std::string("Failed to get SDL Vulkan extensions: ") + SDL_GetError());
+
+    std::vector<const char *> extensions(sdl_extensions, sdl_extensions + extension_count);
+    const auto available_instance_extensions = context.enumerateInstanceExtensionProperties();
+
+    vk::InstanceCreateFlags instance_flags{};
+    if (std::ranges::any_of(available_instance_extensions, [](const vk::ExtensionProperties &property) {
+          return std::string_view(property.extensionName) == vk::KHRPortabilityEnumerationExtensionName;
+        })) {
+      extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
+      instance_flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
+    }
+
+    const vk::ApplicationInfo application_info{
+        .pApplicationName = "Vulkan C++ Engine",
+        .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
+        .pEngineName = "Vulkan C++ Engine",
+        .engineVersion = VK_MAKE_VERSION(0, 1, 0),
+        .apiVersion = vk::ApiVersion13,
+    };
+
+    const vk::InstanceCreateInfo create_info{
+        .flags = instance_flags,
+        .pApplicationInfo = &application_info,
+        .enabledExtensionCount = static_cast<std::uint32_t>(extensions.size()),
+        .ppEnabledExtensionNames = extensions.data(),
+    };
+
+    instance = vk::raii::Instance(context, create_info);
+  }
+
+  ~VulkanListContext() {
+    instance = nullptr;
+    if (sdl_initialized)
+      SDL_Quit();
+  }
+
+  VulkanListContext(const VulkanListContext &) = delete;
+  auto operator=(const VulkanListContext &) -> VulkanListContext & = delete;
+};
+
+[[nodiscard]] inline auto make_device_info(std::uint32_t index, const vk::PhysicalDeviceProperties &properties)
+    -> GpuDeviceInfo {
+  return {
+      .index = index,
+      .name = properties.deviceName.data(),
+      .type_label = device_type_label(properties.deviceType),
+      .api_version = std::to_string(VK_VERSION_MAJOR(properties.apiVersion)) + '.' +
+                     std::to_string(VK_VERSION_MINOR(properties.apiVersion)),
+  };
+}
+
 } // namespace detail
 
+[[nodiscard]] inline auto enumerate_physical_devices() -> std::vector<GpuDeviceInfo> {
+  detail::VulkanListContext bootstrap;
+  const auto devices = bootstrap.instance.enumeratePhysicalDevices();
+
+  std::vector<GpuDeviceInfo> result;
+  result.reserve(devices.size());
+  for (std::uint32_t index = 0; index < devices.size(); ++index)
+    result.push_back(detail::make_device_info(index, devices[index].getProperties()));
+
+  return result;
+}
+
+inline void print_gpu_device_line(const GpuDeviceInfo &device) {
+  std::cout << "  " << device.name << " [" << device.index << "] (" << device.type_label << ", Vulkan "
+            << device.api_version << ")\n";
+}
+
 inline void list_physical_devices() {
-  if (!SDL_Init(SDL_INIT_VIDEO))
-    throw std::runtime_error(std::string("Failed to initialize SDL: ") + SDL_GetError());
+  const auto devices = enumerate_physical_devices();
+  std::cout << "Available GPUs:\n";
+  for (const GpuDeviceInfo &device : devices)
+    print_gpu_device_line(device);
+  std::cout << "\nUse -g <index> or --gpu <index> to select a device.\n";
+  std::cout << "Use --pick-gpu for an interactive prompt when multiple GPUs are present.\n";
+}
 
-  if (!SDL_Vulkan_LoadLibrary(nullptr)) {
-    SDL_Quit();
-    throw std::runtime_error(std::string("Failed to load Vulkan through SDL: ") + SDL_GetError());
+[[nodiscard]] inline auto prompt_gpu_selection(const std::vector<GpuDeviceInfo> &devices) -> std::uint32_t {
+  if (devices.empty())
+    throw std::runtime_error("No Vulkan-capable GPU found");
+
+  std::cout << "Select GPU:\n";
+  for (const GpuDeviceInfo &device : devices)
+    print_gpu_device_line(device);
+
+  while (true) {
+    std::cout << "\nPick GPU [0]: " << std::flush;
+
+    std::string line;
+    if (!std::getline(std::cin, line))
+      throw std::runtime_error("Failed to read GPU selection");
+
+    if (line.empty())
+      return 0;
+
+    char *end = nullptr;
+    const unsigned long value = std::strtoul(line.c_str(), &end, 10);
+    if (end != line.c_str() && *end == '\0' && value < devices.size())
+      return static_cast<std::uint32_t>(value);
+
+    std::cout << "Invalid choice. Enter a number from 0 to " << devices.size() - 1 << ", or press Enter for [0].\n";
+  }
+}
+
+inline void resolve_gpu_selection(EngineConfig &config, bool force_interactive_pick) {
+  if (config.gpu_device_index)
+    return;
+
+  const auto devices = enumerate_physical_devices();
+  if (devices.size() <= 1 && !force_interactive_pick)
+    return;
+
+  const bool stdin_is_tty = isatty(STDIN_FILENO) != 0;
+  if (!force_interactive_pick && !stdin_is_tty)
+    return;
+
+  if (devices.size() <= 1) {
+    config.gpu_device_index = 0;
+    return;
   }
 
-  vk::raii::Context context;
-  std::uint32_t extension_count{};
-  const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&extension_count);
-  if (sdl_extensions == nullptr || extension_count == 0)
-    throw std::runtime_error(std::string("Failed to get SDL Vulkan extensions: ") + SDL_GetError());
-
-  std::vector<const char *> extensions(sdl_extensions, sdl_extensions + extension_count);
-  const auto available_instance_extensions = context.enumerateInstanceExtensionProperties();
-
-  vk::InstanceCreateFlags instance_flags{};
-  if (std::ranges::any_of(available_instance_extensions, [](const vk::ExtensionProperties &property) {
-        return std::string_view(property.extensionName) == vk::KHRPortabilityEnumerationExtensionName;
-      })) {
-    extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
-    instance_flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
-  }
-
-  const vk::ApplicationInfo application_info{
-      .pApplicationName = "Vulkan C++ Engine",
-      .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
-      .pEngineName = "Vulkan C++ Engine",
-      .engineVersion = VK_MAKE_VERSION(0, 1, 0),
-      .apiVersion = vk::ApiVersion13,
-  };
-
-  const vk::InstanceCreateInfo create_info{
-      .flags = instance_flags,
-      .pApplicationInfo = &application_info,
-      .enabledExtensionCount = static_cast<std::uint32_t>(extensions.size()),
-      .ppEnabledExtensionNames = extensions.data(),
-  };
-
-  const vk::raii::Instance instance(context, create_info);
-  const auto devices = instance.enumeratePhysicalDevices();
-
-  std::cout << "Available Vulkan physical devices:\n";
-  for (std::uint32_t index = 0; index < devices.size(); ++index) {
-    const vk::PhysicalDeviceProperties properties = devices[index].getProperties();
-    const auto api_major = VK_VERSION_MAJOR(properties.apiVersion);
-    const auto api_minor = VK_VERSION_MINOR(properties.apiVersion);
-    std::cout << "  [" << index << "] " << properties.deviceName << " ("
-              << detail::device_type_label(properties.deviceType) << ", Vulkan "
-              << api_major << '.' << api_minor << ")\n";
-  }
-  std::cout << "Use -g <index> or --gpu <index> to select a device.\n";
-  SDL_Quit();
+  config.gpu_device_index = prompt_gpu_selection(devices);
+  std::cout << "Using GPU [" << *config.gpu_device_index << "]: "
+            << devices[*config.gpu_device_index].name << '\n';
 }
 
 [[nodiscard]] inline auto parse_engine_cli(int argc, char **argv) -> CliParseResult {
@@ -109,6 +204,11 @@ inline void list_physical_devices() {
 
     if (arg == "--listgpus" || arg == "-gl") {
       result.exit_after_list_gpus = true;
+      continue;
+    }
+
+    if (arg == "--pick-gpu" || arg == "-pg") {
+      result.interactive_gpu_pick = true;
       continue;
     }
 
@@ -124,6 +224,7 @@ inline void list_physical_devices() {
       std::cout << "Usage: VulkanCppEngine [options]\n"
                 << "  -gl, --listgpus       List physical devices and exit\n"
                 << "  -g, --gpu <index>     Select physical device by index\n"
+                << "  -pg, --pick-gpu       Prompt to pick a GPU (also auto when multiple GPUs + TTY)\n"
                 << "  -h, --help            Show this help\n"
                 << "Environment: ENGINE_MSAA=0|2|4|8|off\n";
       std::exit(EXIT_SUCCESS);
