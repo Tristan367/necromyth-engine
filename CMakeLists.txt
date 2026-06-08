@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 
-set(NAME VulkanCppEngine)
-project(${NAME} LANGUAGES CXX)
+project(VulkanCppEngine LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,7 +27,7 @@ find_package(glm CONFIG REQUIRED)
 
 find_path(STB_INCLUDE_DIR NAMES stb_image.h PATH_SUFFIXES stb)
 if(NOT STB_INCLUDE_DIR)
-  message(FATAL_ERROR "stb_image.h not found; install the stb package")
+    message(FATAL_ERROR "stb_image.h not found; install the stb package")
 endif()
 
 find_program(SLANGC_EXECUTABLE slangc
@@ -42,8 +41,8 @@ set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.slang")
 
 set(SHADER_SPIRV_OUTPUTS "")
-set(DEFAULT_SHADER_SPIRV "")
-set(SKY_SHADER_SPIRV "")
+set(VCE_SHADER_SPIRV "")
+set(VCE_SKY_SHADER_SPIRV "")
 
 foreach(SHADER_SOURCE ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME_WE)
@@ -68,91 +67,53 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
 
     list(APPEND SHADER_SPIRV_OUTPUTS "${SHADER_SPIRV}")
     if(SHADER_NAME STREQUAL "triangle")
-        set(DEFAULT_SHADER_SPIRV "${SHADER_SPIRV}")
+        set(VCE_SHADER_SPIRV "${SHADER_SPIRV}")
     elseif(SHADER_NAME STREQUAL "sky")
-        set(SKY_SHADER_SPIRV "${SHADER_SPIRV}")
+        set(VCE_SKY_SHADER_SPIRV "${SHADER_SPIRV}")
     endif()
 endforeach()
 
-if(NOT DEFAULT_SHADER_SPIRV)
-    message(FATAL_ERROR "Expected shaders/triangle.slang for the default textured mesh pipeline")
+if(NOT VCE_SHADER_SPIRV)
+    message(FATAL_ERROR "Expected shaders/triangle.slang")
 endif()
 
-if(NOT SKY_SHADER_SPIRV)
-    message(FATAL_ERROR "Expected shaders/sky.slang for the background pipeline")
+if(NOT VCE_SKY_SHADER_SPIRV)
+    message(FATAL_ERROR "Expected shaders/sky.slang")
 endif()
 
-add_custom_target(shaders DEPENDS ${SHADER_SPIRV_OUTPUTS})
+add_custom_target(vce_shaders DEPENDS ${SHADER_SPIRV_OUTPUTS})
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_library(vce_engine INTERFACE)
+add_library(VCE::Engine ALIAS vce_engine)
 
-add_executable(${NAME}
-    src/main.cpp
-    src/app.hpp
-    src/demo_scene.hpp
-    src/engine_config.hpp
-    src/platform/gpu_cli.hpp
-    src/platform/sdl_window.hpp
-    src/scene/camera.hpp
-    src/scene/mesh_instance.hpp
-    src/scene/mesh_source.hpp
-    src/scene/render_layer.hpp
-    src/scene/scene.hpp
-    src/scene/sky_mesh.hpp
-    src/renderer/render_settings.hpp
-    src/renderer/pipeline_id.hpp
-    src/renderer/pipeline_registry.hpp
-    src/renderer/draw_list.hpp
-    src/renderer/mesh_gpu.hpp
-    src/renderer/vulkan_device.hpp
-    src/renderer/swapchain.hpp
-    src/renderer/vulkan_context.hpp
-    src/renderer/graphics_pipeline.hpp
-    src/renderer/image_barrier.hpp
-    src/renderer/depth_image.hpp
-    src/renderer/msaa_color_image.hpp
-    src/renderer/buffer.hpp
-    src/renderer/vertex.hpp
-    src/renderer/model_loader.hpp
-    src/renderer/uniform_buffer.hpp
-    src/renderer/descriptors.hpp
-    src/renderer/texture_image.hpp
-)
+target_compile_features(vce_engine INTERFACE cxx_std_23)
 
-add_dependencies(${NAME} shaders)
-
-target_compile_features(${NAME} PRIVATE cxx_std_23)
-
-target_compile_definitions(${NAME} PRIVATE
+target_compile_definitions(vce_engine INTERFACE
     VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-    ENGINE_SHADER_SPIRV="${DEFAULT_SHADER_SPIRV}"
-    ENGINE_SKY_SHADER_SPIRV="${SKY_SHADER_SPIRV}"
-    ENGINE_MODEL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/models/viking_room.obj"
-    ENGINE_TEXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/textures/viking_room.png"
+    ENGINE_SHADER_SPIRV="${VCE_SHADER_SPIRV}"
+    ENGINE_SKY_SHADER_SPIRV="${VCE_SKY_SHADER_SPIRV}"
 )
 
-target_include_directories(${NAME} PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
-    "${STB_INCLUDE_DIR}"
+target_include_directories(vce_engine INTERFACE
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>"
+    "$<BUILD_INTERFACE:${STB_INCLUDE_DIR}>"
 )
 
-target_link_libraries(${NAME} PRIVATE
+target_link_libraries(vce_engine INTERFACE
     SDL3::SDL3
     Vulkan::Vulkan
     glm::glm
 )
 
-if(MSVC)
-    target_compile_options(${NAME} PRIVATE /W4 /permissive-)
-else()
-    target_compile_options(${NAME} PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+add_dependencies(vce_engine vce_shaders)
 
-set_target_properties(${NAME} PROPERTIES
-    DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-)
+if(MSVC)
+    target_compile_options(vce_engine INTERFACE /W4 /permissive-)
+else()
+    target_compile_options(vce_engine INTERFACE -Wall -Wextra -Wpedantic)
+endif()
 
 set(_run_env_vars "")
 if(VULKAN_SDK_ROOT AND IS_DIRECTORY "${VULKAN_SDK_ROOT}/lib")
@@ -161,9 +122,16 @@ if(VULKAN_SDK_ROOT AND IS_DIRECTORY "${VULKAN_SDK_ROOT}/lib")
     list(APPEND _run_env_vars "VK_ADD_LAYER_PATH=${VULKAN_SDK_ROOT}/share/vulkan/explicit_layer.d")
 endif()
 
-add_custom_target(run
-    COMMAND "${CMAKE_COMMAND}" -E env ${_run_env_vars} "$<TARGET_FILE:${NAME}>"
-    DEPENDS ${NAME}
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    USES_TERMINAL
-)
+option(VCE_BUILD_IN_TREE_APP "Build the legacy in-tree demo executable" OFF)
+if(VCE_BUILD_IN_TREE_APP)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    add_executable(VulkanCppEngine src/main.cpp)
+    target_link_libraries(VulkanCppEngine PRIVATE VCE::Engine)
+    add_dependencies(VulkanCppEngine vce_shaders)
+    add_custom_target(run
+        COMMAND "${CMAKE_COMMAND}" -E env ${_run_env_vars} "$<TARGET_FILE:VulkanCppEngine>"
+        DEPENDS VulkanCppEngine
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        USES_TERMINAL
+    )
+endif()

@@ -17,7 +17,7 @@ public:
     }
   }
 
-  void look_at(const glm::vec3 &eye, const glm::vec3 &center, const glm::vec3 &up = {0.0F, 0.0F, 1.0F}) {
+  void look_at(const glm::vec3 &eye, const glm::vec3 &center, const glm::vec3 &up = {0.0F, 1.0F, 0.0F}) {
     position_ = eye;
     target_ = center;
     up_ = up;
@@ -61,7 +61,7 @@ private:
 
   glm::vec3 position_{2.0F, 2.0F, 2.0F};
   glm::vec3 target_{};
-  glm::vec3 up_{0.0F, 0.0F, 1.0F};
+  glm::vec3 up_{0.0F, 1.0F, 0.0F};
   float fov_y_degrees_{45.0F};
   float near_plane_{0.05F};
   float far_plane_{2000.0F};

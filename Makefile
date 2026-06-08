@@ -1,4 +1,4 @@
-.PHONY: all configure build run clean debug release
+.PHONY: all configure build clean shaders
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -14,15 +14,11 @@ configure:
 build: configure
 	cmake --build "$(BUILD_DIR)" -j$$(nproc)
 
-debug:
-	$(MAKE) BUILD_TYPE=Debug build
-	$(MAKE) BUILD_TYPE=Debug run
-
-release:
-	$(MAKE) BUILD_TYPE=Release build
-
-run: configure
-	cmake --build "$(BUILD_DIR)" --target run -j$$(nproc)
+shaders: configure
+	cmake --build "$(BUILD_DIR)" --target vce_shaders -j$$(nproc)
 
 clean:
 	rm -rf "$(BUILD_DIR)"
+
+# Run the demo from the sibling app repo:
+#   cd ../Vulkan-C-App && make debug

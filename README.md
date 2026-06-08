@@ -39,26 +39,21 @@ If SDL3 is installed system-wide (e.g. Arch `sdl3` package), no extra prefix is 
 
 ## Build
 
-```bash
-make              # Release build (default)
-make debug        # Debug build and run (validation layers)
-make release      # Release build explicitly
-make run          # Release build and run
-make clean        # Remove build directory
-```
-
-To compile without launching the app: `make BUILD_TYPE=Debug build` or `make BUILD_TYPE=Release build`.
-
-Shaders are written in Slang and compiled by CMake via `slangc` from the Vulkan SDK. SPIR-V output goes to `build/shaders/slang.spv`.
-
-## Run
+Engine library + shaders only:
 
 ```bash
-make run          # Release build and run
-make debug        # Debug build and run (validation layers)
+make              # Build VCE::Engine + compile shaders
+make shaders      # Shaders only
+make clean
 ```
 
-Prefer an external terminal for running the app. Close the window or press Ctrl+C to exit.
+**Run the demo** from the sibling app repo:
+
+```bash
+cd ../Vulkan-C-App && make debug
+```
+
+Optional in-tree executable: `cmake -DVCE_BUILD_IN_TREE_APP=ON ..` (legacy).
 
 ## Reference Projects
 
@@ -91,7 +86,11 @@ Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swa
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
-**Engine vs game:** This repo is the lean renderer library. A separate game repo should depend on it (git submodule or installed target), own procedural logic, and build a `Scene` each frame — window title, MSAA, and meshes are configured via `EngineConfig` and `Scene`, not hardcoded in the renderer.
+**Engine vs game:** This repo is the **engine library** (`VCE::Engine` CMake target). The [Vulkan-C-App](../Vulkan-C-App) repo is the demo/game client — fly camera, scene setup, and game logic live there. Link with `add_subdirectory(../Vulkan-C-Engine)` and `target_link_libraries(... VCE::Engine)`.
+
+**Repo split (current):** Renderer + scene/core live here as one library. A separate *renderer-only* repo makes sense when you add a second backend (e.g. Metal). Until then, keep renderer and engine unified to avoid submodule friction.
+
+**Textures:** Each `MeshInstance` keeps a `texture_index` pointing at one slot in the scene texture table (array of textures, Sascha `descriptorsets/` style). One texture per draw is the normal path; voxel atlases will add a `texture2DArray` path later without removing this.
 
 **Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `Transparent`, `Overlay`). The renderer sorts by layer, then pipeline, then mesh. Draw `Background` first for skyboxes; a dedicated no-depth pipeline comes later for true “always behind” geometry (Godot-style depth-off backgrounds).
 

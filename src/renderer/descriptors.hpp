@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/texture_image.hpp"
 #include "renderer/uniform_buffer.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -7,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace engine {
@@ -37,15 +39,22 @@ public:
         });
   }
 
-  void create_pool(vk::raii::Device &device, std::uint32_t frame_count) {
+  void create_pool(vk::raii::Device &device, std::uint32_t frame_count, std::uint32_t texture_count) {
+    if (texture_count == 0)
+      throw std::runtime_error("At least one texture is required for descriptor allocation");
+
+    frame_count_ = frame_count;
+    texture_count_ = texture_count;
+    const std::uint32_t set_count = frame_count * texture_count;
+
     const std::array pool_sizes{
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eUniformBuffer,
-            .descriptorCount = frame_count,
+            .descriptorCount = set_count,
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = frame_count,
+            .descriptorCount = set_count,
         },
     };
 
@@ -53,7 +62,7 @@ public:
         device,
         vk::DescriptorPoolCreateInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-            .maxSets = frame_count,
+            .maxSets = set_count,
             .poolSizeCount = static_cast<std::uint32_t>(pool_sizes.size()),
             .pPoolSizes = pool_sizes.data(),
         });
@@ -62,50 +71,59 @@ public:
   void allocate_sets(
       vk::raii::Device &device,
       std::span<const vk::Buffer> uniform_buffers,
-      vk::Sampler texture_sampler,
-      vk::ImageView texture_view) {
-    std::vector<vk::DescriptorSetLayout> layouts(uniform_buffers.size(), *descriptor_set_layout_);
+      std::span<const TextureImage *const> textures) {
+    if (uniform_buffers.size() != frame_count_)
+      throw std::runtime_error("Uniform buffer count does not match frame count");
+    if (textures.size() != texture_count_)
+      throw std::runtime_error("Texture count does not match descriptor allocation");
+
+    const std::uint32_t set_count = frame_count_ * texture_count_;
+    std::vector<vk::DescriptorSetLayout> layouts(set_count, *descriptor_set_layout_);
 
     const vk::DescriptorSetAllocateInfo allocate_info{
         .descriptorPool = *descriptor_pool_,
-        .descriptorSetCount = static_cast<std::uint32_t>(layouts.size()),
+        .descriptorSetCount = set_count,
         .pSetLayouts = layouts.data(),
     };
 
-    descriptor_sets_ = device.allocateDescriptorSets(allocate_info);
+    auto allocated = device.allocateDescriptorSets(allocate_info);
+    descriptor_sets_ = std::move(allocated);
 
-    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(uniform_buffers.size()); ++i) {
-      const vk::DescriptorBufferInfo buffer_info{
-          .buffer = uniform_buffers[i],
-          .offset = 0,
-          .range = sizeof(FrameUniformBufferObject),
-      };
-      const vk::DescriptorImageInfo image_info{
-          .sampler = texture_sampler,
-          .imageView = texture_view,
-          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-      };
+    for (std::uint32_t texture_index = 0; texture_index < texture_count_; ++texture_index) {
+      for (std::uint32_t frame_index = 0; frame_index < frame_count_; ++frame_index) {
+        const vk::DescriptorBufferInfo buffer_info{
+            .buffer = uniform_buffers[frame_index],
+            .offset = 0,
+            .range = sizeof(FrameUniformBufferObject),
+        };
+        const vk::DescriptorImageInfo image_info{
+            .sampler = textures[texture_index]->sampler(),
+            .imageView = textures[texture_index]->view(),
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        };
 
-      const std::array writes{
-          vk::WriteDescriptorSet{
-              .dstSet = descriptor_sets_[i],
-              .dstBinding = 0,
-              .dstArrayElement = 0,
-              .descriptorCount = 1,
-              .descriptorType = vk::DescriptorType::eUniformBuffer,
-              .pBufferInfo = &buffer_info,
-          },
-          vk::WriteDescriptorSet{
-              .dstSet = descriptor_sets_[i],
-              .dstBinding = 1,
-              .dstArrayElement = 0,
-              .descriptorCount = 1,
-              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-              .pImageInfo = &image_info,
-          },
-      };
+        const vk::DescriptorSet descriptor_set = descriptor_sets_[set_index(texture_index, frame_index)];
+        const std::array writes{
+            vk::WriteDescriptorSet{
+                .dstSet = descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eUniformBuffer,
+                .pBufferInfo = &buffer_info,
+            },
+            vk::WriteDescriptorSet{
+                .dstSet = descriptor_set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .pImageInfo = &image_info,
+            },
+        };
 
-      device.updateDescriptorSets(writes, nullptr);
+        device.updateDescriptorSets(writes, nullptr);
+      }
     }
   }
 
@@ -113,11 +131,17 @@ public:
     return *descriptor_set_layout_;
   }
 
-  [[nodiscard]] auto set(std::uint32_t frame_index) const -> vk::DescriptorSet {
-    return descriptor_sets_[frame_index];
+  [[nodiscard]] auto set(std::uint32_t frame_index, std::uint32_t texture_index) const -> vk::DescriptorSet {
+    return descriptor_sets_.at(set_index(texture_index, frame_index));
   }
 
 private:
+  [[nodiscard]] auto set_index(std::uint32_t texture_index, std::uint32_t frame_index) const -> std::size_t {
+    return static_cast<std::size_t>(texture_index) * frame_count_ + frame_index;
+  }
+
+  std::uint32_t frame_count_{};
+  std::uint32_t texture_count_{};
   vk::raii::DescriptorSetLayout descriptor_set_layout_{nullptr};
   vk::raii::DescriptorPool descriptor_pool_{nullptr};
   std::vector<vk::raii::DescriptorSet> descriptor_sets_;

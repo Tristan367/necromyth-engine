@@ -5,6 +5,7 @@
 #include "scene/mesh_source.hpp"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace engine {
@@ -27,6 +28,10 @@ public:
     return instances_;
   }
 
+  [[nodiscard]] auto texture_paths() const -> const std::vector<std::string> & {
+    return texture_paths_;
+  }
+
   [[nodiscard]] auto instance(std::uint32_t index) -> MeshInstance & {
     return instances_.at(index);
   }
@@ -34,6 +39,12 @@ public:
   [[nodiscard]] auto add_mesh(MeshSource mesh) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(meshes_.size());
     meshes_.push_back(std::move(mesh));
+    return index;
+  }
+
+  [[nodiscard]] auto add_texture(std::string path) -> std::uint32_t {
+    const std::uint32_t index = static_cast<std::uint32_t>(texture_paths_.size());
+    texture_paths_.push_back(std::move(path));
     return index;
   }
 
@@ -46,6 +57,7 @@ public:
 private:
   Camera camera_;
   std::vector<MeshSource> meshes_;
+  std::vector<std::string> texture_paths_;
   std::vector<MeshInstance> instances_;
 };
 
