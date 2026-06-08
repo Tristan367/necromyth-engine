@@ -82,7 +82,7 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `depth_image`, `msaa_color_image`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`.
+Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `floor_mesh`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `depth_image`, `msaa_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
@@ -92,7 +92,20 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 
 **Models:** `load_gltf_model()` loads glTF 2.0 static meshes (tinygltf, Sascha-style CPU path). `load_obj_model()` remains for simple `.obj` assets. glTF sidecar textures (`.png`/`.jpg` next to the `.gltf`) resolve via material paths; `.glb` bundles everything into one file.
 
-**Lighting:** `Scene::directional_light()` feeds a single sun direction + ambient/diffuse color into the frame UBO. The textured mesh shader applies Lambert diffuse; the same UBO slot is reserved for shadow mapping later.
+**Lighting:** `Scene::directional_light()` feeds sun direction, color, intensity, and ambient into the frame UBO. The textured mesh shader applies Lambert diffuse modulated by a directional shadow map.
+
+**Shadow mapping:** View-frustum-fitted orthographic directional shadow (single split from Sascha `shadowmappingcascade`). Two passes per frame:
+
+1. **Shadow pass** — depth-only into `2048×2048` (`ShadowMap::k_default_size`). Slope-scaled polygon offset on casters.
+2. **Main pass** — PCF with slope-scaled depth bias + normal offset on receivers (`triangle.slang`).
+
+`directional_light_view_projection()` fits an ortho box to the camera view wedge up to `max_distance` (default **50**). Geometry outside that wedge is not shadowed. `min_ortho_extent` (default **12**) keeps the map from collapsing when the camera is close.
+
+Tune via `Scene::shadow_settings()` or `ENGINE_SHADOW_DISTANCE`.
+
+**Descriptors:** Set 0 holds per-frame UBO, texture array, and shadow map; set 1 holds the table texture for the current draw (Sascha multi-set pattern). This avoids allocating duplicate frame/shadow bindings for every table texture.
+
+Final shading: `baseColor * (ambient + diffuse * shadow)` with standard Lambert `max(N·L, 0)`.
 
 **Textures:** Each `MeshInstance` uses `texture_source` + `texture_index`:
 - `TextureSource::Table` — array of textures (separate images, Sascha `descriptorsets/`)

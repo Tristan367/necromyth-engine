@@ -14,6 +14,7 @@ struct FrameUniforms {
     float4 lightColor;
     float4x4 lightViewProj;
 };
+[[vk::binding(0, 0)]]
 ConstantBuffer<FrameUniforms> ubo;
 
 struct PushConstants {

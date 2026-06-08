@@ -48,7 +48,7 @@ struct GraphicsPipelineRasterState {
 
 [[nodiscard]] inline auto create_pipeline_layout(
     vk::raii::Device &device,
-    vk::DescriptorSetLayout descriptor_set_layout) -> vk::raii::PipelineLayout {
+    std::span<const vk::DescriptorSetLayout> descriptor_set_layouts) -> vk::raii::PipelineLayout {
   const vk::PushConstantRange push_constant_range{
       .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
       .offset = 0,
@@ -58,8 +58,8 @@ struct GraphicsPipelineRasterState {
   return vk::raii::PipelineLayout(
       device,
       vk::PipelineLayoutCreateInfo{
-          .setLayoutCount = 1,
-          .pSetLayouts = &descriptor_set_layout,
+          .setLayoutCount = static_cast<std::uint32_t>(descriptor_set_layouts.size()),
+          .pSetLayouts = descriptor_set_layouts.data(),
           .pushConstantRangeCount = 1,
           .pPushConstantRanges = &push_constant_range,
       });
@@ -266,45 +266,5 @@ struct GraphicsPipelineRasterState {
       pipeline_cache,
       pipeline_chain.get<vk::GraphicsPipelineCreateInfo>());
 }
-
-class GraphicsPipeline {
-public:
-  void create(
-      vk::raii::Device &device,
-      vk::Format color_format,
-      vk::Format depth_format,
-      std::string_view spirv_path,
-      vk::DescriptorSetLayout descriptor_set_layout,
-      vk::SampleCountFlagBits sample_count,
-      vk::VertexInputBindingDescription binding,
-      std::span<const vk::VertexInputAttributeDescription> attributes,
-      const vk::raii::PipelineCache &pipeline_cache,
-      GraphicsPipelineRasterState raster_state = {}) {
-    pipeline_layout_ = create_pipeline_layout(device, descriptor_set_layout);
-    graphics_pipeline_ = create_graphics_pipeline(
-        device,
-        color_format,
-        depth_format,
-        spirv_path,
-        *pipeline_layout_,
-        sample_count,
-        binding,
-        attributes,
-        pipeline_cache,
-        raster_state);
-  }
-
-  [[nodiscard]] auto layout() const -> const vk::raii::PipelineLayout & {
-    return pipeline_layout_;
-  }
-
-  [[nodiscard]] auto pipeline() const -> const vk::raii::Pipeline & {
-    return graphics_pipeline_;
-  }
-
-private:
-  vk::raii::PipelineLayout pipeline_layout_{nullptr};
-  vk::raii::Pipeline graphics_pipeline_{nullptr};
-};
 
 } // namespace engine

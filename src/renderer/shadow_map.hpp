@@ -54,8 +54,8 @@ public:
 private:
   [[nodiscard]] static auto find_shadow_format(const vk::raii::PhysicalDevice &physical_device) -> vk::Format {
     const std::array candidates{
-        vk::Format::eD16Unorm,
         vk::Format::eD32Sfloat,
+        vk::Format::eD16Unorm,
         vk::Format::eD32SfloatS8Uint,
     };
 
@@ -120,7 +120,9 @@ private:
             },
         });
 
-    const vk::Filter filter = format_is_filterable(*physical_device_, format_) ? vk::Filter::eLinear : vk::Filter::eNearest;
+    // Linear when supported — manual PCF in triangle.slang.
+    const vk::Filter filter =
+        format_is_filterable(*physical_device_, format_) ? vk::Filter::eLinear : vk::Filter::eNearest;
     sampler_ = vk::raii::Sampler(
         *device_,
         vk::SamplerCreateInfo{

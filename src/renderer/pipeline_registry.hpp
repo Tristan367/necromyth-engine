@@ -4,7 +4,6 @@
 #include "renderer/pipeline_id.hpp"
 #include "renderer/vertex.hpp"
 #include "scene/shadow_utils.hpp"
-
 #include <array>
 #include <cstddef>
 #include <stdexcept>
@@ -22,11 +21,12 @@ public:
       std::string_view textured_mesh_spirv,
       std::string_view background_spirv,
       std::string_view shadow_depth_spirv,
-      vk::DescriptorSetLayout descriptor_set_layout,
+      vk::DescriptorSetLayout frame_layout,
+      vk::DescriptorSetLayout material_layout,
       vk::SampleCountFlagBits sample_count,
-      const DirectionalLightShadowSettings &shadow_settings,
       const vk::raii::PipelineCache &pipeline_cache) {
-    descriptor_set_layout_ = descriptor_set_layout;
+    frame_layout_ = frame_layout;
+    material_layout_ = material_layout;
     color_format_ = color_format;
     depth_format_ = depth_format;
     shadow_depth_format_ = shadow_depth_format;
@@ -34,7 +34,6 @@ public:
     textured_mesh_spirv_ = textured_mesh_spirv;
     background_spirv_ = background_spirv;
     shadow_depth_spirv_ = shadow_depth_spirv;
-    shadow_settings_ = shadow_settings;
     pipeline_cache_ = &pipeline_cache;
 
     rebuild(device);
@@ -59,10 +58,11 @@ public:
 
 private:
   void rebuild(vk::raii::Device &device) {
-    if (descriptor_set_layout_ == nullptr || pipeline_cache_ == nullptr)
+    if (frame_layout_ == nullptr || material_layout_ == nullptr || pipeline_cache_ == nullptr)
       throw std::runtime_error("PipelineRegistry is missing create dependencies");
 
-    pipeline_layout_ = create_pipeline_layout(device, descriptor_set_layout_);
+    const std::array set_layouts{frame_layout_, material_layout_};
+    pipeline_layout_ = create_pipeline_layout(device, set_layouts);
 
     const auto mesh_binding = MeshVertex::binding_description();
     const auto mesh_attributes = MeshVertex::attribute_descriptions();
@@ -113,12 +113,13 @@ private:
             .depth_write = true,
             .depth_compare = vk::CompareOp::eLessOrEqual,
             .depth_bias_enable = true,
-            .depth_bias_constant = shadow_settings_.depth_bias_constant,
-            .depth_bias_slope = shadow_settings_.depth_bias_slope,
+            .depth_bias_constant = k_shadow_depth_bias_constant,
+            .depth_bias_slope = k_shadow_depth_bias_slope,
         });
   }
 
-  vk::DescriptorSetLayout descriptor_set_layout_{nullptr};
+  vk::DescriptorSetLayout frame_layout_{nullptr};
+  vk::DescriptorSetLayout material_layout_{nullptr};
   vk::Format color_format_{};
   vk::Format depth_format_{};
   vk::Format shadow_depth_format_{};
@@ -126,7 +127,6 @@ private:
   std::string_view textured_mesh_spirv_{};
   std::string_view background_spirv_{};
   std::string_view shadow_depth_spirv_{};
-  DirectionalLightShadowSettings shadow_settings_{};
   const vk::raii::PipelineCache *pipeline_cache_{nullptr};
   vk::raii::PipelineLayout pipeline_layout_{nullptr};
   std::array<vk::raii::Pipeline, pipeline_count()> pipelines_{

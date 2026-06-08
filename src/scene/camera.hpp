@@ -35,29 +35,41 @@ public:
     return position_;
   }
 
+  [[nodiscard]] auto target() const -> const glm::vec3 & {
+    return target_;
+  }
+
   [[nodiscard]] auto look_direction() const -> glm::vec3 {
     return glm::normalize(target_ - position_);
   }
 
-  [[nodiscard]] auto view_matrix() -> const glm::mat4 & {
+  [[nodiscard]] auto near_plane() const -> float {
+    return near_plane_;
+  }
+
+  [[nodiscard]] auto far_plane() const -> float {
+    return far_plane_;
+  }
+
+  [[nodiscard]] auto view_matrix() const -> const glm::mat4 & {
     if (view_dirty_)
       rebuild_view();
     return view_;
   }
 
-  [[nodiscard]] auto projection_matrix() -> const glm::mat4 & {
+  [[nodiscard]] auto projection_matrix() const -> const glm::mat4 & {
     if (proj_dirty_)
       rebuild_projection();
     return proj_;
   }
 
 private:
-  void rebuild_view() {
+  void rebuild_view() const {
     view_ = glm::lookAt(position_, target_, up_);
     view_dirty_ = false;
   }
 
-  void rebuild_projection() {
+  void rebuild_projection() const {
     proj_ = glm::perspective(glm::radians(fov_y_degrees_), aspect_, near_plane_, far_plane_);
     proj_[1][1] *= -1.0F;
     proj_dirty_ = false;
@@ -70,10 +82,10 @@ private:
   float near_plane_{0.05F};
   float far_plane_{2000.0F};
   float aspect_{1.0F};
-  glm::mat4 view_{1.0F};
-  glm::mat4 proj_{1.0F};
-  bool view_dirty_{true};
-  bool proj_dirty_{true};
+  mutable glm::mat4 view_{1.0F};
+  mutable glm::mat4 proj_{1.0F};
+  mutable bool view_dirty_{true};
+  mutable bool proj_dirty_{true};
 };
 
 } // namespace engine

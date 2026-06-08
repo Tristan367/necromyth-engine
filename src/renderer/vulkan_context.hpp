@@ -65,6 +65,7 @@ public:
     create_pipelines(scene);
     create_command_buffers();
     create_sync_objects();
+    reset_image_layout_tracking();
 
 #ifndef NDEBUG
     if (device_.validation_enabled())
@@ -150,6 +151,7 @@ public:
                 scene.directional_light().color * scene.directional_light().intensity,
                 scene.directional_light().ambient),
             .light_view_proj = directional_light_view_projection(
+                scene.camera(),
                 scene.directional_light(),
                 scene.shadow_settings()),
         });
@@ -159,12 +161,12 @@ public:
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
     command_buffer.begin({});
-    record_shadow_pass(command_buffer, draw_list_, scene.shadow_settings());
+    record_shadow_pass(command_buffer, draw_list_);
     record_main_pass(command_buffer, image_index, draw_list_);
 
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
-        .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .stageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
     };
     const vk::CommandBufferSubmitInfo command_buffer_info{
         .commandBuffer = *command_buffer,
@@ -275,7 +277,7 @@ private:
   }
 
   void create_descriptor_set_layout() {
-    descriptor_resources_.create_layout(device_.device());
+    descriptor_resources_.create_layouts(device_.device());
   }
 
   void create_uniform_buffers() {
@@ -312,9 +314,9 @@ private:
         ENGINE_SHADER_SPIRV,
         ENGINE_SKY_SHADER_SPIRV,
         ENGINE_SHADOW_DEPTH_SPIRV,
-        descriptor_resources_.layout(),
+        descriptor_resources_.frame_layout(),
+        descriptor_resources_.material_layout(),
         device_.msaa_samples(),
-        scene.shadow_settings(),
         pipeline_cache_);
   }
 
@@ -358,12 +360,25 @@ private:
     }
   }
 
+  void bind_pass_descriptor_sets(vk::raii::CommandBuffer &command_buffer) const {
+    const vk::DescriptorSet descriptor_sets[] = {
+        descriptor_resources_.frame_set(frame_index_),
+        descriptor_resources_.material_set(0),
+    };
+    command_buffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        pipelines_.layout(),
+        0,
+        descriptor_sets,
+        nullptr);
+  }
+
   void draw_mesh(
       vk::raii::CommandBuffer &command_buffer,
       const DrawCommand &draw,
       std::optional<PipelineId> &bound_pipeline,
       std::optional<TextureSource> &bound_texture_source,
-      std::optional<std::uint32_t> &bound_texture_index) const {
+      std::optional<std::uint32_t> &bound_material_index) const {
     if (draw.mesh_index >= mesh_gpus_.size())
       return;
 
@@ -371,7 +386,7 @@ private:
       command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines_.pipeline(draw.pipeline));
       bound_pipeline = draw.pipeline;
       bound_texture_source.reset();
-      bound_texture_index.reset();
+      bound_material_index.reset();
     }
 
     if (draw.pipeline == PipelineId::TexturedMesh) {
@@ -383,16 +398,16 @@ private:
       if (draw.texture_source == TextureSource::ArrayLayer && draw.texture_index >= texture_array_.layer_count())
         return;
 
-      if (!bound_texture_source || *bound_texture_source != draw.texture_source ||
-          !bound_texture_index || *bound_texture_index != descriptor_texture_index) {
+      if (!bound_material_index || *bound_material_index != descriptor_texture_index) {
+        const vk::DescriptorSet material_set = descriptor_resources_.material_set(descriptor_texture_index);
         command_buffer.bindDescriptorSets(
             vk::PipelineBindPoint::eGraphics,
             pipelines_.layout(),
-            0,
-            descriptor_resources_.set(frame_index_, descriptor_texture_index),
+            1,
+            material_set,
             nullptr);
         bound_texture_source = draw.texture_source;
-        bound_texture_index = descriptor_texture_index;
+        bound_material_index = descriptor_texture_index;
       }
 
       const TexturedPushConstants push_constants{
@@ -407,16 +422,6 @@ private:
           sizeof(TexturedPushConstants),
           &push_constants);
     } else if (draw.pipeline == PipelineId::Background) {
-      if (!bound_texture_index) {
-        command_buffer.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
-            pipelines_.layout(),
-            0,
-            descriptor_resources_.set(frame_index_, 0),
-            nullptr);
-        bound_texture_index = 0;
-      }
-
       const TexturedPushConstants sky_push_constants{.model = draw.model};
       command_buffer.pushConstants(
           pipelines_.layout(),
@@ -425,16 +430,6 @@ private:
           sizeof(TexturedPushConstants),
           &sky_push_constants);
     } else if (draw.pipeline == PipelineId::ShadowDepth) {
-      if (!bound_texture_index) {
-        command_buffer.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
-            pipelines_.layout(),
-            0,
-            descriptor_resources_.set(frame_index_, 0),
-            nullptr);
-        bound_texture_index = 0;
-      }
-
       const TexturedPushConstants shadow_push_constants{.model = draw.model};
       command_buffer.pushConstants(
           pipelines_.layout(),
@@ -454,8 +449,7 @@ private:
 
   void record_shadow_pass(
       vk::raii::CommandBuffer &command_buffer,
-      const std::vector<DrawCommand> &draw_list,
-      const DirectionalLightShadowSettings &shadow_settings) const {
+      const std::vector<DrawCommand> &draw_list) const {
     const vk::ImageLayout previous_layout = shadow_image_layout_;
     const vk::AccessFlags2 previous_access =
         previous_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead;
@@ -490,6 +484,7 @@ private:
     };
 
     command_buffer.beginRendering(rendering_info);
+    bind_pass_descriptor_sets(command_buffer);
     command_buffer.setViewport(
         0,
         vk::Viewport{
@@ -501,14 +496,11 @@ private:
             1.0F,
         });
     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, shadow_map_.extent()});
-    command_buffer.setDepthBias(
-        shadow_settings.depth_bias_constant,
-        0.0F,
-        shadow_settings.depth_bias_slope);
+    command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
     std::optional<PipelineId> bound_pipeline;
     std::optional<TextureSource> bound_texture_source;
-    std::optional<std::uint32_t> bound_texture_index;
+    std::optional<std::uint32_t> bound_material_index;
 
     for (const DrawCommand &draw : draw_list) {
       if (draw.pipeline != PipelineId::TexturedMesh)
@@ -516,7 +508,7 @@ private:
 
       DrawCommand shadow_draw = draw;
       shadow_draw.pipeline = PipelineId::ShadowDepth;
-      draw_mesh(command_buffer, shadow_draw, bound_pipeline, bound_texture_source, bound_texture_index);
+      draw_mesh(command_buffer, shadow_draw, bound_pipeline, bound_texture_source, bound_material_index);
     }
 
     command_buffer.endRendering();
@@ -539,39 +531,12 @@ private:
       vk::raii::CommandBuffer &command_buffer,
       std::uint32_t image_index,
       const std::vector<DrawCommand> &draw_list) const {
+    transition_swapchain_to_color_attachment(command_buffer, image_index);
 
-    transition_image_layout(
-        command_buffer,
-        swapchain_.images()[image_index],
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        {},
-        vk::AccessFlagBits2::eColorAttachmentWrite,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    if (device_.msaa_enabled())
+      transition_msaa_to_color_attachment(command_buffer);
 
-    if (device_.msaa_enabled()) {
-      transition_image_layout(
-          command_buffer,
-          msaa_color_image_.image(),
-          vk::ImageLayout::eUndefined,
-          vk::ImageLayout::eColorAttachmentOptimal,
-          {},
-          vk::AccessFlagBits2::eColorAttachmentWrite,
-          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-    }
-
-    transition_image_layout(
-        command_buffer,
-        depth_image_.image(),
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eDepthAttachmentOptimal,
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        depth_image_.aspect_mask());
+    transition_depth_to_attachment(command_buffer);
 
     const vk::ClearValue clear_value{vk::ClearColorValue{std::array{0.02F, 0.03F, 0.05F, 1.0F}}};
     const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
@@ -609,6 +574,7 @@ private:
         .pDepthAttachment = &depth_attachment,
     };
     command_buffer.beginRendering(rendering_info);
+    bind_pass_descriptor_sets(command_buffer);
     command_buffer.setViewport(
         0,
         vk::Viewport{
@@ -623,10 +589,10 @@ private:
 
     std::optional<PipelineId> bound_pipeline;
     std::optional<TextureSource> bound_texture_source;
-    std::optional<std::uint32_t> bound_texture_index;
+    std::optional<std::uint32_t> bound_material_index;
 
     for (const DrawCommand &draw : draw_list)
-      draw_mesh(command_buffer, draw, bound_pipeline, bound_texture_source, bound_texture_index);
+      draw_mesh(command_buffer, draw, bound_pipeline, bound_texture_source, bound_material_index);
 
     command_buffer.endRendering();
 
@@ -639,8 +605,91 @@ private:
         {},
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::PipelineStageFlagBits2::eBottomOfPipe);
+    swapchain_image_layouts_[image_index] = vk::ImageLayout::ePresentSrcKHR;
 
     command_buffer.end();
+  }
+
+  void reset_image_layout_tracking() {
+    swapchain_image_layouts_.assign(swapchain_.image_count(), vk::ImageLayout::eUndefined);
+    depth_image_layout_ = vk::ImageLayout::eUndefined;
+    msaa_color_layout_ = vk::ImageLayout::eUndefined;
+  }
+
+  void transition_swapchain_to_color_attachment(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t image_index) const {
+    vk::ImageLayout &tracked_layout = swapchain_image_layouts_.at(image_index);
+    const vk::Image image = swapchain_.images()[image_index];
+
+    if (tracked_layout == vk::ImageLayout::eUndefined) {
+      transition_image_layout(
+          command_buffer,
+          image,
+          vk::ImageLayout::eUndefined,
+          vk::ImageLayout::eColorAttachmentOptimal,
+          {},
+          vk::AccessFlagBits2::eColorAttachmentWrite,
+          vk::PipelineStageFlagBits2::eTopOfPipe,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    } else if (tracked_layout == vk::ImageLayout::ePresentSrcKHR) {
+      transition_image_layout(
+          command_buffer,
+          image,
+          vk::ImageLayout::ePresentSrcKHR,
+          vk::ImageLayout::eColorAttachmentOptimal,
+          {},
+          vk::AccessFlagBits2::eColorAttachmentWrite,
+          vk::PipelineStageFlagBits2::eBottomOfPipe,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    }
+
+    tracked_layout = vk::ImageLayout::eColorAttachmentOptimal;
+  }
+
+  void transition_msaa_to_color_attachment(vk::raii::CommandBuffer &command_buffer) const {
+    if (msaa_color_layout_ == vk::ImageLayout::eColorAttachmentOptimal)
+      return;
+
+    transition_image_layout(
+        command_buffer,
+        msaa_color_image_.image(),
+        msaa_color_layout_,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        {},
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        msaa_color_layout_ == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe
+                                                          : vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    msaa_color_layout_ = vk::ImageLayout::eColorAttachmentOptimal;
+  }
+
+  void transition_depth_to_attachment(vk::raii::CommandBuffer &command_buffer) const {
+    if (depth_image_layout_ == vk::ImageLayout::eDepthAttachmentOptimal) {
+      transition_image_layout(
+          command_buffer,
+          depth_image_.image(),
+          vk::ImageLayout::eDepthAttachmentOptimal,
+          vk::ImageLayout::eDepthAttachmentOptimal,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          depth_image_.aspect_mask());
+      return;
+    }
+
+    transition_image_layout(
+        command_buffer,
+        depth_image_.image(),
+        depth_image_layout_,
+        vk::ImageLayout::eDepthAttachmentOptimal,
+        {},
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        depth_image_.aspect_mask());
+    depth_image_layout_ = vk::ImageLayout::eDepthAttachmentOptimal;
   }
 
   void wait_for_nonzero_extent() const {
@@ -665,6 +714,8 @@ private:
     depth_image_.recreate(swapchain_.extent());
     pipelines_.recreate(device_.device(), swapchain_.image_format(), depth_image_.format());
     create_sync_objects();
+    reset_image_layout_tracking();
+    frame_index_ = 0;
   }
 
   SDL_Window *window_{};
@@ -690,6 +741,9 @@ private:
   bool framebuffer_resized_{};
   std::uint64_t last_resize_ticks_{};
   mutable vk::ImageLayout shadow_image_layout_{vk::ImageLayout::eUndefined};
+  mutable std::vector<vk::ImageLayout> swapchain_image_layouts_;
+  mutable vk::ImageLayout depth_image_layout_{vk::ImageLayout::eUndefined};
+  mutable vk::ImageLayout msaa_color_layout_{vk::ImageLayout::eUndefined};
 };
 
 } // namespace engine
