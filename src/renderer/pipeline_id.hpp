@@ -5,7 +5,12 @@
 namespace engine {
 
 enum class PipelineId : std::uint8_t {
-  TexturedMesh = 0,
+  Background = 0,
+  TexturedMesh = 1,
 };
+
+[[nodiscard]] constexpr auto pipeline_count() -> std::uint32_t {
+  return 2;
+}
 
 } // namespace engine

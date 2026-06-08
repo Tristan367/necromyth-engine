@@ -1,6 +1,8 @@
 #pragma once
 
 #include "renderer/model_loader.hpp"
+#include "renderer/pipeline_id.hpp"
+#include "scene/sky_mesh.hpp"
 #include "scene/mesh_instance.hpp"
 #include "scene/scene.hpp"
 
@@ -17,9 +19,17 @@ inline void populate_demo_scene(Scene &scene) {
       .vertices = loaded.vertices,
       .indices = loaded.indices,
   });
+  scene.add_mesh(make_sky_cube_mesh());
 
   scene.camera().look_at({2.0F, 2.0F, 2.0F}, {0.0F, 0.0F, 0.0F});
-  scene.camera().set_perspective(45.0F, 0.1F, 10.0F);
+  scene.camera().set_perspective(45.0F, 0.05F, 2000.0F);
+
+  scene.add_instance({
+      .mesh_index = 1,
+      .model = glm::scale(glm::mat4(1.0F), glm::vec3(500.0F)),
+      .layer = RenderLayer::Background,
+      .pipeline = PipelineId::Background,
+  });
 
   scene.add_instance({
       .mesh_index = 0,
@@ -46,8 +56,8 @@ inline void update_demo_scene(Scene &scene) {
   const auto current_time = std::chrono::high_resolution_clock::now();
   const float time = std::chrono::duration<float>(current_time - start_time).count();
 
-  if (scene.instances().size() >= 2)
-    scene.instance(1).model = glm::rotate(glm::mat4(1.0F), time * glm::radians(90.0F), glm::vec3(0.0F, 0.0F, 1.0F)) *
+  if (scene.instances().size() >= 3)
+    scene.instance(2).model = glm::rotate(glm::mat4(1.0F), time * glm::radians(90.0F), glm::vec3(0.0F, 0.0F, 1.0F)) *
                               glm::translate(glm::mat4(1.0F), glm::vec3(0.0F, -0.5F, 0.0F)) *
                               glm::scale(glm::mat4(1.0F), glm::vec3(0.35F));
 }

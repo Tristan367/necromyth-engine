@@ -43,6 +43,7 @@ file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/
 
 set(SHADER_SPIRV_OUTPUTS "")
 set(DEFAULT_SHADER_SPIRV "")
+set(SKY_SHADER_SPIRV "")
 
 foreach(SHADER_SOURCE ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME_WE)
@@ -68,11 +69,17 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
     list(APPEND SHADER_SPIRV_OUTPUTS "${SHADER_SPIRV}")
     if(SHADER_NAME STREQUAL "triangle")
         set(DEFAULT_SHADER_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "sky")
+        set(SKY_SHADER_SPIRV "${SHADER_SPIRV}")
     endif()
 endforeach()
 
 if(NOT DEFAULT_SHADER_SPIRV)
     message(FATAL_ERROR "Expected shaders/triangle.slang for the default textured mesh pipeline")
+endif()
+
+if(NOT SKY_SHADER_SPIRV)
+    message(FATAL_ERROR "Expected shaders/sky.slang for the background pipeline")
 endif()
 
 add_custom_target(shaders DEPENDS ${SHADER_SPIRV_OUTPUTS})
@@ -91,8 +98,10 @@ add_executable(${NAME}
     src/scene/mesh_source.hpp
     src/scene/render_layer.hpp
     src/scene/scene.hpp
+    src/scene/sky_mesh.hpp
     src/renderer/render_settings.hpp
     src/renderer/pipeline_id.hpp
+    src/renderer/pipeline_registry.hpp
     src/renderer/draw_list.hpp
     src/renderer/mesh_gpu.hpp
     src/renderer/vulkan_device.hpp
@@ -118,6 +127,7 @@ target_compile_definitions(${NAME} PRIVATE
     VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
     ENGINE_SHADER_SPIRV="${DEFAULT_SHADER_SPIRV}"
+    ENGINE_SKY_SHADER_SPIRV="${SKY_SHADER_SPIRV}"
     ENGINE_MODEL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/models/viking_room.obj"
     ENGINE_TEXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/textures/viking_room.png"
 )

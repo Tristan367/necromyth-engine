@@ -8,6 +8,8 @@
 #include "renderer/image_barrier.hpp"
 #include "renderer/mesh_gpu.hpp"
 #include "renderer/msaa_color_image.hpp"
+#include "renderer/pipeline_id.hpp"
+#include "renderer/pipeline_registry.hpp"
 #include "renderer/render_settings.hpp"
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_image.hpp"
@@ -24,6 +26,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -51,7 +54,7 @@ public:
     create_descriptor_set_layout();
     create_uniform_buffers();
     create_descriptor_pool_and_sets();
-    create_graphics_pipeline();
+    create_pipelines();
     create_command_buffers();
     create_sync_objects();
 
@@ -130,6 +133,8 @@ public:
         FrameUniformBufferObject{
             .view = scene.camera().view_matrix(),
             .proj = scene.camera().projection_matrix(),
+            .camera_position = glm::vec4(scene.camera().position(), 1.0F),
+            .view_sky = view_without_translation(scene.camera().view_matrix()),
         });
 
     build_draw_list(scene, draw_list_);
@@ -253,17 +258,15 @@ private:
         texture_image_.view());
   }
 
-  void create_graphics_pipeline() {
-    const auto attributes = MeshVertex::attribute_descriptions();
-    graphics_pipeline_.create(
+  void create_pipelines() {
+    pipelines_.create(
         device_.device(),
         swapchain_.image_format(),
         depth_image_.format(),
         ENGINE_SHADER_SPIRV,
+        ENGINE_SKY_SHADER_SPIRV,
         descriptor_resources_.layout(),
         device_.msaa_samples(),
-        MeshVertex::binding_description(),
-        attributes,
         pipeline_cache_);
   }
 
@@ -382,13 +385,6 @@ private:
         .pDepthAttachment = &depth_attachment,
     };
     command_buffer.beginRendering(rendering_info);
-    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline_.pipeline());
-    command_buffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        *graphics_pipeline_.layout(),
-        0,
-        descriptor_resources_.set(frame_index_),
-        nullptr);
     command_buffer.setViewport(
         0,
         vk::Viewport{
@@ -401,13 +397,26 @@ private:
         });
     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain_.extent()});
 
+    std::optional<PipelineId> bound_pipeline;
+
     for (const DrawCommand &draw : draw_list) {
       if (draw.mesh_index >= mesh_gpus_.size())
         continue;
 
+      if (!bound_pipeline || *bound_pipeline != draw.pipeline) {
+        command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines_.pipeline(draw.pipeline));
+        command_buffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            pipelines_.layout(),
+            0,
+            descriptor_resources_.set(frame_index_),
+            nullptr);
+        bound_pipeline = draw.pipeline;
+      }
+
       const MeshGpu &mesh = mesh_gpus_[draw.mesh_index];
       command_buffer.pushConstants(
-          *graphics_pipeline_.layout(),
+          pipelines_.layout(),
           vk::ShaderStageFlagBits::eVertex,
           0,
           sizeof(glm::mat4),
@@ -455,6 +464,7 @@ private:
     swapchain_.recreate();
     create_msaa_color_image();
     depth_image_.recreate(swapchain_.extent());
+    pipelines_.recreate(device_.device(), swapchain_.image_format(), depth_image_.format());
     create_sync_objects();
   }
 
@@ -473,7 +483,7 @@ private:
   std::vector<MeshGpu> mesh_gpus_;
   UniformBufferSet uniform_buffers_;
   DescriptorResources descriptor_resources_;
-  GraphicsPipeline graphics_pipeline_;
+  PipelineRegistry pipelines_;
   std::vector<DrawCommand> draw_list_;
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};

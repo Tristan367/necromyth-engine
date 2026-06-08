@@ -7,6 +7,8 @@ struct VSInput {
 struct FrameUniforms {
     float4x4 view;
     float4x4 proj;
+    float4 cameraPosition;
+    float4x4 viewSky;
 };
 ConstantBuffer<FrameUniforms> ubo;
 

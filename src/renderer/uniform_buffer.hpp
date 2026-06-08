@@ -16,7 +16,15 @@ namespace engine {
 struct FrameUniformBufferObject {
   alignas(16) glm::mat4 view{};
   alignas(16) glm::mat4 proj{};
+  alignas(16) glm::vec4 camera_position{};
+  alignas(16) glm::mat4 view_sky{};
 };
+
+[[nodiscard]] inline auto view_without_translation(const glm::mat4 &view) -> glm::mat4 {
+  glm::mat4 result = view;
+  result[3] = glm::vec4(0.0F, 0.0F, 0.0F, 1.0F);
+  return result;
+}
 
 class UniformBufferSet {
 public:
