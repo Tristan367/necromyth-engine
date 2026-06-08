@@ -40,7 +40,7 @@ class VulkanContext {
 public:
   VulkanContext(SDL_Window *window, const EngineConfig &config, const Scene &scene)
       : window_(window),
-        device_(window, config.msaa) {
+        device_(window, config.msaa, config.gpu_device_index) {
     swapchain_.create(device_, window);
     create_pipeline_cache();
     create_msaa_color_image();
@@ -111,6 +111,16 @@ public:
 
     device_.device().resetFences(*in_flight_fences_[frame_index_]);
 
+    struct FrameSubmitGuard {
+      VulkanContext *context{};
+      bool submitted{false};
+
+      ~FrameSubmitGuard() {
+        if (context != nullptr && !submitted)
+          context->submit_empty_frame();
+      }
+    } submit_guard{this};
+
     const float aspect = static_cast<float>(swapchain_.extent().width) /
                          static_cast<float>(swapchain_.extent().height);
     scene.camera().set_aspect(aspect);
@@ -149,6 +159,7 @@ public:
     };
 
     device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
+    submit_guard.submitted = true;
 
     const vk::PresentInfoKHR present_info{
         .waitSemaphoreCount = 1,
@@ -170,6 +181,11 @@ public:
   }
 
 private:
+  void submit_empty_frame() {
+    const vk::SubmitInfo2 submit_info{};
+    device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
+  }
+
   void create_pipeline_cache() {
     pipeline_cache_ = vk::raii::PipelineCache(device_.device(), vk::PipelineCacheCreateInfo{});
   }

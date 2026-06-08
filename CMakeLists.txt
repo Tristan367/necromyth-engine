@@ -38,28 +38,44 @@ find_program(SLANGC_EXECUTABLE slangc
     REQUIRED
 )
 
-set(SHADER_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.slang")
 set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
-set(SHADER_SPIRV "${SHADER_OUTPUT_DIR}/slang.spv")
+file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.slang")
 
-add_custom_command(
-    OUTPUT "${SHADER_SPIRV}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
-    COMMAND "${SLANGC_EXECUTABLE}"
-        "${SHADER_SOURCE}"
-        -target spirv
-        -profile spirv_1_4
-        -emit-spirv-directly
-        -fvk-use-entrypoint-name
-        -entry vertMain
-        -entry fragMain
-        -o "${SHADER_SPIRV}"
-    DEPENDS "${SHADER_SOURCE}"
-    COMMENT "Compiling Slang shaders"
-    VERBATIM
-)
+set(SHADER_SPIRV_OUTPUTS "")
+set(DEFAULT_SHADER_SPIRV "")
 
-add_custom_target(shaders DEPENDS "${SHADER_SPIRV}")
+foreach(SHADER_SOURCE ${SHADER_SOURCES})
+    get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME_WE)
+    set(SHADER_SPIRV "${SHADER_OUTPUT_DIR}/${SHADER_NAME}.spv")
+
+    add_custom_command(
+        OUTPUT "${SHADER_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+        COMMAND "${SLANGC_EXECUTABLE}"
+            "${SHADER_SOURCE}"
+            -target spirv
+            -profile spirv_1_4
+            -emit-spirv-directly
+            -fvk-use-entrypoint-name
+            -entry vertMain
+            -entry fragMain
+            -o "${SHADER_SPIRV}"
+        DEPENDS "${SHADER_SOURCE}"
+        COMMENT "Compiling ${SHADER_NAME}.slang"
+        VERBATIM
+    )
+
+    list(APPEND SHADER_SPIRV_OUTPUTS "${SHADER_SPIRV}")
+    if(SHADER_NAME STREQUAL "triangle")
+        set(DEFAULT_SHADER_SPIRV "${SHADER_SPIRV}")
+    endif()
+endforeach()
+
+if(NOT DEFAULT_SHADER_SPIRV)
+    message(FATAL_ERROR "Expected shaders/triangle.slang for the default textured mesh pipeline")
+endif()
+
+add_custom_target(shaders DEPENDS ${SHADER_SPIRV_OUTPUTS})
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
@@ -68,6 +84,7 @@ add_executable(${NAME}
     src/app.hpp
     src/demo_scene.hpp
     src/engine_config.hpp
+    src/platform/gpu_cli.hpp
     src/platform/sdl_window.hpp
     src/scene/camera.hpp
     src/scene/mesh_instance.hpp
@@ -100,7 +117,7 @@ target_compile_features(${NAME} PRIVATE cxx_std_23)
 target_compile_definitions(${NAME} PRIVATE
     VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-    ENGINE_SHADER_SPIRV="${SHADER_SPIRV}"
+    ENGINE_SHADER_SPIRV="${DEFAULT_SHADER_SPIRV}"
     ENGINE_MODEL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/models/viking_room.obj"
     ENGINE_TEXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/textures/viking_room.png"
 )

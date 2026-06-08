@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -48,12 +49,27 @@ constexpr const char *portability_subset_extension = "VK_KHR_portability_subset"
   });
 }
 
-[[nodiscard]] inline auto score_physical_device(const vk::PhysicalDeviceProperties &properties) -> std::uint32_t {
+[[nodiscard]] inline auto score_physical_device(
+    const vk::PhysicalDeviceProperties &properties,
+    const vk::PhysicalDeviceMemoryProperties &memory) -> std::uint32_t {
   std::uint32_t score = 0;
   if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
     score += discrete_gpu_score_bonus;
   score += properties.limits.maxImageDimension2D;
+
+  for (std::uint32_t i = 0; i < memory.memoryHeapCount; ++i) {
+    if ((memory.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal) != vk::MemoryHeapFlags{})
+      score += static_cast<std::uint32_t>(memory.memoryHeaps[i].size / (1024ULL * 1024ULL * 1024ULL));
+  }
+
   return score;
+}
+
+inline void warn_if_extension_missing(
+    std::string_view name,
+    const std::vector<vk::ExtensionProperties> &available) {
+  if (!has_name(name.data(), available))
+    std::cerr << "Vulkan: optional extension not available: " << name << '\n';
 }
 
 [[nodiscard]] inline auto debug_callback(
@@ -115,7 +131,11 @@ struct QueueFamilyIndices {
 
 class VulkanDevice {
 public:
-  explicit VulkanDevice(SDL_Window *window, MsaaSettings msaa_settings = {}) {
+  explicit VulkanDevice(
+      SDL_Window *window,
+      MsaaSettings msaa_settings = {},
+      std::optional<std::uint32_t> gpu_device_index = {}) {
+    gpu_device_index_ = gpu_device_index;
     create_instance();
     create_debug_messenger();
     create_surface(window);
@@ -230,6 +250,9 @@ private:
     if (detail::has_name(vk::KHRPortabilityEnumerationExtensionName, available_instance_extensions)) {
       extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
       instance_flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
+      portability_enumeration_enabled_ = true;
+    } else {
+      detail::warn_if_extension_missing(vk::KHRPortabilityEnumerationExtensionName, available_instance_extensions);
     }
 
     const vk::ApplicationInfo application_info{
@@ -277,6 +300,19 @@ private:
     if (devices.empty())
       throw std::runtime_error("No Vulkan-capable GPU found");
 
+    if (gpu_device_index_) {
+      if (*gpu_device_index_ >= devices.size())
+        throw std::runtime_error("Requested GPU index " + std::to_string(*gpu_device_index_) + " is out of range");
+
+      if (!is_device_suitable(devices[*gpu_device_index_]))
+        throw std::runtime_error("Requested GPU is not suitable for this engine");
+
+      physical_device_ = devices[*gpu_device_index_];
+      queue_families_ = find_queue_families(physical_device_);
+      gpu_name_ = physical_device_.getProperties().deviceName.data();
+      return;
+    }
+
     struct Candidate {
       std::uint32_t score{};
       vk::raii::PhysicalDevice device{nullptr};
@@ -291,7 +327,8 @@ private:
         continue;
 
       const vk::PhysicalDeviceProperties properties = device.getProperties();
-      candidates.push_back({detail::score_physical_device(properties), device, properties.deviceName.data()});
+      const vk::PhysicalDeviceMemoryProperties memory = device.getMemoryProperties();
+      candidates.push_back({detail::score_physical_device(properties, memory), device, properties.deviceName.data()});
     }
 
     if (candidates.empty())
@@ -333,8 +370,12 @@ private:
 
     std::vector<const char *> device_extensions{vk::KHRSwapchainExtensionName};
     const auto available_device_extensions = physical_device_.enumerateDeviceExtensionProperties();
-    if (detail::has_name(detail::portability_subset_extension, available_device_extensions))
-      device_extensions.push_back(detail::portability_subset_extension);
+    if (portability_enumeration_enabled_) {
+      if (detail::has_name(detail::portability_subset_extension, available_device_extensions))
+        device_extensions.push_back(detail::portability_subset_extension);
+      else
+        detail::warn_if_extension_missing(detail::portability_subset_extension, available_device_extensions);
+    }
 
     const vk::DeviceCreateInfo create_info{
         .pNext = &feature_chain.get<vk::PhysicalDeviceFeatures2>(),
@@ -442,6 +483,8 @@ private:
   vk::SampleCountFlagBits max_msaa_samples_{vk::SampleCountFlagBits::e1};
   bool validation_enabled_{};
   bool debug_utils_enabled_{};
+  bool portability_enumeration_enabled_{};
+  std::optional<std::uint32_t> gpu_device_index_{};
   std::string gpu_name_;
 };
 

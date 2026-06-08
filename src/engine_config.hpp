@@ -2,6 +2,8 @@
 
 #include "renderer/render_settings.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
 namespace engine {
@@ -11,6 +13,7 @@ struct EngineConfig {
   int window_width{1280};
   int window_height{720};
   MsaaSettings msaa{};
+  std::optional<std::uint32_t> gpu_device_index{};
 };
 
 [[nodiscard]] inline auto engine_config_from_environment() -> EngineConfig {

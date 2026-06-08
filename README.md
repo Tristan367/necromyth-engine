@@ -129,8 +129,9 @@ These are project defaults. If a change contradicts them, there should be a deli
 **Physical device selection** filters first (`is_device_suitable`), then scores:
 - `+1000` for discrete GPU
 - `+ maxImageDimension2D` as a capability tie-breaker
+- `+1` per GiB of device-local VRAM (simple_engine pattern)
 
-Both score terms are required. Do not pick the first suitable device.
+Both score terms are required. Do not pick the first suitable device. Override with `-g <index>` or list devices with `-gl` / `--listgpus` (Sascha-style CLI, parsed in `main` before the window opens).
 
 **Queue families:** first-match for graphics/compute/transfer/present, then prefer a unified family that supports graphics, compute, transfer, and present together.
 
