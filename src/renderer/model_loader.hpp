@@ -21,6 +21,8 @@ struct MeshVertexHash {
     std::size_t hash = 0;
     for (float component : vertex.pos)
       hash ^= std::hash<float>{}(component) + 0x9e3779b9U + (hash << 6) + (hash >> 2);
+    for (float component : vertex.normal)
+      hash ^= std::hash<float>{}(component) + 0x9e3779b9U + (hash << 6) + (hash >> 2);
     for (float component : vertex.color)
       hash ^= std::hash<float>{}(component) + 0x9e3779b9U + (hash << 6) + (hash >> 2);
     for (float component : vertex.tex_coord)
@@ -56,6 +58,16 @@ struct LoadedMesh {
       vertex.pos[0] = attrib.vertices[3 * index.vertex_index + 0];
       vertex.pos[1] = attrib.vertices[3 * index.vertex_index + 1];
       vertex.pos[2] = attrib.vertices[3 * index.vertex_index + 2];
+
+      if (index.normal_index >= 0) {
+        vertex.normal[0] = attrib.normals[3 * index.normal_index + 0];
+        vertex.normal[1] = attrib.normals[3 * index.normal_index + 1];
+        vertex.normal[2] = attrib.normals[3 * index.normal_index + 2];
+      } else {
+        vertex.normal[0] = 0.0F;
+        vertex.normal[1] = 1.0F;
+        vertex.normal[2] = 0.0F;
+      }
 
       vertex.tex_coord[0] = attrib.texcoords[2 * index.texcoord_index + 0];
       vertex.tex_coord[1] = 1.0F - attrib.texcoords[2 * index.texcoord_index + 1];

@@ -26,6 +26,8 @@
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 
+#include <glm/geometric.hpp>
+
 #include <cstdint>
 #include <iostream>
 #include <optional>
@@ -138,6 +140,12 @@ public:
             .proj = scene.camera().projection_matrix(),
             .camera_position = glm::vec4(scene.camera().position(), 1.0F),
             .view_sky = view_without_translation(scene.camera().view_matrix()),
+            .light_direction = glm::vec4(
+                glm::normalize(scene.directional_light().direction_toward_light),
+                0.0F),
+            .light_color = glm::vec4(
+                scene.directional_light().color * scene.directional_light().intensity,
+                scene.directional_light().ambient),
         });
 
     build_draw_list(scene, draw_list_);

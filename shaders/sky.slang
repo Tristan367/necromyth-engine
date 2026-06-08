@@ -7,6 +7,8 @@ struct FrameUniforms {
     float4x4 proj;
     float4 cameraPosition;
     float4x4 viewSky;
+    float4 lightDirection;
+    float4 lightColor;
 };
 ConstantBuffer<FrameUniforms> ubo;
 
@@ -25,7 +27,6 @@ struct VSOutput {
 VSOutput vertMain(VSInput input) {
     VSOutput output;
     output.direction = input.inPosition;
-    output.direction.xy *= -1.0;
 
     float4 world = mul(pushConstants.model, float4(input.inPosition, 1.0));
     float4 viewPos = mul(ubo.viewSky, world);

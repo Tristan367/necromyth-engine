@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/camera.hpp"
+#include "scene/directional_light.hpp"
 #include "scene/mesh_instance.hpp"
 #include "scene/mesh_source.hpp"
 
@@ -40,6 +41,14 @@ public:
     return instances_.at(index);
   }
 
+  [[nodiscard]] auto directional_light() -> DirectionalLight & {
+    return directional_light_;
+  }
+
+  [[nodiscard]] auto directional_light() const -> const DirectionalLight & {
+    return directional_light_;
+  }
+
   [[nodiscard]] auto add_mesh(MeshSource mesh) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(meshes_.size());
     meshes_.push_back(std::move(mesh));
@@ -66,6 +75,7 @@ public:
 
 private:
   Camera camera_;
+  DirectionalLight directional_light_{};
   std::vector<MeshSource> meshes_;
   std::vector<std::string> texture_paths_;
   std::vector<std::string> texture_array_layer_paths_;

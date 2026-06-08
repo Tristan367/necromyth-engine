@@ -90,7 +90,9 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 
 **Repo split (current):** Renderer + scene/core live here as one library. A separate *renderer-only* repo makes sense when you add a second backend (e.g. Metal). Until then, keep renderer and engine unified to avoid submodule friction.
 
-**Models:** `load_gltf_model()` loads glTF 2.0 static meshes (tinygltf, Sascha-style CPU path). `load_obj_model()` remains for simple `.obj` assets. glTF node transforms are baked into vertex positions; materials expose an optional base-color texture path for scene registration.
+**Models:** `load_gltf_model()` loads glTF 2.0 static meshes (tinygltf, Sascha-style CPU path). `load_obj_model()` remains for simple `.obj` assets. glTF sidecar textures (`.png`/`.jpg` next to the `.gltf`) resolve via material paths; `.glb` bundles everything into one file.
+
+**Lighting:** `Scene::directional_light()` feeds a single sun direction + ambient/diffuse color into the frame UBO. The textured mesh shader applies Lambert diffuse; the same UBO slot is reserved for shadow mapping later.
 
 **Textures:** Each `MeshInstance` uses `texture_source` + `texture_index`:
 - `TextureSource::Table` — array of textures (separate images, Sascha `descriptorsets/`)

@@ -13,6 +13,9 @@
 #define TINYGLTF_IMPLEMENTATION
 #include <tinygltf/tiny_gltf.h>
 
+#include <stb/stb_image.h>
+#include <stb/stb_image_write.h>
+
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -58,6 +61,68 @@ inline auto resolve_uri(std::string_view base_directory, std::string_view uri) -
   std::filesystem::path resolved = std::filesystem::path(base_directory) / uri_path;
   resolved = resolved.lexically_normal();
   return resolved.string();
+}
+
+inline auto decode_gltf_image_data(
+    tinygltf::Image *image,
+    int /*image_index*/,
+    std::string *error,
+    std::string * /*warning*/,
+    int /*req_width*/,
+    int /*req_height*/,
+    const unsigned char *bytes,
+    int size,
+    void * /*user_data*/) -> bool {
+  if (image == nullptr || bytes == nullptr || size <= 0) {
+    if (error != nullptr)
+      *error += "Invalid glTF embedded image payload\n";
+    return false;
+  }
+
+  std::int32_t width{};
+  std::int32_t height{};
+  std::int32_t channels{};
+  stbi_uc *pixels = stbi_load_from_memory(bytes, size, &width, &height, &channels, STBI_rgb_alpha);
+  if (pixels == nullptr) {
+    if (error != nullptr)
+      *error += "stbi_load_from_memory failed for embedded glTF image\n";
+    return false;
+  }
+
+  image->width = width;
+  image->height = height;
+  image->component = 4;
+  image->image.assign(pixels, pixels + static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4U);
+  stbi_image_free(pixels);
+  return true;
+}
+
+inline void materialize_embedded_images(tinygltf::Model &model, std::string_view source_path) {
+  const std::filesystem::path source_file(source_path);
+  const std::filesystem::path cache_dir = source_file.parent_path() / ".gltf_cache";
+  std::filesystem::create_directories(cache_dir);
+  const std::string stem = source_file.stem().string();
+
+  for (std::size_t image_index = 0; image_index < model.images.size(); ++image_index) {
+    tinygltf::Image &image = model.images[image_index];
+    if (!image.uri.empty() || image.image.empty())
+      continue;
+
+    const std::filesystem::path cache_path =
+        cache_dir / (stem + "_image" + std::to_string(image_index) + ".png");
+    if (!std::filesystem::exists(cache_path)) {
+      if (stbi_write_png(
+              cache_path.string().c_str(),
+              image.width,
+              image.height,
+              4,
+              image.image.data(),
+              image.width * 4) == 0)
+        throw std::runtime_error("Failed to write embedded glTF image cache: " + cache_path.string());
+    }
+
+    image.uri = cache_path.string();
+  }
 }
 
 inline auto node_local_matrix(const tinygltf::Node &node) -> glm::mat4 {
@@ -204,6 +269,10 @@ inline void load_primitive(
   if (const auto uv_it = primitive.attributes.find("TEXCOORD_0"); uv_it != primitive.attributes.end())
     read_float_accessor(model, uv_it->second, 2, texcoords);
 
+  std::vector<float> normals;
+  if (const auto normal_it = primitive.attributes.find("NORMAL"); normal_it != primitive.attributes.end())
+    read_float_accessor(model, normal_it->second, 3, normals);
+
   std::vector<float> colors;
   std::uint32_t color_components = 0;
   if (const auto color_it = primitive.attributes.find("COLOR_0"); color_it != primitive.attributes.end()) {
@@ -221,18 +290,20 @@ inline void load_primitive(
   loaded.mesh.indices.clear();
 
   for (std::uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index) {
-    const glm::vec4 local_position{
-        positions[vertex_index * 3 + 0],
-        positions[vertex_index * 3 + 1],
-        positions[vertex_index * 3 + 2],
-        1.0F,
-    };
-    const glm::vec3 world_position = glm::vec3(node_transform * local_position);
-
     MeshVertex vertex{};
-    vertex.pos[0] = world_position.x;
-    vertex.pos[1] = world_position.y;
-    vertex.pos[2] = world_position.z;
+    vertex.pos[0] = positions[vertex_index * 3 + 0];
+    vertex.pos[1] = positions[vertex_index * 3 + 1];
+    vertex.pos[2] = positions[vertex_index * 3 + 2];
+
+    if (!normals.empty()) {
+      vertex.normal[0] = normals[vertex_index * 3 + 0];
+      vertex.normal[1] = normals[vertex_index * 3 + 1];
+      vertex.normal[2] = normals[vertex_index * 3 + 2];
+    } else {
+      vertex.normal[0] = 0.0F;
+      vertex.normal[1] = 1.0F;
+      vertex.normal[2] = 0.0F;
+    }
 
     if (!texcoords.empty()) {
       vertex.tex_coord[0] = texcoords[vertex_index * 2 + 0];
@@ -290,6 +361,7 @@ inline void load_node(
 
 [[nodiscard]] inline auto load_gltf_model(std::string_view path) -> LoadedGltfModel {
   tinygltf::TinyGLTF loader;
+  loader.SetImageLoader(detail::decode_gltf_image_data, nullptr);
   tinygltf::Model model;
   std::string error;
   std::string warning;
@@ -303,6 +375,8 @@ inline void load_node(
     (void)warning;
   if (!loaded)
     throw std::runtime_error("Failed to load glTF: " + error);
+
+  detail::materialize_embedded_images(model, path);
 
   LoadedGltfModel result{
       .base_directory = detail::parent_directory(path),

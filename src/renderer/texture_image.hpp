@@ -5,6 +5,8 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb/stb_image_write.h>
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -84,6 +86,20 @@ struct RgbaImageData {
   };
   stbi_image_free(pixels);
   return data;
+}
+
+inline void write_rgba_png(std::string_view path, const stbi_uc *pixels, std::int32_t width, std::int32_t height) {
+  if (pixels == nullptr || width <= 0 || height <= 0)
+    throw std::runtime_error("Cannot write empty image to PNG");
+
+  if (stbi_write_png(
+          std::string(path).c_str(),
+          width,
+          height,
+          4,
+          pixels,
+          width * 4) == 0)
+    throw std::runtime_error(std::string("Failed to write PNG: ") + std::string(path));
 }
 
 } // namespace detail

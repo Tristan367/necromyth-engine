@@ -18,6 +18,8 @@ struct FrameUniformBufferObject {
   alignas(16) glm::mat4 proj{};
   alignas(16) glm::vec4 camera_position{};
   alignas(16) glm::mat4 view_sky{};
+  alignas(16) glm::vec4 light_direction{};
+  alignas(16) glm::vec4 light_color{};
 };
 
 [[nodiscard]] inline auto view_without_translation(const glm::mat4 &view) -> glm::mat4 {
