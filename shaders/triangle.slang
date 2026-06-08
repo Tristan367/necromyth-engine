@@ -14,6 +14,8 @@ ConstantBuffer<FrameUniforms> ubo;
 
 struct PushConstants {
     float4x4 model;
+    uint textureArrayLayer;
+    uint sampleTextureArray;
 };
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> pushConstants;
@@ -34,8 +36,11 @@ VSOutput vertMain(VSInput input) {
 }
 
 Sampler2D texture;
+Sampler2DArray textureArray;
 
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_Target {
+    if (pushConstants.sampleTextureArray != 0)
+        return textureArray.Sample(float3(vertIn.fragTexCoord, pushConstants.textureArrayLayer));
     return texture.Sample(vertIn.fragTexCoord);
 }

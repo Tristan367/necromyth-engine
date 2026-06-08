@@ -35,6 +35,10 @@ public:
     return position_;
   }
 
+  [[nodiscard]] auto look_direction() const -> glm::vec3 {
+    return glm::normalize(target_ - position_);
+  }
+
   [[nodiscard]] auto view_matrix() -> const glm::mat4 & {
     if (view_dirty_)
       rebuild_view();

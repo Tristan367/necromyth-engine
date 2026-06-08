@@ -10,8 +10,7 @@
 #include <string_view>
 #include <vector>
 
-#define GLM_FORCE_RADIANS
-#include <glm/mat4x4.hpp>
+#include "renderer/textured_push_constants.hpp"
 
 namespace engine {
 
@@ -47,9 +46,9 @@ struct GraphicsPipelineRasterState {
     vk::raii::Device &device,
     vk::DescriptorSetLayout descriptor_set_layout) -> vk::raii::PipelineLayout {
   const vk::PushConstantRange push_constant_range{
-      .stageFlags = vk::ShaderStageFlagBits::eVertex,
+      .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
       .offset = 0,
-      .size = sizeof(glm::mat4),
+      .size = sizeof(TexturedPushConstants),
   };
 
   return vk::raii::PipelineLayout(

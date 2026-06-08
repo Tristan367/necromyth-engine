@@ -247,6 +247,7 @@ private:
     }
 
     vk::InstanceCreateFlags instance_flags{};
+#if defined(__APPLE__)
     if (detail::has_name(vk::KHRPortabilityEnumerationExtensionName, available_instance_extensions)) {
       extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
       instance_flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
@@ -254,6 +255,9 @@ private:
     } else {
       detail::warn_if_extension_missing(vk::KHRPortabilityEnumerationExtensionName, available_instance_extensions);
     }
+#else
+    (void)available_instance_extensions;
+#endif
 
     const vk::ApplicationInfo application_info{
         .pApplicationName = "Vulkan C++ Engine",

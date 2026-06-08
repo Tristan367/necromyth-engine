@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/texture_image.hpp"
+#include "renderer/texture_array.hpp"
 #include "renderer/uniform_buffer.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -25,6 +26,12 @@ public:
         },
         vk::DescriptorSetLayoutBinding{
             .binding = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 2,
             .descriptorType = vk::DescriptorType::eCombinedImageSampler,
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
@@ -54,7 +61,7 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = set_count,
+            .descriptorCount = set_count * 2,
         },
     };
 
@@ -71,7 +78,9 @@ public:
   void allocate_sets(
       vk::raii::Device &device,
       std::span<const vk::Buffer> uniform_buffers,
-      std::span<const TextureImage *const> textures) {
+      std::span<const TextureImage *const> textures,
+      vk::Sampler texture_array_sampler,
+      vk::ImageView texture_array_view) {
     if (uniform_buffers.size() != frame_count_)
       throw std::runtime_error("Uniform buffer count does not match frame count");
     if (textures.size() != texture_count_)
@@ -89,6 +98,12 @@ public:
     auto allocated = device.allocateDescriptorSets(allocate_info);
     descriptor_sets_ = std::move(allocated);
 
+    const vk::DescriptorImageInfo array_image_info{
+        .sampler = texture_array_sampler,
+        .imageView = texture_array_view,
+        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+
     for (std::uint32_t texture_index = 0; texture_index < texture_count_; ++texture_index) {
       for (std::uint32_t frame_index = 0; frame_index < frame_count_; ++frame_index) {
         const vk::DescriptorBufferInfo buffer_info{
@@ -96,7 +111,7 @@ public:
             .offset = 0,
             .range = sizeof(FrameUniformBufferObject),
         };
-        const vk::DescriptorImageInfo image_info{
+        const vk::DescriptorImageInfo table_image_info{
             .sampler = textures[texture_index]->sampler(),
             .imageView = textures[texture_index]->view(),
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -118,7 +133,15 @@ public:
                 .dstArrayElement = 0,
                 .descriptorCount = 1,
                 .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                .pImageInfo = &image_info,
+                .pImageInfo = &table_image_info,
+            },
+            vk::WriteDescriptorSet{
+                .dstSet = descriptor_set,
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .pImageInfo = &array_image_info,
             },
         };
 

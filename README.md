@@ -90,7 +90,9 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 
 **Repo split (current):** Renderer + scene/core live here as one library. A separate *renderer-only* repo makes sense when you add a second backend (e.g. Metal). Until then, keep renderer and engine unified to avoid submodule friction.
 
-**Textures:** Each `MeshInstance` keeps a `texture_index` pointing at one slot in the scene texture table (array of textures, Sascha `descriptorsets/` style). One texture per draw is the normal path; voxel atlases will add a `texture2DArray` path later without removing this.
+**Textures:** Each `MeshInstance` uses `texture_source` + `texture_index`:
+- `TextureSource::Table` — array of textures (separate images, Sascha `descriptorsets/`)
+- `TextureSource::ArrayLayer` — layer index into `Scene::texture_array_layer_paths()` (same-size `texture2DArray`, voxel-atlas path)
 
 **Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `Transparent`, `Overlay`). The renderer sorts by layer, then pipeline, then mesh. Draw `Background` first for skyboxes; a dedicated no-depth pipeline comes later for true “always behind” geometry (Godot-style depth-off backgrounds).
 

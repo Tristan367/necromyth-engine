@@ -12,7 +12,9 @@
 #include "renderer/pipeline_registry.hpp"
 #include "renderer/render_settings.hpp"
 #include "renderer/swapchain.hpp"
+#include "renderer/texture_array.hpp"
 #include "renderer/texture_table.hpp"
+#include "renderer/textured_push_constants.hpp"
 #include "renderer/uniform_buffer.hpp"
 #include "renderer/vertex.hpp"
 #include "renderer/vulkan_device.hpp"
@@ -51,6 +53,7 @@ public:
     create_command_pool();
     upload_scene_meshes(scene);
     load_scene_textures(scene);
+    load_texture_array(scene);
     create_descriptor_set_layout();
     create_uniform_buffers();
     create_descriptor_pool_and_sets();
@@ -239,6 +242,18 @@ private:
         scene.texture_paths());
   }
 
+  void load_texture_array(const Scene &scene) {
+    if (scene.texture_array_layer_paths().empty())
+      throw std::runtime_error("Scene must provide at least one texture array layer path");
+
+    texture_array_.load_from_files(
+        device_.physical_device(),
+        device_.device(),
+        command_pool_,
+        device_.graphics_queue(),
+        scene.texture_array_layer_paths());
+  }
+
   void create_descriptor_set_layout() {
     descriptor_resources_.create_layout(device_.device());
   }
@@ -261,7 +276,9 @@ private:
     descriptor_resources_.allocate_sets(
         device_.device(),
         buffers,
-        texture_pointers);
+        texture_pointers,
+        texture_array_.sampler(),
+        texture_array_.view());
   }
 
   void create_pipelines() {
@@ -404,6 +421,7 @@ private:
     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain_.extent()});
 
     std::optional<PipelineId> bound_pipeline;
+    std::optional<TextureSource> bound_texture_source;
     std::optional<std::uint32_t> bound_texture_index;
 
     for (const DrawCommand &draw : draw_list) {
@@ -413,40 +431,63 @@ private:
       if (!bound_pipeline || *bound_pipeline != draw.pipeline) {
         command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines_.pipeline(draw.pipeline));
         bound_pipeline = draw.pipeline;
+        bound_texture_source.reset();
         bound_texture_index.reset();
       }
 
       if (draw.pipeline == PipelineId::TexturedMesh) {
-        if (!bound_texture_index || *bound_texture_index != draw.texture_index) {
-          if (draw.texture_index >= texture_table_.count())
-            continue;
+        const std::uint32_t descriptor_texture_index =
+            draw.texture_source == TextureSource::Table ? draw.texture_index : 0;
 
+        if (draw.texture_source == TextureSource::Table && draw.texture_index >= texture_table_.count())
+          continue;
+        if (draw.texture_source == TextureSource::ArrayLayer && draw.texture_index >= texture_array_.layer_count())
+          continue;
+
+        if (!bound_texture_source || *bound_texture_source != draw.texture_source ||
+            !bound_texture_index || *bound_texture_index != descriptor_texture_index) {
           command_buffer.bindDescriptorSets(
               vk::PipelineBindPoint::eGraphics,
               pipelines_.layout(),
               0,
-              descriptor_resources_.set(frame_index_, draw.texture_index),
+              descriptor_resources_.set(frame_index_, descriptor_texture_index),
               nullptr);
-          bound_texture_index = draw.texture_index;
+          bound_texture_source = draw.texture_source;
+          bound_texture_index = descriptor_texture_index;
         }
-      } else if (!bound_texture_index) {
-        command_buffer.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
+
+        const TexturedPushConstants push_constants{
+            .model = draw.model,
+            .texture_array_layer = draw.texture_index,
+            .sample_texture_array = draw.texture_source == TextureSource::ArrayLayer ? 1U : 0U,
+        };
+        command_buffer.pushConstants(
             pipelines_.layout(),
+            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
             0,
-            descriptor_resources_.set(frame_index_, 0),
-            nullptr);
-        bound_texture_index = 0;
+            sizeof(TexturedPushConstants),
+            &push_constants);
+      } else {
+        if (!bound_texture_index) {
+          command_buffer.bindDescriptorSets(
+              vk::PipelineBindPoint::eGraphics,
+              pipelines_.layout(),
+              0,
+              descriptor_resources_.set(frame_index_, 0),
+              nullptr);
+          bound_texture_index = 0;
+        }
+
+        const TexturedPushConstants sky_push_constants{.model = draw.model};
+        command_buffer.pushConstants(
+            pipelines_.layout(),
+            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+            0,
+            sizeof(TexturedPushConstants),
+            &sky_push_constants);
       }
 
       const MeshGpu &mesh = mesh_gpus_[draw.mesh_index];
-      command_buffer.pushConstants(
-          pipelines_.layout(),
-          vk::ShaderStageFlagBits::eVertex,
-          0,
-          sizeof(glm::mat4),
-          &draw.model);
-
       const vk::Buffer vertex_buffers[] = {mesh.vertex_buffer()};
       const vk::DeviceSize offsets[] = {0};
       command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
@@ -505,6 +546,7 @@ private:
   MsaaColorImage msaa_color_image_;
   DepthImage depth_image_;
   TextureTable texture_table_;
+  TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;
   UniformBufferSet uniform_buffers_;
   DescriptorResources descriptor_resources_;

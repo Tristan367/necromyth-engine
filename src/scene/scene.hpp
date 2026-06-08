@@ -32,6 +32,10 @@ public:
     return texture_paths_;
   }
 
+  [[nodiscard]] auto texture_array_layer_paths() const -> const std::vector<std::string> & {
+    return texture_array_layer_paths_;
+  }
+
   [[nodiscard]] auto instance(std::uint32_t index) -> MeshInstance & {
     return instances_.at(index);
   }
@@ -48,6 +52,12 @@ public:
     return index;
   }
 
+  [[nodiscard]] auto add_texture_array_layer(std::string path) -> std::uint32_t {
+    const std::uint32_t index = static_cast<std::uint32_t>(texture_array_layer_paths_.size());
+    texture_array_layer_paths_.push_back(std::move(path));
+    return index;
+  }
+
   [[nodiscard]] auto add_instance(MeshInstance instance) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(instances_.size());
     instances_.push_back(instance);
@@ -58,6 +68,7 @@ private:
   Camera camera_;
   std::vector<MeshSource> meshes_;
   std::vector<std::string> texture_paths_;
+  std::vector<std::string> texture_array_layer_paths_;
   std::vector<MeshInstance> instances_;
 };
 
