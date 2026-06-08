@@ -82,13 +82,15 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `depth_image`, `msaa_color_image`, `buffer`, `vertex`, `model_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`.
+Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `depth_image`, `msaa_color_image`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`.
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
 **Engine vs game:** This repo is the **engine library** (`VCE::Engine` CMake target). The [Vulkan-C-App](../Vulkan-C-App) repo is the demo/game client — fly camera, scene setup, and game logic live there. Link with `add_subdirectory(../Vulkan-C-Engine)` and `target_link_libraries(... VCE::Engine)`.
 
 **Repo split (current):** Renderer + scene/core live here as one library. A separate *renderer-only* repo makes sense when you add a second backend (e.g. Metal). Until then, keep renderer and engine unified to avoid submodule friction.
+
+**Models:** `load_gltf_model()` loads glTF 2.0 static meshes (tinygltf, Sascha-style CPU path). `load_obj_model()` remains for simple `.obj` assets. glTF node transforms are baked into vertex positions; materials expose an optional base-color texture path for scene registration.
 
 **Textures:** Each `MeshInstance` uses `texture_source` + `texture_index`:
 - `TextureSource::Table` — array of textures (separate images, Sascha `descriptorsets/`)

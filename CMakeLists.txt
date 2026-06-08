@@ -95,7 +95,7 @@ target_compile_definitions(vce_engine INTERFACE
     ENGINE_SKY_SHADER_SPIRV="${VCE_SKY_SHADER_SPIRV}"
 )
 
-target_include_directories(vce_engine INTERFACE
+target_include_directories(vce_engine SYSTEM INTERFACE
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>"
     "$<BUILD_INTERFACE:${STB_INCLUDE_DIR}>"
