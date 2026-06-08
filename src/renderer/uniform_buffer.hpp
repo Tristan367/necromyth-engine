@@ -7,17 +7,15 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/mat4x4.hpp>
 
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
 namespace engine {
 
-struct UniformBufferObject {
-  glm::mat4 model{};
-  glm::mat4 view{};
-  glm::mat4 proj{};
+struct FrameUniformBufferObject {
+  alignas(16) glm::mat4 view{};
+  alignas(16) glm::mat4 proj{};
 };
 
 class UniformBufferSet {
@@ -27,7 +25,7 @@ public:
       vk::raii::Device &device,
       std::uint32_t frame_count) {
     const auto memory_properties = physical_device.getMemoryProperties();
-    const vk::DeviceSize buffer_size = sizeof(UniformBufferObject);
+    const vk::DeviceSize buffer_size = sizeof(FrameUniformBufferObject);
 
     buffers_.clear();
     memory_.clear();
@@ -61,30 +59,12 @@ public:
     }
   }
 
-  void write(std::uint32_t frame_index, const UniformBufferObject &ubo) const {
-    std::memcpy(mapped_[frame_index], &ubo, sizeof(UniformBufferObject));
+  void write(std::uint32_t frame_index, const FrameUniformBufferObject &ubo) const {
+    std::memcpy(mapped_[frame_index], &ubo, sizeof(FrameUniformBufferObject));
   }
 
   [[nodiscard]] auto buffer(std::uint32_t frame_index) const -> vk::Buffer {
     return *buffers_[frame_index];
-  }
-
-  [[nodiscard]] static auto make_rotating_ubo(vk::Extent2D extent) -> UniformBufferObject {
-    static const auto start_time = std::chrono::high_resolution_clock::now();
-
-    const auto current_time = std::chrono::high_resolution_clock::now();
-    const float time = std::chrono::duration<float>(current_time - start_time).count();
-
-    UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0F), time * glm::radians(90.0F), glm::vec3(0.0F, 0.0F, 1.0F));
-    ubo.view = glm::lookAt(glm::vec3(2.0F, 2.0F, 2.0F), glm::vec3(0.0F), glm::vec3(0.0F, 0.0F, 1.0F));
-    ubo.proj = glm::perspective(
-        glm::radians(45.0F),
-        static_cast<float>(extent.width) / static_cast<float>(extent.height),
-        0.1F,
-        10.0F);
-    ubo.proj[1][1] *= -1.0F;
-    return ubo;
   }
 
 private:

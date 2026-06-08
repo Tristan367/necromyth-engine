@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/render_settings.hpp"
+
 #include <vulkan/vulkan_raii.hpp>
 
 #include <stdexcept>
@@ -19,14 +21,25 @@ public:
     device_ = &device;
     format_ = format;
     samples_ = samples;
+    if (!msaa_is_active(samples_)) {
+      clear_resources();
+      return;
+    }
     create_resources(extent);
   }
 
-  void recreate(vk::Extent2D extent) {
-    image_ = nullptr;
-    memory_ = nullptr;
-    view_ = nullptr;
+  void recreate(vk::Extent2D extent, vk::SampleCountFlagBits samples) {
+    samples_ = samples;
+    if (!msaa_is_active(samples_)) {
+      clear_resources();
+      return;
+    }
+    clear_resources();
     create_resources(extent);
+  }
+
+  [[nodiscard]] auto active() const -> bool {
+    return msaa_is_active(samples_) && static_cast<bool>(*image_);
   }
 
   [[nodiscard]] auto image() const -> vk::Image {
@@ -38,6 +51,12 @@ public:
   }
 
 private:
+  void clear_resources() {
+    image_ = nullptr;
+    memory_ = nullptr;
+    view_ = nullptr;
+  }
+
   void create_resources(vk::Extent2D extent) {
     const vk::ImageCreateInfo image_info{
         .imageType = vk::ImageType::e2D,

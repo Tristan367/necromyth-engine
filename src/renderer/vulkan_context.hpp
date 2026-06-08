@@ -1,25 +1,27 @@
 #pragma once
 
-#include "renderer/buffer.hpp"
+#include "engine_config.hpp"
 #include "renderer/depth_image.hpp"
 #include "renderer/descriptors.hpp"
+#include "renderer/draw_list.hpp"
 #include "renderer/graphics_pipeline.hpp"
 #include "renderer/image_barrier.hpp"
-#include "renderer/model_loader.hpp"
+#include "renderer/mesh_gpu.hpp"
 #include "renderer/msaa_color_image.hpp"
+#include "renderer/render_settings.hpp"
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_image.hpp"
 #include "renderer/uniform_buffer.hpp"
 #include "renderer/vertex.hpp"
 #include "renderer/vulkan_device.hpp"
+#include "scene/mesh_source.hpp"
+#include "scene/scene.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
 
-#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 
-#include <array>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -36,16 +38,17 @@ constexpr auto resize_debounce_ms = 100U;
 
 class VulkanContext {
 public:
-  explicit VulkanContext(SDL_Window *window) : window_(window), device_(window) {
+  VulkanContext(SDL_Window *window, const EngineConfig &config, const Scene &scene)
+      : window_(window),
+        device_(window, config.msaa) {
     swapchain_.create(device_, window);
+    create_pipeline_cache();
     create_msaa_color_image();
     create_depth_image();
     create_command_pool();
-    create_descriptor_set_layout();
-    load_model();
+    upload_scene_meshes(scene);
     create_texture_image();
-    create_vertex_buffer();
-    create_index_buffer();
+    create_descriptor_set_layout();
     create_uniform_buffers();
     create_descriptor_pool_and_sets();
     create_graphics_pipeline();
@@ -56,7 +59,10 @@ public:
     if (device_.validation_enabled())
       std::cout << "Vulkan validation: enabled\n";
 #endif
-    std::cout << "MSAA samples: " << vk::to_string(device_.msaa_samples()) << '\n';
+    if (device_.msaa_enabled())
+      std::cout << "MSAA samples: " << vk::to_string(device_.msaa_samples()) << '\n';
+    else
+      std::cout << "MSAA: off\n";
   }
 
   VulkanContext(const VulkanContext &) = delete;
@@ -78,7 +84,7 @@ public:
     last_resize_ticks_ = SDL_GetTicks();
   }
 
-  void draw_frame() {
+  void draw_frame(Scene &scene) {
     if (framebuffer_resized_) {
       if (SDL_GetTicks() - last_resize_ticks_ < detail::resize_debounce_ms)
         return;
@@ -105,13 +111,22 @@ public:
 
     device_.device().resetFences(*in_flight_fences_[frame_index_]);
 
+    const float aspect = static_cast<float>(swapchain_.extent().width) /
+                         static_cast<float>(swapchain_.extent().height);
+    scene.camera().set_aspect(aspect);
+
     uniform_buffers_.write(
         frame_index_,
-        UniformBufferSet::make_rotating_ubo(swapchain_.extent()));
+        FrameUniformBufferObject{
+            .view = scene.camera().view_matrix(),
+            .proj = scene.camera().projection_matrix(),
+        });
+
+    build_draw_list(scene, draw_list_);
 
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
-    record_draw_commands(command_buffer, image_index);
+    record_draw_commands(command_buffer, image_index, draw_list_);
 
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
@@ -144,7 +159,9 @@ public:
     };
 
     const vk::Result present_result = device_.present_queue().presentKHR(present_info);
-    if (present_result == vk::Result::eErrorOutOfDateKHR || present_result == vk::Result::eSuboptimalKHR)
+    if (present_result == vk::Result::eErrorOutOfDateKHR)
+      recreate_swapchain();
+    else if (present_result == vk::Result::eSuboptimalKHR)
       recreate_swapchain();
     else if (present_result != vk::Result::eSuccess)
       throw std::runtime_error("Failed to present swapchain image");
@@ -153,6 +170,10 @@ public:
   }
 
 private:
+  void create_pipeline_cache() {
+    pipeline_cache_ = vk::raii::PipelineCache(device_.device(), vk::PipelineCacheCreateInfo{});
+  }
+
   void create_msaa_color_image() {
     msaa_color_image_.create(
         device_.physical_device(),
@@ -170,8 +191,19 @@ private:
         device_.msaa_samples());
   }
 
-  void load_model() {
-    mesh_ = load_obj_model(ENGINE_MODEL_PATH);
+  void upload_scene_meshes(const Scene &scene) {
+    mesh_gpus_.clear();
+    mesh_gpus_.reserve(scene.meshes().size());
+    for (const MeshSource &mesh : scene.meshes()) {
+      MeshGpu gpu{};
+      gpu.upload(
+          device_.physical_device(),
+          device_.device(),
+          command_pool_,
+          device_.graphics_queue(),
+          mesh);
+      mesh_gpus_.push_back(std::move(gpu));
+    }
   }
 
   void create_texture_image() {
@@ -205,29 +237,6 @@ private:
         texture_image_.view());
   }
 
-  void create_vertex_buffer() {
-    vertex_buffer_.upload(
-        device_.physical_device(),
-        device_.device(),
-        command_pool_,
-        device_.graphics_queue(),
-        static_cast<vk::DeviceSize>(sizeof(MeshVertex) * mesh_.vertices.size()),
-        vk::BufferUsageFlagBits::eVertexBuffer,
-        mesh_.vertices.data());
-  }
-
-  void create_index_buffer() {
-    index_count_ = static_cast<std::uint32_t>(mesh_.indices.size());
-    index_buffer_.upload(
-        device_.physical_device(),
-        device_.device(),
-        command_pool_,
-        device_.graphics_queue(),
-        static_cast<vk::DeviceSize>(sizeof(std::uint32_t) * mesh_.indices.size()),
-        vk::BufferUsageFlagBits::eIndexBuffer,
-        mesh_.indices.data());
-  }
-
   void create_graphics_pipeline() {
     const auto attributes = MeshVertex::attribute_descriptions();
     graphics_pipeline_.create(
@@ -238,7 +247,8 @@ private:
         descriptor_resources_.layout(),
         device_.msaa_samples(),
         MeshVertex::binding_description(),
-        attributes);
+        attributes,
+        pipeline_cache_);
   }
 
   void create_command_pool() {
@@ -281,7 +291,10 @@ private:
     }
   }
 
-  void record_draw_commands(vk::raii::CommandBuffer &command_buffer, std::uint32_t image_index) const {
+  void record_draw_commands(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t image_index,
+      const std::vector<DrawCommand> &draw_list) const {
     command_buffer.begin({});
 
     transition_image_layout(
@@ -294,15 +307,17 @@ private:
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::PipelineStageFlagBits2::eColorAttachmentOutput);
 
-    transition_image_layout(
-        command_buffer,
-        msaa_color_image_.image(),
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        {},
-        vk::AccessFlagBits2::eColorAttachmentWrite,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    if (device_.msaa_enabled()) {
+      transition_image_layout(
+          command_buffer,
+          msaa_color_image_.image(),
+          vk::ImageLayout::eUndefined,
+          vk::ImageLayout::eColorAttachmentOptimal,
+          {},
+          vk::AccessFlagBits2::eColorAttachmentWrite,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    }
 
     transition_image_layout(
         command_buffer,
@@ -317,16 +332,25 @@ private:
 
     const vk::ClearValue clear_value{vk::ClearColorValue{std::array{0.02F, 0.03F, 0.05F, 1.0F}}};
     const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
-    const vk::RenderingAttachmentInfo color_attachment{
-        .imageView = *msaa_color_image_.view(),
-        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .resolveMode = vk::ResolveModeFlagBits::eAverage,
-        .resolveImageView = *swapchain_.image_views()[image_index],
-        .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = clear_value,
-    };
+
+    const vk::RenderingAttachmentInfo color_attachment = device_.msaa_enabled()
+        ? vk::RenderingAttachmentInfo{
+              .imageView = *msaa_color_image_.view(),
+              .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+              .resolveMode = vk::ResolveModeFlagBits::eAverage,
+              .resolveImageView = *swapchain_.image_views()[image_index],
+              .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+              .loadOp = vk::AttachmentLoadOp::eClear,
+              .storeOp = vk::AttachmentStoreOp::eStore,
+              .clearValue = clear_value,
+          }
+        : vk::RenderingAttachmentInfo{
+              .imageView = *swapchain_.image_views()[image_index],
+              .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+              .loadOp = vk::AttachmentLoadOp::eClear,
+              .storeOp = vk::AttachmentStoreOp::eStore,
+              .clearValue = clear_value,
+          };
     const vk::RenderingAttachmentInfo depth_attachment{
         .imageView = *depth_image_.view(),
         .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
@@ -349,10 +373,6 @@ private:
         0,
         descriptor_resources_.set(frame_index_),
         nullptr);
-    const vk::Buffer vertex_buffers[] = {vertex_buffer_.handle()};
-    const vk::DeviceSize offsets[] = {0};
-    command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
-    command_buffer.bindIndexBuffer(index_buffer_.handle(), 0, vk::IndexType::eUint32);
     command_buffer.setViewport(
         0,
         vk::Viewport{
@@ -364,7 +384,26 @@ private:
             1.0F,
         });
     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain_.extent()});
-    command_buffer.drawIndexed(index_count_, 1, 0, 0, 0);
+
+    for (const DrawCommand &draw : draw_list) {
+      if (draw.mesh_index >= mesh_gpus_.size())
+        continue;
+
+      const MeshGpu &mesh = mesh_gpus_[draw.mesh_index];
+      command_buffer.pushConstants(
+          *graphics_pipeline_.layout(),
+          vk::ShaderStageFlagBits::eVertex,
+          0,
+          sizeof(glm::mat4),
+          &draw.model);
+
+      const vk::Buffer vertex_buffers[] = {mesh.vertex_buffer()};
+      const vk::DeviceSize offsets[] = {0};
+      command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
+      command_buffer.bindIndexBuffer(mesh.index_buffer(), 0, vk::IndexType::eUint32);
+      command_buffer.drawIndexed(mesh.index_count(), 1, 0, 0, 0);
+    }
+
     command_buffer.endRendering();
 
     transition_image_layout(
@@ -397,16 +436,16 @@ private:
   void recreate_swapchain() {
     wait_for_nonzero_extent();
     device_.wait_idle();
-    render_finished_semaphores_.clear();
     swapchain_.recreate();
-    msaa_color_image_.recreate(swapchain_.extent());
+    create_msaa_color_image();
     depth_image_.recreate(swapchain_.extent());
-    create_render_finished_semaphores();
+    create_sync_objects();
   }
 
   SDL_Window *window_{};
   VulkanDevice device_;
   Swapchain swapchain_;
+  vk::raii::PipelineCache pipeline_cache_{nullptr};
   vk::raii::CommandPool command_pool_{nullptr};
   vk::raii::CommandBuffers command_buffers_{nullptr};
   std::vector<vk::raii::Semaphore> image_available_semaphores_;
@@ -415,13 +454,11 @@ private:
   MsaaColorImage msaa_color_image_;
   DepthImage depth_image_;
   TextureImage texture_image_;
-  LoadedMesh mesh_;
-  DeviceLocalBuffer vertex_buffer_;
-  DeviceLocalBuffer index_buffer_;
+  std::vector<MeshGpu> mesh_gpus_;
   UniformBufferSet uniform_buffers_;
   DescriptorResources descriptor_resources_;
-  std::uint32_t index_count_{};
   GraphicsPipeline graphics_pipeline_;
+  std::vector<DrawCommand> draw_list_;
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};
   std::uint64_t last_resize_ticks_{};

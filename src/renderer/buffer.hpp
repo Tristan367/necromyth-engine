@@ -50,8 +50,10 @@ inline void copy_buffer(
       .pCommandBufferInfos = &command_buffer_info,
   };
 
-  queue.submit2(submit_info);
-  queue.waitIdle();
+  vk::raii::Fence fence(device, vk::FenceCreateInfo{});
+  queue.submit2(submit_info, *fence);
+  if (device.waitForFences(*fence, vk::True, UINT64_MAX) != vk::Result::eSuccess)
+    throw std::runtime_error("Failed to wait for buffer upload fence");
 }
 
 } // namespace detail

@@ -1,0 +1,52 @@
+#pragma once
+
+#include "scene/camera.hpp"
+#include "scene/mesh_instance.hpp"
+#include "scene/mesh_source.hpp"
+
+#include <cstdint>
+#include <vector>
+
+namespace engine {
+
+class Scene {
+public:
+  [[nodiscard]] auto camera() -> Camera & {
+    return camera_;
+  }
+
+  [[nodiscard]] auto camera() const -> const Camera & {
+    return camera_;
+  }
+
+  [[nodiscard]] auto meshes() const -> const std::vector<MeshSource> & {
+    return meshes_;
+  }
+
+  [[nodiscard]] auto instances() const -> const std::vector<MeshInstance> & {
+    return instances_;
+  }
+
+  [[nodiscard]] auto instance(std::uint32_t index) -> MeshInstance & {
+    return instances_.at(index);
+  }
+
+  [[nodiscard]] auto add_mesh(MeshSource mesh) -> std::uint32_t {
+    const std::uint32_t index = static_cast<std::uint32_t>(meshes_.size());
+    meshes_.push_back(std::move(mesh));
+    return index;
+  }
+
+  [[nodiscard]] auto add_instance(MeshInstance instance) -> std::uint32_t {
+    const std::uint32_t index = static_cast<std::uint32_t>(instances_.size());
+    instances_.push_back(instance);
+    return index;
+  }
+
+private:
+  Camera camera_;
+  std::vector<MeshSource> meshes_;
+  std::vector<MeshInstance> instances_;
+};
+
+} // namespace engine

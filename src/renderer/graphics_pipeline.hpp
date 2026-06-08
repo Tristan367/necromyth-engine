@@ -4,11 +4,14 @@
 
 #include <array>
 #include <fstream>
+#include <span>
 #include <stdexcept>
 #include <string>
-#include <span>
 #include <string_view>
 #include <vector>
+
+#define GLM_FORCE_RADIANS
+#include <glm/mat4x4.hpp>
 
 namespace engine {
 
@@ -22,7 +25,8 @@ public:
       vk::DescriptorSetLayout descriptor_set_layout,
       vk::SampleCountFlagBits sample_count,
       vk::VertexInputBindingDescription binding,
-      std::span<const vk::VertexInputAttributeDescription> attributes) {
+      std::span<const vk::VertexInputAttributeDescription> attributes,
+      const vk::raii::PipelineCache &pipeline_cache) {
     const auto spirv = read_spirv_file(spirv_path);
     const vk::raii::ShaderModule shader_module = create_shader_module(device, spirv);
 
@@ -84,11 +88,20 @@ public:
 
     vk::Format color_attachment_format = color_format;
     vk::Format depth_attachment_format = depth_format;
+
+    const vk::PushConstantRange push_constant_range{
+        .stageFlags = vk::ShaderStageFlagBits::eVertex,
+        .offset = 0,
+        .size = sizeof(glm::mat4),
+    };
+
     pipeline_layout_ = vk::raii::PipelineLayout(
         device,
         vk::PipelineLayoutCreateInfo{
             .setLayoutCount = 1,
             .pSetLayouts = &descriptor_set_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constant_range,
         });
 
     vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipeline_chain{
@@ -115,7 +128,7 @@ public:
 
     graphics_pipeline_ = vk::raii::Pipeline(
         device,
-        nullptr,
+        pipeline_cache,
         pipeline_chain.get<vk::GraphicsPipelineCreateInfo>());
   }
 

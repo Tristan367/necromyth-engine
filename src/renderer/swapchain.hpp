@@ -82,6 +82,38 @@ private:
     return vk::PresentModeKHR::eFifo;
   }
 
+  [[nodiscard]] static auto choose_composite_alpha(vk::CompositeAlphaFlagsKHR supported) -> vk::CompositeAlphaFlagBitsKHR {
+    constexpr std::array candidates{
+        vk::CompositeAlphaFlagBitsKHR::eOpaque,
+        vk::CompositeAlphaFlagBitsKHR::ePreMultiplied,
+        vk::CompositeAlphaFlagBitsKHR::ePostMultiplied,
+        vk::CompositeAlphaFlagBitsKHR::eInherit,
+    };
+
+    for (const auto candidate : candidates) {
+      if ((supported & candidate) != vk::CompositeAlphaFlagsKHR{})
+        return candidate;
+    }
+
+    throw std::runtime_error("No supported swapchain composite alpha mode");
+  }
+
+  [[nodiscard]] static auto choose_pre_transform(
+      vk::SurfaceTransformFlagsKHR supported,
+      vk::SurfaceTransformFlagBitsKHR current) -> vk::SurfaceTransformFlagBitsKHR {
+    if ((supported & vk::SurfaceTransformFlagBitsKHR::eIdentity) != vk::SurfaceTransformFlagsKHR{})
+      return vk::SurfaceTransformFlagBitsKHR::eIdentity;
+
+    return current;
+  }
+
+  [[nodiscard]] static auto choose_image_usage(vk::ImageUsageFlags supported) -> vk::ImageUsageFlags {
+    vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eColorAttachment;
+    if ((supported & vk::ImageUsageFlagBits::eTransferDst) != vk::ImageUsageFlags{})
+      usage |= vk::ImageUsageFlagBits::eTransferDst;
+    return usage;
+  }
+
   [[nodiscard]] auto choose_extent(const vk::SurfaceCapabilitiesKHR &capabilities) const -> vk::Extent2D {
     if (capabilities.currentExtent.width != std::numeric_limits<std::uint32_t>::max())
       return capabilities.currentExtent;
@@ -127,12 +159,12 @@ private:
         .imageColorSpace = surface_format.colorSpace,
         .imageExtent = swapchain_extent_,
         .imageArrayLayers = 1,
-        .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+        .imageUsage = choose_image_usage(capabilities.supportedUsageFlags),
         .imageSharingMode = separate_present_queue ? vk::SharingMode::eConcurrent : vk::SharingMode::eExclusive,
         .queueFamilyIndexCount = separate_present_queue ? static_cast<std::uint32_t>(queue_family_indices.size()) : 0,
         .pQueueFamilyIndices = separate_present_queue ? queue_family_indices.data() : nullptr,
-        .preTransform = capabilities.currentTransform,
-        .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+        .preTransform = choose_pre_transform(capabilities.supportedTransforms, capabilities.currentTransform),
+        .compositeAlpha = choose_composite_alpha(capabilities.supportedCompositeAlpha),
         .presentMode = choose_present_mode(present_modes),
         .clipped = vk::True,
         .oldSwapchain = old_swapchain,

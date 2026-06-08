@@ -66,7 +66,18 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_executable(${NAME}
     src/main.cpp
     src/app.hpp
+    src/demo_scene.hpp
+    src/engine_config.hpp
     src/platform/sdl_window.hpp
+    src/scene/camera.hpp
+    src/scene/mesh_instance.hpp
+    src/scene/mesh_source.hpp
+    src/scene/render_layer.hpp
+    src/scene/scene.hpp
+    src/renderer/render_settings.hpp
+    src/renderer/pipeline_id.hpp
+    src/renderer/draw_list.hpp
+    src/renderer/mesh_gpu.hpp
     src/renderer/vulkan_device.hpp
     src/renderer/swapchain.hpp
     src/renderer/vulkan_context.hpp

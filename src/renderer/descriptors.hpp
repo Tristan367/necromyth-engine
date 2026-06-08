@@ -78,7 +78,7 @@ public:
       const vk::DescriptorBufferInfo buffer_info{
           .buffer = uniform_buffers[i],
           .offset = 0,
-          .range = sizeof(UniformBufferObject),
+          .range = sizeof(FrameUniformBufferObject),
       };
       const vk::DescriptorImageInfo image_info{
           .sampler = texture_sampler,

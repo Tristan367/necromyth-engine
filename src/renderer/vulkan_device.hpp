@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/render_settings.hpp"
+
 #include <vulkan/vulkan_raii.hpp>
 
 #include <SDL3/SDL_vulkan.h>
@@ -23,6 +25,7 @@ constexpr auto validation_layer = "VK_LAYER_KHRONOS_validation";
 constexpr auto invalid_queue_family = std::numeric_limits<std::uint32_t>::max();
 constexpr auto discrete_gpu_score_bonus = 1000U;
 constexpr std::array required_device_extensions{vk::KHRSwapchainExtensionName};
+constexpr const char *portability_subset_extension = "VK_KHR_portability_subset";
 
 [[nodiscard]] inline auto has_name(const char *name, const std::vector<vk::LayerProperties> &properties) -> bool {
   return std::ranges::any_of(properties, [name](const vk::LayerProperties &property) {
@@ -112,13 +115,14 @@ struct QueueFamilyIndices {
 
 class VulkanDevice {
 public:
-  explicit VulkanDevice(SDL_Window *window) {
+  explicit VulkanDevice(SDL_Window *window, MsaaSettings msaa_settings = {}) {
     create_instance();
     create_debug_messenger();
     create_surface(window);
     pick_physical_device();
     create_logical_device();
-    msaa_samples_ = detail::max_usable_sample_count(physical_device_.getProperties());
+    max_msaa_samples_ = detail::max_usable_sample_count(physical_device_.getProperties());
+    msaa_samples_ = detail::resolve_msaa_samples(msaa_settings, max_msaa_samples_);
   }
 
   ~VulkanDevice() {
@@ -165,6 +169,14 @@ public:
 
   [[nodiscard]] auto msaa_samples() const -> vk::SampleCountFlagBits {
     return msaa_samples_;
+  }
+
+  [[nodiscard]] auto max_msaa_samples() const -> vk::SampleCountFlagBits {
+    return max_msaa_samples_;
+  }
+
+  [[nodiscard]] auto msaa_enabled() const -> bool {
+    return msaa_is_active(msaa_samples_);
   }
 
   [[nodiscard]] auto validation_enabled() const -> bool {
@@ -214,6 +226,12 @@ private:
         std::cerr << "VK_EXT_debug_utils not available; continuing without debug messenger.\n";
     }
 
+    vk::InstanceCreateFlags instance_flags{};
+    if (detail::has_name(vk::KHRPortabilityEnumerationExtensionName, available_instance_extensions)) {
+      extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
+      instance_flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
+    }
+
     const vk::ApplicationInfo application_info{
         .pApplicationName = "Vulkan C++ Engine",
         .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
@@ -227,6 +245,7 @@ private:
 
     const vk::InstanceCreateInfo create_info{
         .pNext = debug_utils_enabled_ ? &debug_info : nullptr,
+        .flags = instance_flags,
         .pApplicationInfo = &application_info,
         .enabledLayerCount = validation_enabled_ ? static_cast<std::uint32_t>(layers.size()) : 0,
         .ppEnabledLayerNames = validation_enabled_ ? layers.data() : nullptr,
@@ -312,7 +331,10 @@ private:
     if (available_features.samplerAnisotropy == vk::True)
       feature_chain.get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy = vk::True;
 
-    const std::array device_extensions{vk::KHRSwapchainExtensionName};
+    std::vector<const char *> device_extensions{vk::KHRSwapchainExtensionName};
+    const auto available_device_extensions = physical_device_.enumerateDeviceExtensionProperties();
+    if (detail::has_name(detail::portability_subset_extension, available_device_extensions))
+      device_extensions.push_back(detail::portability_subset_extension);
 
     const vk::DeviceCreateInfo create_info{
         .pNext = &feature_chain.get<vk::PhysicalDeviceFeatures2>(),
@@ -417,6 +439,7 @@ private:
   vk::raii::Queue present_queue_{nullptr};
   QueueFamilyIndices queue_families_{};
   vk::SampleCountFlagBits msaa_samples_{vk::SampleCountFlagBits::e1};
+  vk::SampleCountFlagBits max_msaa_samples_{vk::SampleCountFlagBits::e1};
   bool validation_enabled_{};
   bool debug_utils_enabled_{};
   std::string gpu_name_;

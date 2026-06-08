@@ -87,9 +87,15 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swapchain`, `graphics_pipeline`, `depth_image`, `msaa_color_image`, `buffer`, `vertex`, `model_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`.
+Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `depth_image`, `msaa_color_image`, `buffer`, `vertex`, `model_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`.
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
+
+**Engine vs game:** This repo is the lean renderer library. A separate game repo should depend on it (git submodule or installed target), own procedural logic, and build a `Scene` each frame — window title, MSAA, and meshes are configured via `EngineConfig` and `Scene`, not hardcoded in the renderer.
+
+**Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `Transparent`, `Overlay`). The renderer sorts by layer, then pipeline, then mesh. Draw `Background` first for skyboxes; a dedicated no-depth pipeline comes later for true “always behind” geometry (Godot-style depth-off backgrounds).
+
+**Platforms:** SDL3 + Vulkan targets Linux and Windows with the same code. macOS requires MoltenVK — the engine enables `VK_KHR_portability_enumeration` and `VK_KHR_portability_subset` when available. Android/iOS are possible via SDL mobile targets but not set up yet.
 
 ## Code Organization
 
@@ -135,6 +141,12 @@ Both score terms are required. Do not pick the first suitable device.
 **Synchronization:** signal semaphores at `eColorAttachmentOutput`, not `eAllGraphics`. Dynamic rendering color attachments use `eColorAttachmentOptimal`.
 
 **Validation:** Debug builds require `VK_LAYER_KHRONOS_validation` and fail fast if it is missing. Release builds run without validation. No validation output on startup usually means the layer is active and found nothing wrong — debug builds print `Vulkan validation: enabled` to confirm.
+
+**MSAA:** Configured at startup via `MsaaSettings` (`render_settings.hpp`). Default is enabled with device maximum samples. When disabled (`samples == 1`), the renderer draws directly to the swapchain with no multisampled color image or resolve pass. Quick override: `ENGINE_MSAA=0` (off), `ENGINE_MSAA=4`, or `ENGINE_MSAA=8` (clamped to GPU support). Runtime toggle can be added later; changing MSAA today requires restart.
+
+**Swapchain surface:** probe `compositeAlpha`, prefer identity `preTransform`, and add `TRANSFER_DST` usage when supported (Sascha, Vulkan-Samples).
+
+**Pipeline cache:** Created once per device; all graphics pipelines reuse it so later pipeline variants compile faster (Sascha pattern).
 
 **Extensions:** verify required instance and device extensions exist before create, not only at link time.
 
