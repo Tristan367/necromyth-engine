@@ -30,6 +30,19 @@ struct PassLayoutState {
   mutable vk::ImageLayout msaa_color_layout{vk::ImageLayout::eUndefined};
 };
 
+struct DrawBindState {
+  struct MaterialKey {
+    TextureSource texture_source{};
+    std::uint32_t descriptor_index{};
+
+    auto operator<=>(const MaterialKey &) const = default;
+  };
+
+  std::optional<PipelineId> pipeline;
+  std::optional<std::uint32_t> mesh_index;
+  std::optional<MaterialKey> material;
+};
+
 struct PassRecorder {
   const PipelineRegistry &pipelines;
   const DescriptorResources &descriptors;
@@ -41,6 +54,15 @@ struct PassRecorder {
   const TextureArray &texture_array;
   const std::vector<MeshGpu> &mesh_gpus;
   bool msaa_enabled{};
+
+  void bind_frame_descriptor_set(vk::raii::CommandBuffer &command_buffer, std::uint32_t frame_index) const {
+    command_buffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        pipelines.layout(),
+        0,
+        descriptors.frame_set(frame_index),
+        nullptr);
+  }
 
   void bind_pass_descriptor_sets(vk::raii::CommandBuffer &command_buffer, std::uint32_t frame_index) const {
     const vk::DescriptorSet descriptor_sets[] = {
@@ -55,42 +77,107 @@ struct PassRecorder {
         nullptr);
   }
 
-  void draw_mesh(
+  [[nodiscard]] auto material_descriptor_index(const DrawCommand &draw) const -> std::optional<std::uint32_t> {
+    if (draw.pipeline != PipelineId::TexturedMesh)
+      return std::nullopt;
+
+    if (draw.texture_source == TextureSource::Table) {
+      if (draw.texture_index >= texture_table.count())
+        return std::nullopt;
+      return draw.texture_index;
+    }
+
+    if (draw.texture_index >= texture_array.layer_count())
+      return std::nullopt;
+    return 0;
+  }
+
+  void bind_mesh_buffers(vk::raii::CommandBuffer &command_buffer, std::uint32_t mesh_index, DrawBindState &state) const {
+    if (state.mesh_index && *state.mesh_index == mesh_index)
+      return;
+
+    const MeshGpu &mesh = mesh_gpus[mesh_index];
+    const vk::Buffer vertex_buffers[] = {mesh.vertex_buffer()};
+    const vk::DeviceSize offsets[] = {0};
+    command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
+    command_buffer.bindIndexBuffer(mesh.index_buffer(), 0, vk::IndexType::eUint32);
+    state.mesh_index = mesh_index;
+  }
+
+  void bind_pipeline(
+      vk::raii::CommandBuffer &command_buffer,
+      PipelineId pipeline_id,
+      DrawBindState &state) const {
+    if (state.pipeline && *state.pipeline == pipeline_id)
+      return;
+
+    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines.pipeline(pipeline_id));
+    state.pipeline = pipeline_id;
+    state.material.reset();
+    state.mesh_index.reset();
+  }
+
+  void bind_material(
       vk::raii::CommandBuffer &command_buffer,
       const DrawCommand &draw,
-      std::optional<PipelineId> &bound_pipeline,
-      std::optional<TextureSource> &bound_texture_source,
-      std::optional<std::uint32_t> &bound_material_index) const {
+      DrawBindState &state) const {
+    const std::optional<std::uint32_t> descriptor_index = material_descriptor_index(draw);
+    if (!descriptor_index)
+      return;
+
+    const DrawBindState::MaterialKey material_key{
+        .texture_source = draw.texture_source,
+        .descriptor_index = *descriptor_index,
+    };
+
+    if (state.material && *state.material == material_key)
+      return;
+
+    command_buffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        pipelines.layout(),
+        1,
+        descriptors.material_set(*descriptor_index),
+        nullptr);
+    state.material = material_key;
+  }
+
+  void draw_shadow_mesh(
+      vk::raii::CommandBuffer &command_buffer,
+      const DrawCommand &draw,
+      DrawBindState &state) const {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
 
-    if (!bound_pipeline || *bound_pipeline != draw.pipeline) {
-      command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines.pipeline(draw.pipeline));
-      bound_pipeline = draw.pipeline;
-      bound_texture_source.reset();
-      bound_material_index.reset();
-    }
+    bind_pipeline(command_buffer, PipelineId::ShadowDepth, state);
+    bind_mesh_buffers(command_buffer, draw.mesh_index, state);
+
+    const TexturedPushConstants push_constants{.model = draw.model};
+    command_buffer.pushConstants(
+        pipelines.layout(),
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        0,
+        sizeof(TexturedPushConstants),
+        &push_constants);
+
+    const MeshGpu &mesh = mesh_gpus[draw.mesh_index];
+    command_buffer.drawIndexed(mesh.index_count(), 1, 0, 0, 0);
+  }
+
+  void draw_mesh(
+      vk::raii::CommandBuffer &command_buffer,
+      const DrawCommand &draw,
+      DrawBindState &state) const {
+    if (draw.mesh_index >= mesh_gpus.size())
+      return;
+
+    bind_pipeline(command_buffer, draw.pipeline, state);
 
     if (draw.pipeline == PipelineId::TexturedMesh) {
-      const std::uint32_t descriptor_texture_index =
-          draw.texture_source == TextureSource::Table ? draw.texture_index : 0;
-
-      if (draw.texture_source == TextureSource::Table && draw.texture_index >= texture_table.count())
-        return;
-      if (draw.texture_source == TextureSource::ArrayLayer && draw.texture_index >= texture_array.layer_count())
+      if (!material_descriptor_index(draw))
         return;
 
-      if (!bound_material_index || *bound_material_index != descriptor_texture_index) {
-        const vk::DescriptorSet material_set = descriptors.material_set(descriptor_texture_index);
-        command_buffer.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
-            pipelines.layout(),
-            1,
-            material_set,
-            nullptr);
-        bound_texture_source = draw.texture_source;
-        bound_material_index = descriptor_texture_index;
-      }
+      bind_material(command_buffer, draw, state);
 
       const TexturedPushConstants push_constants{
           .model = draw.model,
@@ -104,28 +191,18 @@ struct PassRecorder {
           sizeof(TexturedPushConstants),
           &push_constants);
     } else if (draw.pipeline == PipelineId::Background) {
-      const TexturedPushConstants sky_push_constants{.model = draw.model};
+      const TexturedPushConstants push_constants{.model = draw.model};
       command_buffer.pushConstants(
           pipelines.layout(),
           vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
           0,
           sizeof(TexturedPushConstants),
-          &sky_push_constants);
-    } else if (draw.pipeline == PipelineId::ShadowDepth) {
-      const TexturedPushConstants shadow_push_constants{.model = draw.model};
-      command_buffer.pushConstants(
-          pipelines.layout(),
-          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-          0,
-          sizeof(TexturedPushConstants),
-          &shadow_push_constants);
+          &push_constants);
     }
 
+    bind_mesh_buffers(command_buffer, draw.mesh_index, state);
+
     const MeshGpu &mesh = mesh_gpus[draw.mesh_index];
-    const vk::Buffer vertex_buffers[] = {mesh.vertex_buffer()};
-    const vk::DeviceSize offsets[] = {0};
-    command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
-    command_buffer.bindIndexBuffer(mesh.index_buffer(), 0, vk::IndexType::eUint32);
     command_buffer.drawIndexed(mesh.index_count(), 1, 0, 0, 0);
   }
 
@@ -245,7 +322,7 @@ struct PassRecorder {
     };
 
     command_buffer.beginRendering(rendering_info);
-    bind_pass_descriptor_sets(command_buffer, frame_index);
+    bind_frame_descriptor_set(command_buffer, frame_index);
     command_buffer.setViewport(
         0,
         vk::Viewport{
@@ -259,18 +336,12 @@ struct PassRecorder {
     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, shadow_map.extent()});
     command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
-    std::optional<PipelineId> bound_pipeline;
-    std::optional<TextureSource> bound_texture_source;
-    std::optional<std::uint32_t> bound_material_index;
+    std::vector<DrawCommand> shadow_draws;
+    build_shadow_draw_list(draw_list, shadow_draws);
 
-    for (const DrawCommand &draw : draw_list) {
-      if (draw.pipeline != PipelineId::TexturedMesh)
-        continue;
-
-      DrawCommand shadow_draw = draw;
-      shadow_draw.pipeline = PipelineId::ShadowDepth;
-      draw_mesh(command_buffer, shadow_draw, bound_pipeline, bound_texture_source, bound_material_index);
-    }
+    DrawBindState bind_state;
+    for (const DrawCommand &draw : shadow_draws)
+      draw_shadow_mesh(command_buffer, draw, bind_state);
 
     command_buffer.endRendering();
 
@@ -350,12 +421,9 @@ struct PassRecorder {
         });
     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain.extent()});
 
-    std::optional<PipelineId> bound_pipeline;
-    std::optional<TextureSource> bound_texture_source;
-    std::optional<std::uint32_t> bound_material_index;
-
+    DrawBindState bind_state;
     for (const DrawCommand &draw : draw_list)
-      draw_mesh(command_buffer, draw, bound_pipeline, bound_texture_source, bound_material_index);
+      draw_mesh(command_buffer, draw, bind_state);
 
     command_buffer.endRendering();
 

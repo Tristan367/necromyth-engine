@@ -119,7 +119,7 @@ Final shading: `baseColor * (ambient + diffuse * shadow)` with standard Lambert 
 - `TextureSource::Table` — array of textures (separate images, Sascha `descriptorsets/`)
 - `TextureSource::ArrayLayer` — layer index into `Scene::texture_array_layer_paths()` (same-size `texture2DArray`, voxel-atlas path)
 
-**Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `Transparent`, `Overlay`). The renderer sorts by layer, then pipeline, then mesh. Draw `Background` first for skyboxes; a dedicated no-depth pipeline comes later for true “always behind” geometry (Godot-style depth-off backgrounds).
+**Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `Transparent`, `Overlay`). The main pass sorts by layer → pipeline → texture source → texture index → mesh. The shadow pass re-sorts opaque draws by layer → mesh so consecutive instances share vertex/index bindings. `PassRecorder` tracks bound pipeline, material (set 1), and mesh buffers and skips redundant binds (Sascha `gltfscenerendering` multi-set pattern).
 
 **Platforms:** SDL3 + Vulkan targets Linux and Windows with the same code. macOS requires MoltenVK — the engine enables `VK_KHR_portability_enumeration` and `VK_KHR_portability_subset` when available. Android/iOS are possible via SDL mobile targets but not set up yet.
 

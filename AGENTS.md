@@ -34,11 +34,10 @@ Read this and `README.md` before large renderer changes.
 
 ## Known follow-ups
 
-1. Split `vulkan_context.hpp` (shadow pass / main pass / init).
-2. Draw batching (reduce descriptor rebinding; list already sorted).
-3. CSM (2–4 cascades) when shadow stability at range matters more than simplicity.
-4. glTF skinning / animation (Sascha `gltfskinning`).
-5. Transparent render pass (`RenderLayer::Transparent` exists, no pass yet).
+1. Split `vulkan_context.hpp` further (init vs resources) if it grows again.
+2. CSM (2–4 cascades) when shadow stability at range matters more than simplicity.
+3. glTF skinning / animation (Sascha `gltfskinning`).
+4. Transparent render pass (`RenderLayer::Transparent` exists, no pass yet).
 
 ## Do not
 

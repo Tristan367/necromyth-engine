@@ -47,4 +47,22 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
   });
 }
 
+// Shadow depth only needs mesh + model matrix. Sort by layer then mesh to reuse vertex/index buffers
+// (Sascha gltfscenerendering binds geometry once per mesh; main pass keeps texture-first order above).
+inline void build_shadow_draw_list(const std::vector<DrawCommand> &draw_list, std::vector<DrawCommand> &out) {
+  out.clear();
+  out.reserve(draw_list.size());
+
+  for (const DrawCommand &draw : draw_list) {
+    if (draw.pipeline == PipelineId::TexturedMesh)
+      out.push_back(draw);
+  }
+
+  std::ranges::sort(out, [](const DrawCommand &a, const DrawCommand &b) {
+    if (a.layer != b.layer)
+      return a.layer < b.layer;
+    return a.mesh_index < b.mesh_index;
+  });
+}
+
 } // namespace engine
