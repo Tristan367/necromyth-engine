@@ -85,7 +85,7 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `floor_mesh`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
+Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `scene_gpu` (mesh/texture upload helpers), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `floor_mesh`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
@@ -107,7 +107,7 @@ Focus modes (`ShadowFocusMode`):
 - **`CameraFootprint`** (default) — ortho on camera XZ; stable when rotating.
 - **`ViewWedge`** — Sascha cascade-0 frustum fit (opt-in).
 
-Quality toggles on `Scene::shadow_settings()`: `texel_snapping` (default on), `pcf_filtering` (default on, 3×3 PCF). Set `pcf_filtering = false` for hard nearest-tap shadows. Env: `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_PCF`, `ENGINE_SHADOW_DISTANCE`.
+Quality toggles on `Scene::shadow_settings()`: `texel_snapping` (default on), `pcf_filtering` (default on, 3×3 PCF), `point_shadow_filter` (default off — bilinear depth fetch; set true for nearest). Env: `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_PCF`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_DISTANCE`.
 
 A multi-cascade fitted path (no snap, shadow array) can be added later as a separate pipeline without replacing this fast path.
 

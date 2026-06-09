@@ -36,6 +36,8 @@ struct DirectionalLightShadowSettings {
   float ortho_half_extent{28.0F};
   bool texel_snapping{true};
   bool pcf_filtering{true};
+  // false = bilinear depth fetch (default); true = nearest (crisp texels, pairs well with PCF).
+  bool point_shadow_filter{false};
 };
 
 [[nodiscard]] inline auto shadow_settings_from_environment(
@@ -50,6 +52,9 @@ struct DirectionalLightShadowSettings {
 
   if (const char *env = std::getenv("ENGINE_SHADOW_PCF"); env != nullptr && env[0] != '\0')
     settings.pcf_filtering = env[0] != '0';
+
+  if (const char *env = std::getenv("ENGINE_SHADOW_POINT_FILTER"); env != nullptr && env[0] != '\0')
+    settings.point_shadow_filter = env[0] != '0';
 
   return settings;
 }

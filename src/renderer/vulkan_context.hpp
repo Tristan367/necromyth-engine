@@ -7,6 +7,7 @@
 #include "renderer/msaa_color_image.hpp"
 #include "renderer/pass_recorder.hpp"
 #include "renderer/pipeline_registry.hpp"
+#include "renderer/scene_gpu.hpp"
 #include "renderer/shadow_map.hpp"
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_array.hpp"
@@ -47,9 +48,27 @@ public:
     create_depth_image();
     create_shadow_map();
     create_command_pool();
-    upload_scene_meshes(scene);
-    load_scene_textures(scene);
-    load_texture_array(scene);
+    engine::upload_scene_meshes(
+        scene,
+        device_.physical_device(),
+        device_.device(),
+        command_pool_,
+        device_.graphics_queue(),
+        mesh_gpus_);
+    engine::load_scene_textures(
+        scene,
+        device_.physical_device(),
+        device_.device(),
+        command_pool_,
+        device_.graphics_queue(),
+        texture_table_);
+    engine::load_texture_array_layers(
+        scene,
+        device_.physical_device(),
+        device_.device(),
+        command_pool_,
+        device_.graphics_queue(),
+        texture_array_);
     create_descriptor_set_layout();
     create_uniform_buffers();
     create_descriptor_pool_and_sets();
@@ -130,6 +149,14 @@ public:
 
     DirectionalLightShadowSettings shadow_settings = scene.shadow_settings();
     shadow_settings.map_resolution = shadow_map_.extent().width;
+
+    if (shadow_settings.point_shadow_filter != last_point_shadow_filter_) {
+      descriptor_resources_.update_shadow_sampler(
+          device_.device(),
+          shadow_map_.sampler_for_settings(shadow_settings.point_shadow_filter),
+          shadow_map_.view());
+      last_point_shadow_filter_ = shadow_settings.point_shadow_filter;
+    }
 
     uniform_buffers_.write(
         frame_index_,
@@ -251,45 +278,6 @@ private:
         device_.msaa_samples());
   }
 
-  void upload_scene_meshes(const Scene &scene) {
-    mesh_gpus_.clear();
-    mesh_gpus_.reserve(scene.meshes().size());
-    for (const MeshSource &mesh : scene.meshes()) {
-      MeshGpu gpu{};
-      gpu.upload(
-          device_.physical_device(),
-          device_.device(),
-          command_pool_,
-          device_.graphics_queue(),
-          mesh);
-      mesh_gpus_.push_back(std::move(gpu));
-    }
-  }
-
-  void load_scene_textures(const Scene &scene) {
-    if (scene.texture_paths().empty())
-      throw std::runtime_error("Scene must provide at least one texture path");
-
-    texture_table_.load_from_paths(
-        device_.physical_device(),
-        device_.device(),
-        command_pool_,
-        device_.graphics_queue(),
-        scene.texture_paths());
-  }
-
-  void load_texture_array(const Scene &scene) {
-    if (scene.texture_array_layer_paths().empty())
-      throw std::runtime_error("Scene must provide at least one texture array layer path");
-
-    texture_array_.load_from_files(
-        device_.physical_device(),
-        device_.device(),
-        command_pool_,
-        device_.graphics_queue(),
-        scene.texture_array_layer_paths());
-  }
-
   void create_descriptor_set_layout() {
     descriptor_resources_.create_layouts(device_.device());
   }
@@ -315,7 +303,7 @@ private:
         texture_pointers,
         texture_array_.sampler(),
         texture_array_.view(),
-        shadow_map_.sampler(),
+        shadow_map_.sampler_for_settings(false),
         shadow_map_.view());
   }
 
@@ -429,6 +417,7 @@ private:
   PassLayoutState pass_layouts_{};
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};
+  bool last_point_shadow_filter_{false};
   std::uint64_t last_resize_ticks_{};
 };
 

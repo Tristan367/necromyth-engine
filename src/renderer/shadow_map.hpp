@@ -32,7 +32,15 @@ public:
   }
 
   [[nodiscard]] auto sampler() const -> vk::Sampler {
-    return *sampler_;
+    return *sampler_linear_;
+  }
+
+  [[nodiscard]] auto sampler_point() const -> vk::Sampler {
+    return *sampler_point_;
+  }
+
+  [[nodiscard]] auto sampler_for_settings(bool point_filter) const -> vk::Sampler {
+    return point_filter ? sampler_point() : sampler();
   }
 
   [[nodiscard]] auto extent() const -> vk::Extent2D {
@@ -43,9 +51,9 @@ public:
     return vk::ImageAspectFlagBits::eDepth;
   }
 
-  [[nodiscard]] auto descriptor_image_info() const -> vk::DescriptorImageInfo {
+  [[nodiscard]] auto descriptor_image_info(bool point_filter = false) const -> vk::DescriptorImageInfo {
     return {
-        .sampler = *sampler_,
+        .sampler = sampler_for_settings(point_filter),
         .imageView = *view_,
         .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
     };
@@ -68,6 +76,14 @@ private:
     }
 
     throw std::runtime_error("No sampleable depth format found for shadow map");
+  }
+
+  [[nodiscard]] static auto format_is_filterable(
+      const vk::raii::PhysicalDevice &physical_device,
+      vk::Format format) -> bool {
+    const vk::FormatProperties properties = physical_device.getFormatProperties(format);
+    return (properties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear) !=
+           vk::FormatFeatureFlags{};
   }
 
   void create_resources() {
@@ -112,22 +128,31 @@ private:
             },
         });
 
-    // Nearest — one texel per sample. PCF offsets UVs manually in triangle.slang when enabled.
-    sampler_ = vk::raii::Sampler(
-        *device_,
-        vk::SamplerCreateInfo{
-            .magFilter = vk::Filter::eNearest,
-            .minFilter = vk::Filter::eNearest,
-            .mipmapMode = vk::SamplerMipmapMode::eNearest,
-            .addressModeU = vk::SamplerAddressMode::eClampToEdge,
-            .addressModeV = vk::SamplerAddressMode::eClampToEdge,
-            .addressModeW = vk::SamplerAddressMode::eClampToEdge,
-            .anisotropyEnable = vk::False,
-            .maxAnisotropy = 1.0F,
-            .compareEnable = vk::False,
-            .minLod = 0.0F,
-            .maxLod = 1.0F,
-        });
+    const vk::Filter linear_filter =
+        format_is_filterable(*physical_device_, format_) ? vk::Filter::eLinear : vk::Filter::eNearest;
+
+    const vk::SamplerCreateInfo sampler_info{
+        .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        .anisotropyEnable = vk::False,
+        .maxAnisotropy = 1.0F,
+        .compareEnable = vk::False,
+        .minLod = 0.0F,
+        .maxLod = 1.0F,
+    };
+
+    vk::SamplerCreateInfo linear_info = sampler_info;
+    linear_info.magFilter = linear_filter;
+    linear_info.minFilter = linear_filter;
+    linear_info.mipmapMode = vk::SamplerMipmapMode::eLinear;
+    sampler_linear_ = vk::raii::Sampler(*device_, linear_info);
+
+    vk::SamplerCreateInfo point_info = sampler_info;
+    point_info.magFilter = vk::Filter::eNearest;
+    point_info.minFilter = vk::Filter::eNearest;
+    point_info.mipmapMode = vk::SamplerMipmapMode::eNearest;
+    sampler_point_ = vk::raii::Sampler(*device_, point_info);
   }
 
   [[nodiscard]] static auto find_memory_type(
@@ -149,7 +174,8 @@ private:
   vk::raii::Image image_{nullptr};
   vk::raii::DeviceMemory memory_{nullptr};
   vk::raii::ImageView view_{nullptr};
-  vk::raii::Sampler sampler_{nullptr};
+  vk::raii::Sampler sampler_linear_{nullptr};
+  vk::raii::Sampler sampler_point_{nullptr};
 };
 
 } // namespace engine

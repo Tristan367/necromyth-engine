@@ -10,7 +10,7 @@ Read this and `README.md` before large renderer changes.
 
 ## Shadows (current)
 
-**Fast path** (`DirectionalLightShadowSettings`, default): single ortho cascade, `CameraFootprint` focus, texel snap on, **3×3 PCF** (disable via `pcf_filtering` + nearest sampler for hard point shadows).
+**Fast path** (`DirectionalLightShadowSettings`, default): single ortho cascade, `CameraFootprint` focus, texel snap on, **bilinear** shadow fetch + **3×3 PCF**. Hard crisp look: `point_shadow_filter = true` and/or `pcf_filtering = false` (nearest + PCF is a valid combo).
 
 **Future (optional):** separate fitted multi-cascade path (Godot / Sascha cascade / VulkanDemos #37) — layered depth, matrix array, no snap, PCF/PCSS. Keep as second `ShadowPipeline` when needed; do not complicate the fast path.
 
