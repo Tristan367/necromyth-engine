@@ -70,14 +70,6 @@ private:
     throw std::runtime_error("No sampleable depth format found for shadow map");
   }
 
-  [[nodiscard]] static auto format_is_filterable(
-      const vk::raii::PhysicalDevice &physical_device,
-      vk::Format format) -> bool {
-    const vk::FormatProperties properties = physical_device.getFormatProperties(format);
-    return (properties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear) !=
-           vk::FormatFeatureFlags{};
-  }
-
   void create_resources() {
     const vk::ImageCreateInfo image_info{
         .imageType = vk::ImageType::e2D,
@@ -120,15 +112,13 @@ private:
             },
         });
 
-    // Linear when supported — manual PCF in triangle.slang.
-    const vk::Filter filter =
-        format_is_filterable(*physical_device_, format_) ? vk::Filter::eLinear : vk::Filter::eNearest;
+    // Nearest — one texel per sample. PCF offsets UVs manually in triangle.slang when enabled.
     sampler_ = vk::raii::Sampler(
         *device_,
         vk::SamplerCreateInfo{
-            .magFilter = filter,
-            .minFilter = filter,
-            .mipmapMode = vk::SamplerMipmapMode::eLinear,
+            .magFilter = vk::Filter::eNearest,
+            .minFilter = vk::Filter::eNearest,
+            .mipmapMode = vk::SamplerMipmapMode::eNearest,
             .addressModeU = vk::SamplerAddressMode::eClampToEdge,
             .addressModeV = vk::SamplerAddressMode::eClampToEdge,
             .addressModeW = vk::SamplerAddressMode::eClampToEdge,

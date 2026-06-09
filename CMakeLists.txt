@@ -108,6 +108,13 @@ endif()
 
 add_custom_target(vce_shaders DEPENDS ${SHADER_SPIRV_OUTPUTS})
 
+add_library(vce_gltf_impl STATIC src/renderer/gltf_loader_impl.cpp)
+target_include_directories(vce_gltf_impl SYSTEM PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+    "${STB_INCLUDE_DIR}"
+)
+target_compile_features(vce_gltf_impl PRIVATE cxx_std_23)
+
 add_library(vce_engine INTERFACE)
 add_library(VCE::Engine ALIAS vce_engine)
 
@@ -131,6 +138,7 @@ target_link_libraries(vce_engine INTERFACE
     SDL3::SDL3
     Vulkan::Vulkan
     glm::glm
+    vce_gltf_impl
 )
 
 add_dependencies(vce_engine vce_shaders)

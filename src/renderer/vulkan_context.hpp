@@ -4,22 +4,16 @@
 #include "renderer/depth_image.hpp"
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
-#include "renderer/graphics_pipeline.hpp"
-#include "renderer/image_barrier.hpp"
-#include "renderer/mesh_gpu.hpp"
 #include "renderer/msaa_color_image.hpp"
-#include "renderer/pipeline_id.hpp"
+#include "renderer/pass_recorder.hpp"
 #include "renderer/pipeline_registry.hpp"
-#include "renderer/render_settings.hpp"
 #include "renderer/shadow_map.hpp"
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_array.hpp"
 #include "renderer/texture_table.hpp"
-#include "renderer/textured_push_constants.hpp"
 #include "renderer/uniform_buffer.hpp"
-#include "renderer/vertex.hpp"
+#include "renderer/mesh_gpu.hpp"
 #include "renderer/vulkan_device.hpp"
-#include "scene/mesh_source.hpp"
 #include "scene/scene.hpp"
 #include "scene/shadow_utils.hpp"
 
@@ -28,11 +22,8 @@
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 
-#include <glm/geometric.hpp>
-
 #include <cstdint>
 #include <iostream>
-#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -137,6 +128,9 @@ public:
                          static_cast<float>(swapchain_.extent().height);
     scene.camera().set_aspect(aspect);
 
+    DirectionalLightShadowSettings shadow_settings = scene.shadow_settings();
+    shadow_settings.map_resolution = shadow_map_.extent().width;
+
     uniform_buffers_.write(
         frame_index_,
         FrameUniformBufferObject{
@@ -153,7 +147,12 @@ public:
             .light_view_proj = directional_light_view_projection(
                 scene.camera(),
                 scene.directional_light(),
-                scene.shadow_settings()),
+                shadow_settings),
+            .shadow_params = glm::vec4(
+                shadow_settings.pcf_filtering ? 1.0F : 0.0F,
+                0.0F,
+                0.0F,
+                0.0F),
         });
 
     build_draw_list(scene, draw_list_);
@@ -161,8 +160,8 @@ public:
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
     command_buffer.begin({});
-    record_shadow_pass(command_buffer, draw_list_);
-    record_main_pass(command_buffer, image_index, draw_list_);
+    pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, draw_list_);
+    pass_recorder().record_main_pass(command_buffer, frame_index_, image_index, pass_layouts_, draw_list_);
 
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
@@ -207,6 +206,21 @@ public:
   }
 
 private:
+  [[nodiscard]] auto pass_recorder() const -> PassRecorder {
+    return PassRecorder{
+        .pipelines = pipelines_,
+        .descriptors = descriptor_resources_,
+        .swapchain = swapchain_,
+        .depth_image = depth_image_,
+        .msaa_color_image = msaa_color_image_,
+        .shadow_map = shadow_map_,
+        .texture_table = texture_table_,
+        .texture_array = texture_array_,
+        .mesh_gpus = mesh_gpus_,
+        .msaa_enabled = device_.msaa_enabled(),
+    };
+  }
+
   void submit_empty_frame() {
     const vk::SubmitInfo2 submit_info{};
     device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
@@ -306,6 +320,7 @@ private:
   }
 
   void create_pipelines(const Scene &scene) {
+    (void)scene;
     pipelines_.create(
         device_.device(),
         swapchain_.image_format(),
@@ -360,336 +375,10 @@ private:
     }
   }
 
-  void bind_pass_descriptor_sets(vk::raii::CommandBuffer &command_buffer) const {
-    const vk::DescriptorSet descriptor_sets[] = {
-        descriptor_resources_.frame_set(frame_index_),
-        descriptor_resources_.material_set(0),
-    };
-    command_buffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        pipelines_.layout(),
-        0,
-        descriptor_sets,
-        nullptr);
-  }
-
-  void draw_mesh(
-      vk::raii::CommandBuffer &command_buffer,
-      const DrawCommand &draw,
-      std::optional<PipelineId> &bound_pipeline,
-      std::optional<TextureSource> &bound_texture_source,
-      std::optional<std::uint32_t> &bound_material_index) const {
-    if (draw.mesh_index >= mesh_gpus_.size())
-      return;
-
-    if (!bound_pipeline || *bound_pipeline != draw.pipeline) {
-      command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines_.pipeline(draw.pipeline));
-      bound_pipeline = draw.pipeline;
-      bound_texture_source.reset();
-      bound_material_index.reset();
-    }
-
-    if (draw.pipeline == PipelineId::TexturedMesh) {
-      const std::uint32_t descriptor_texture_index =
-          draw.texture_source == TextureSource::Table ? draw.texture_index : 0;
-
-      if (draw.texture_source == TextureSource::Table && draw.texture_index >= texture_table_.count())
-        return;
-      if (draw.texture_source == TextureSource::ArrayLayer && draw.texture_index >= texture_array_.layer_count())
-        return;
-
-      if (!bound_material_index || *bound_material_index != descriptor_texture_index) {
-        const vk::DescriptorSet material_set = descriptor_resources_.material_set(descriptor_texture_index);
-        command_buffer.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
-            pipelines_.layout(),
-            1,
-            material_set,
-            nullptr);
-        bound_texture_source = draw.texture_source;
-        bound_material_index = descriptor_texture_index;
-      }
-
-      const TexturedPushConstants push_constants{
-          .model = draw.model,
-          .texture_array_layer = draw.texture_index,
-          .sample_texture_array = draw.texture_source == TextureSource::ArrayLayer ? 1U : 0U,
-      };
-      command_buffer.pushConstants(
-          pipelines_.layout(),
-          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-          0,
-          sizeof(TexturedPushConstants),
-          &push_constants);
-    } else if (draw.pipeline == PipelineId::Background) {
-      const TexturedPushConstants sky_push_constants{.model = draw.model};
-      command_buffer.pushConstants(
-          pipelines_.layout(),
-          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-          0,
-          sizeof(TexturedPushConstants),
-          &sky_push_constants);
-    } else if (draw.pipeline == PipelineId::ShadowDepth) {
-      const TexturedPushConstants shadow_push_constants{.model = draw.model};
-      command_buffer.pushConstants(
-          pipelines_.layout(),
-          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-          0,
-          sizeof(TexturedPushConstants),
-          &shadow_push_constants);
-    }
-
-    const MeshGpu &mesh = mesh_gpus_[draw.mesh_index];
-    const vk::Buffer vertex_buffers[] = {mesh.vertex_buffer()};
-    const vk::DeviceSize offsets[] = {0};
-    command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
-    command_buffer.bindIndexBuffer(mesh.index_buffer(), 0, vk::IndexType::eUint32);
-    command_buffer.drawIndexed(mesh.index_count(), 1, 0, 0, 0);
-  }
-
-  void record_shadow_pass(
-      vk::raii::CommandBuffer &command_buffer,
-      const std::vector<DrawCommand> &draw_list) const {
-    const vk::ImageLayout previous_layout = shadow_image_layout_;
-    const vk::AccessFlags2 previous_access =
-        previous_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead;
-    const vk::PipelineStageFlags2 previous_stage =
-        previous_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe
-                                                       : vk::PipelineStageFlagBits2::eFragmentShader;
-
-    transition_image_layout(
-        command_buffer,
-        shadow_map_.image(),
-        previous_layout,
-        vk::ImageLayout::eDepthAttachmentOptimal,
-        previous_access,
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        previous_stage,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        shadow_map_.aspect_mask());
-
-    const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
-    const vk::RenderingAttachmentInfo depth_attachment{
-        .imageView = shadow_map_.view(),
-        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = clear_depth,
-    };
-    const vk::RenderingInfo rendering_info{
-        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = shadow_map_.extent()},
-        .layerCount = 1,
-        .colorAttachmentCount = 0,
-        .pDepthAttachment = &depth_attachment,
-    };
-
-    command_buffer.beginRendering(rendering_info);
-    bind_pass_descriptor_sets(command_buffer);
-    command_buffer.setViewport(
-        0,
-        vk::Viewport{
-            0.0F,
-            0.0F,
-            static_cast<float>(shadow_map_.extent().width),
-            static_cast<float>(shadow_map_.extent().height),
-            0.0F,
-            1.0F,
-        });
-    command_buffer.setScissor(0, vk::Rect2D{{0, 0}, shadow_map_.extent()});
-    command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
-
-    std::optional<PipelineId> bound_pipeline;
-    std::optional<TextureSource> bound_texture_source;
-    std::optional<std::uint32_t> bound_material_index;
-
-    for (const DrawCommand &draw : draw_list) {
-      if (draw.pipeline != PipelineId::TexturedMesh)
-        continue;
-
-      DrawCommand shadow_draw = draw;
-      shadow_draw.pipeline = PipelineId::ShadowDepth;
-      draw_mesh(command_buffer, shadow_draw, bound_pipeline, bound_texture_source, bound_material_index);
-    }
-
-    command_buffer.endRendering();
-
-    transition_image_layout(
-        command_buffer,
-        shadow_map_.image(),
-        vk::ImageLayout::eDepthAttachmentOptimal,
-        vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::AccessFlagBits2::eShaderRead,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::PipelineStageFlagBits2::eFragmentShader,
-        shadow_map_.aspect_mask());
-
-    shadow_image_layout_ = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-  }
-
-  void record_main_pass(
-      vk::raii::CommandBuffer &command_buffer,
-      std::uint32_t image_index,
-      const std::vector<DrawCommand> &draw_list) const {
-    transition_swapchain_to_color_attachment(command_buffer, image_index);
-
-    if (device_.msaa_enabled())
-      transition_msaa_to_color_attachment(command_buffer);
-
-    transition_depth_to_attachment(command_buffer);
-
-    const vk::ClearValue clear_value{vk::ClearColorValue{std::array{0.02F, 0.03F, 0.05F, 1.0F}}};
-    const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
-
-    const vk::RenderingAttachmentInfo color_attachment = device_.msaa_enabled()
-        ? vk::RenderingAttachmentInfo{
-              .imageView = *msaa_color_image_.view(),
-              .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-              .resolveMode = vk::ResolveModeFlagBits::eAverage,
-              .resolveImageView = *swapchain_.image_views()[image_index],
-              .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-              .loadOp = vk::AttachmentLoadOp::eClear,
-              .storeOp = vk::AttachmentStoreOp::eStore,
-              .clearValue = clear_value,
-          }
-        : vk::RenderingAttachmentInfo{
-              .imageView = *swapchain_.image_views()[image_index],
-              .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-              .loadOp = vk::AttachmentLoadOp::eClear,
-              .storeOp = vk::AttachmentStoreOp::eStore,
-              .clearValue = clear_value,
-          };
-    const vk::RenderingAttachmentInfo depth_attachment{
-        .imageView = *depth_image_.view(),
-        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eDontCare,
-        .clearValue = clear_depth,
-    };
-    const vk::RenderingInfo rendering_info{
-        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain_.extent()},
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color_attachment,
-        .pDepthAttachment = &depth_attachment,
-    };
-    command_buffer.beginRendering(rendering_info);
-    bind_pass_descriptor_sets(command_buffer);
-    command_buffer.setViewport(
-        0,
-        vk::Viewport{
-            0.0F,
-            0.0F,
-            static_cast<float>(swapchain_.extent().width),
-            static_cast<float>(swapchain_.extent().height),
-            0.0F,
-            1.0F,
-        });
-    command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain_.extent()});
-
-    std::optional<PipelineId> bound_pipeline;
-    std::optional<TextureSource> bound_texture_source;
-    std::optional<std::uint32_t> bound_material_index;
-
-    for (const DrawCommand &draw : draw_list)
-      draw_mesh(command_buffer, draw, bound_pipeline, bound_texture_source, bound_material_index);
-
-    command_buffer.endRendering();
-
-    transition_image_layout(
-        command_buffer,
-        swapchain_.images()[image_index],
-        vk::ImageLayout::eColorAttachmentOptimal,
-        vk::ImageLayout::ePresentSrcKHR,
-        vk::AccessFlagBits2::eColorAttachmentWrite,
-        {},
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eBottomOfPipe);
-    swapchain_image_layouts_[image_index] = vk::ImageLayout::ePresentSrcKHR;
-
-    command_buffer.end();
-  }
-
   void reset_image_layout_tracking() {
-    swapchain_image_layouts_.assign(swapchain_.image_count(), vk::ImageLayout::eUndefined);
-    depth_image_layout_ = vk::ImageLayout::eUndefined;
-    msaa_color_layout_ = vk::ImageLayout::eUndefined;
-  }
-
-  void transition_swapchain_to_color_attachment(
-      vk::raii::CommandBuffer &command_buffer,
-      std::uint32_t image_index) const {
-    vk::ImageLayout &tracked_layout = swapchain_image_layouts_.at(image_index);
-    const vk::Image image = swapchain_.images()[image_index];
-
-    if (tracked_layout == vk::ImageLayout::eUndefined) {
-      transition_image_layout(
-          command_buffer,
-          image,
-          vk::ImageLayout::eUndefined,
-          vk::ImageLayout::eColorAttachmentOptimal,
-          {},
-          vk::AccessFlagBits2::eColorAttachmentWrite,
-          vk::PipelineStageFlagBits2::eTopOfPipe,
-          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-    } else if (tracked_layout == vk::ImageLayout::ePresentSrcKHR) {
-      transition_image_layout(
-          command_buffer,
-          image,
-          vk::ImageLayout::ePresentSrcKHR,
-          vk::ImageLayout::eColorAttachmentOptimal,
-          {},
-          vk::AccessFlagBits2::eColorAttachmentWrite,
-          vk::PipelineStageFlagBits2::eBottomOfPipe,
-          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-    }
-
-    tracked_layout = vk::ImageLayout::eColorAttachmentOptimal;
-  }
-
-  void transition_msaa_to_color_attachment(vk::raii::CommandBuffer &command_buffer) const {
-    if (msaa_color_layout_ == vk::ImageLayout::eColorAttachmentOptimal)
-      return;
-
-    transition_image_layout(
-        command_buffer,
-        msaa_color_image_.image(),
-        msaa_color_layout_,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        {},
-        vk::AccessFlagBits2::eColorAttachmentWrite,
-        msaa_color_layout_ == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe
-                                                          : vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-    msaa_color_layout_ = vk::ImageLayout::eColorAttachmentOptimal;
-  }
-
-  void transition_depth_to_attachment(vk::raii::CommandBuffer &command_buffer) const {
-    if (depth_image_layout_ == vk::ImageLayout::eDepthAttachmentOptimal) {
-      transition_image_layout(
-          command_buffer,
-          depth_image_.image(),
-          vk::ImageLayout::eDepthAttachmentOptimal,
-          vk::ImageLayout::eDepthAttachmentOptimal,
-          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          depth_image_.aspect_mask());
-      return;
-    }
-
-    transition_image_layout(
-        command_buffer,
-        depth_image_.image(),
-        depth_image_layout_,
-        vk::ImageLayout::eDepthAttachmentOptimal,
-        {},
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        depth_image_.aspect_mask());
-    depth_image_layout_ = vk::ImageLayout::eDepthAttachmentOptimal;
+    pass_layouts_.swapchain_image_layouts.assign(swapchain_.image_count(), vk::ImageLayout::eUndefined);
+    pass_layouts_.depth_image_layout = vk::ImageLayout::eUndefined;
+    pass_layouts_.msaa_color_layout = vk::ImageLayout::eUndefined;
   }
 
   void wait_for_nonzero_extent() const {
@@ -737,13 +426,10 @@ private:
   DescriptorResources descriptor_resources_;
   PipelineRegistry pipelines_;
   std::vector<DrawCommand> draw_list_;
+  PassLayoutState pass_layouts_{};
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};
   std::uint64_t last_resize_ticks_{};
-  mutable vk::ImageLayout shadow_image_layout_{vk::ImageLayout::eUndefined};
-  mutable std::vector<vk::ImageLayout> swapchain_image_layouts_;
-  mutable vk::ImageLayout depth_image_layout_{vk::ImageLayout::eUndefined};
-  mutable vk::ImageLayout msaa_color_layout_{vk::ImageLayout::eUndefined};
 };
 
 } // namespace engine

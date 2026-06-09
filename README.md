@@ -57,18 +57,21 @@ Optional in-tree executable: `cmake -DVCE_BUILD_IN_TREE_APP=ON ..` (legacy).
 
 ## Reference Projects
 
-Several Vulkan reference projects live at `/home/tristan/Projects/vulkan examples/` for study. They are not required to build this project.
-
-Use them with intent:
+Reference clones live at `/home/tristan/Projects/vulkan examples/`. They are not required to build this project. See also **`AGENTS.md`** for a short guide for AI assistants.
 
 | Repo | Use for |
-|---|---|
-| **Khronos Vulkan-Tutorial** | Step-by-step feature sequence (what to build next). Not engine architecture — each chapter is a self-contained demo. |
-| **Sascha Willems `Vulkan/`** | Engine-adjacent patterns: split modules, dynamic rendering (`trianglevulkan13`), depth, buffers, descriptors. |
-| **Vulkan-Tutorial `simple_engine`** | Holochip's split layout (`VulkanDevice`, `SwapChain`, `Renderer`) — closer to a real engine than the chapter attachments. |
-| **HowToVulkan** | SDL3 + modern Vulkan 1.3 in one file; good for swapchain/depth resize behavior, not structure. |
+|------|---------|
+| **Vulkan/** (Sascha Willems) | Primary code reference: dynamic rendering (`trianglevulkan13`), descriptors, **shadowmappingcascade** (directional/CSM), glTF loaders |
+| **Vulkan-Tutorial** | Step-by-step feature sequence; **`simple_engine`** module split (`VulkanDevice`, `SwapChain`, `Renderer`) |
+| **Vulkan-Guide** | Concepts and explanations (companion reading, not copy-paste architecture) |
+| **Vulkan-Samples** (Khronos) | Official sample patterns, extensions, sync |
+| **HowToVulkan** | SDL3 + Vulkan 1.3 in one file; swapchain/depth resize behavior |
+| **godot** | Production renderer behavior (e.g. directional shadow distance, stability) — read, do not port wholesale |
+| **VulkanDemos** | RTX / advanced demos — future, not current baseline |
 
-**Two-repo rule:** adopt a technique only when at least two reference projects do it the same way (or one repo does it clearly and a second confirms the pattern). If only the tutorial does it, treat it as a learning step, not a permanent convention.
+**Two-repo rule:** adopt a technique only when at least two reference projects do it the same way (or one repo does it clearly and a second confirms). Tutorial-only patterns are learning steps, not permanent conventions.
+
+**Shadow authority:** directional shadows → Sascha **`shadowmappingcascade`**. Do **not** use basic **`shadowmapping`** (perspective / orbiting light).
 
 ## Project Goals
 
@@ -82,7 +85,7 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (orchestrator), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `floor_mesh`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `depth_image`, `msaa_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
+Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `floor_mesh`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
@@ -94,14 +97,19 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 
 **Lighting:** `Scene::directional_light()` feeds sun direction, color, intensity, and ambient into the frame UBO. The textured mesh shader applies Lambert diffuse modulated by a directional shadow map.
 
-**Shadow mapping:** View-frustum-fitted orthographic directional shadow (single split from Sascha `shadowmappingcascade`). Two passes per frame:
+**Shadow mapping:** Fast single-cascade ortho directional shadows. Two passes per frame:
 
 1. **Shadow pass** — depth-only into `2048×2048` (`ShadowMap::k_default_size`). Slope-scaled polygon offset on casters.
-2. **Main pass** — PCF with slope-scaled depth bias + normal offset on receivers (`triangle.slang`).
+2. **Main pass** — one shadow tap by default (optional 3×3 PCF), slope-scaled bias + normal offset on receivers (`triangle.slang`).
 
-`directional_light_view_projection()` fits an ortho box to the camera view wedge up to `max_distance` (default **50**). Geometry outside that wedge is not shadowed. `min_ortho_extent` (default **12**) keeps the map from collapsing when the camera is close.
+Focus modes (`ShadowFocusMode`):
 
-Tune via `Scene::shadow_settings()` or `ENGINE_SHADOW_DISTANCE`.
+- **`CameraFootprint`** (default) — ortho on camera XZ; stable when rotating.
+- **`ViewWedge`** — Sascha cascade-0 frustum fit (opt-in).
+
+Quality toggles on `Scene::shadow_settings()`: `texel_snapping` (default on), `pcf_filtering` (default on, 3×3 PCF). Set `pcf_filtering = false` for hard nearest-tap shadows. Env: `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_PCF`, `ENGINE_SHADOW_DISTANCE`.
+
+A multi-cascade fitted path (no snap, shadow array) can be added later as a separate pipeline without replacing this fast path.
 
 **Descriptors:** Set 0 holds per-frame UBO, texture array, and shadow map; set 1 holds the table texture for the current draw (Sascha multi-set pattern). This avoids allocating duplicate frame/shadow bindings for every table texture.
 

@@ -13,6 +13,7 @@ struct FrameUniforms {
     float4 lightDirection;
     float4 lightColor;
     float4x4 lightViewProj;
+    float4 shadowParams;
 };
 [[vk::binding(0, 0)]]
 ConstantBuffer<FrameUniforms> ubo;
@@ -97,7 +98,11 @@ float sampleShadow(float3 worldPos, float3 normal, float3 lightDir) {
         projection.z < 0.0 || projection.z > 1.0)
         return 1.0;
 
-    return filterPCF(projection, shadowDepthBias(cosTheta));
+    float bias = shadowDepthBias(cosTheta);
+    if (ubo.shadowParams.x > 0.5)
+        return filterPCF(projection, bias);
+
+    return textureProj(projection, float2(0.0, 0.0), bias);
 }
 
 [shader("fragment")]

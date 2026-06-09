@@ -13,6 +13,7 @@ struct FrameUniforms {
     float4 lightDirection;
     float4 lightColor;
     float4x4 lightViewProj;
+    float4 shadowParams;
 };
 [[vk::binding(0, 0)]]
 ConstantBuffer<FrameUniforms> ubo;
