@@ -2,7 +2,7 @@
 
 Minimal Vulkan 1.3 renderer in modern C++ (`VCE::Engine`).
 
-**Demo client:** [necromyth-engine-demo](https://github.com/Tristan367/necromyth-engine-demo)
+**Demo client:** [necromyth-engine-demo](https://github.com/Tristan367/necromyth-engine-demo) · **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) (pull requests welcome)
 
 ## Requirements
 
@@ -184,3 +184,7 @@ Both score terms are required. Do not pick the first suitable device. Override w
 **Extensions:** verify required instance and device extensions exist before create, not only at link time.
 
 **Helper order:** define lower-level helpers (e.g. `has_name`) before helpers that call them (e.g. `supports_all_names`).
+
+## License
+
+[MIT](LICENSE) — use, modify, and distribute freely; keep the copyright notice. Contributions are welcome via pull request; see [CONTRIBUTING.md](CONTRIBUTING.md).
