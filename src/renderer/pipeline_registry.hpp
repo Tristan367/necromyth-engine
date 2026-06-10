@@ -6,6 +6,7 @@
 #include "scene/shadow_utils.hpp"
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -24,7 +25,8 @@ public:
       vk::DescriptorSetLayout frame_layout,
       vk::DescriptorSetLayout material_layout,
       vk::SampleCountFlagBits sample_count,
-      const vk::raii::PipelineCache &pipeline_cache) {
+      const vk::raii::PipelineCache &pipeline_cache,
+      PipelineBuildProfile profile) {
     frame_layout_ = frame_layout;
     material_layout_ = material_layout;
     color_format_ = color_format;
@@ -35,6 +37,7 @@ public:
     background_spirv_ = background_spirv;
     shadow_depth_spirv_ = shadow_depth_spirv;
     pipeline_cache_ = &pipeline_cache;
+    profile_ = profile;
 
     rebuild(device);
   }
@@ -51,15 +54,18 @@ public:
 
   [[nodiscard]] auto pipeline(PipelineId id) const -> vk::Pipeline {
     const auto index = static_cast<std::size_t>(id);
-    if (index >= pipelines_.size() || *pipelines_[index] == nullptr)
+    if (index >= pipelines_.size() || !pipelines_[index].has_value())
       throw std::runtime_error("Requested graphics pipeline was not created");
-    return *pipelines_[index];
+    return **pipelines_[index];
   }
 
 private:
   void rebuild(vk::raii::Device &device) {
     if (frame_layout_ == nullptr || material_layout_ == nullptr || pipeline_cache_ == nullptr)
       throw std::runtime_error("PipelineRegistry is missing create dependencies");
+
+    for (std::optional<vk::raii::Pipeline> &pipeline : pipelines_)
+      pipeline.reset();
 
     const std::array set_layouts{frame_layout_, material_layout_};
     pipeline_layout_ = create_pipeline_layout(device, set_layouts);
@@ -87,16 +93,37 @@ private:
             .depth_write = false,
         });
 
-    pipelines_[static_cast<std::size_t>(PipelineId::TexturedMesh)] = create_graphics_pipeline(
-        device,
-        color_format_,
-        depth_format_,
-        textured_mesh_spirv_,
-        *pipeline_layout_,
-        sample_count_,
-        mesh_binding,
-        mesh_attributes,
-        *pipeline_cache_);
+    static constexpr std::array k_alpha_modes{
+        MeshAlphaMode::Opaque,
+        MeshAlphaMode::Cutout,
+        MeshAlphaMode::AlphaToCoverage,
+    };
+
+    for (const MeshAlphaMode alpha_mode : k_alpha_modes) {
+      const auto alpha_index = static_cast<std::size_t>(alpha_mode);
+      if (!profile_.textured_alpha_modes[alpha_index])
+        continue;
+
+      GraphicsPipelineRasterState raster{};
+      if (alpha_mode != MeshAlphaMode::Opaque)
+        raster.cull_mode = vk::CullModeFlagBits::eNone;
+      // Alpha-to-coverage: requires MSAA (see graphics_pipeline.hpp multisampling.alphaToCoverageEnable).
+      if (alpha_mode == MeshAlphaMode::AlphaToCoverage)
+        raster.alpha_to_coverage = sample_count_ != vk::SampleCountFlagBits::e1;
+
+      pipelines_[static_cast<std::size_t>(textured_pipeline(alpha_mode))] = create_graphics_pipeline(
+          device,
+          color_format_,
+          depth_format_,
+          textured_mesh_spirv_,
+          *pipeline_layout_,
+          sample_count_,
+          mesh_binding,
+          mesh_attributes,
+          *pipeline_cache_,
+          raster,
+          textured_fragment_entry(profile_.shadow_filter, alpha_mode));
+    }
 
     pipelines_[static_cast<std::size_t>(PipelineId::ShadowDepth)] = create_depth_only_graphics_pipeline(
         device,
@@ -128,12 +155,9 @@ private:
   std::string_view background_spirv_{};
   std::string_view shadow_depth_spirv_{};
   const vk::raii::PipelineCache *pipeline_cache_{nullptr};
+  PipelineBuildProfile profile_{};
   vk::raii::PipelineLayout pipeline_layout_{nullptr};
-  std::array<vk::raii::Pipeline, pipeline_count()> pipelines_{
-      vk::raii::Pipeline{nullptr},
-      vk::raii::Pipeline{nullptr},
-      vk::raii::Pipeline{nullptr},
-  };
+  std::array<std::optional<vk::raii::Pipeline>, 5> pipelines_{};
 };
 
 } // namespace engine

@@ -24,6 +24,7 @@ struct GraphicsPipelineRasterState {
   bool depth_bias_enable{false};
   float depth_bias_constant{0.0F};
   float depth_bias_slope{0.0F};
+  bool alpha_to_coverage{false};
 };
 
 [[nodiscard]] inline auto read_spirv_file(std::string_view path) -> std::vector<char> {
@@ -75,7 +76,8 @@ struct GraphicsPipelineRasterState {
     vk::VertexInputBindingDescription binding,
     std::span<const vk::VertexInputAttributeDescription> attributes,
     const vk::raii::PipelineCache &pipeline_cache,
-    GraphicsPipelineRasterState raster_state = {}) -> vk::raii::Pipeline {
+    GraphicsPipelineRasterState raster_state = {},
+    const char *fragment_entry_point = "fragMain") -> vk::raii::Pipeline {
   const auto spirv = read_spirv_file(spirv_path);
   const vk::raii::ShaderModule shader_module = create_shader_module(device, spirv);
 
@@ -88,7 +90,7 @@ struct GraphicsPipelineRasterState {
       vk::PipelineShaderStageCreateInfo{
           .stage = vk::ShaderStageFlagBits::eFragment,
           .module = *shader_module,
-          .pName = "fragMain",
+          .pName = fragment_entry_point,
       },
   };
 
@@ -118,6 +120,7 @@ struct GraphicsPipelineRasterState {
   };
   const vk::PipelineMultisampleStateCreateInfo multisampling{
       .rasterizationSamples = sample_count,
+      .alphaToCoverageEnable = raster_state.alpha_to_coverage ? vk::True : vk::False,
   };
   const vk::PipelineColorBlendAttachmentState color_blend_attachment{
       .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |

@@ -38,7 +38,9 @@ find_program(SLANGC_EXECUTABLE slangc
 )
 
 set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
-file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.slang")
+set(SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS "${SHADER_SOURCE_DIR}/*.slang")
+file(GLOB SHADER_LIB_SOURCES CONFIGURE_DEPENDS "${SHADER_SOURCE_DIR}/lib/*.slang")
 
 set(SHADER_SPIRV_OUTPUTS "")
 set(VCE_SHADER_SPIRV "")
@@ -55,13 +57,39 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
             COMMAND "${SLANGC_EXECUTABLE}"
                 "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMain
                 -o "${SHADER_SPIRV}"
-            DEPENDS "${SHADER_SOURCE}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    elseif(SHADER_NAME STREQUAL "triangle")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMain
+                -entry fragOpaqueHard
+                -entry fragCutoutHard
+                -entry fragOpaqueHard
+                -entry fragCutoutHard
+                -entry fragA2CHard
+                -entry fragOpaquePcf
+                -entry fragCutoutPcf
+                -entry fragA2CPcf
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
             COMMENT "Compiling ${SHADER_NAME}.slang"
             VERBATIM
         )
@@ -71,6 +99,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
             COMMAND "${SLANGC_EXECUTABLE}"
                 "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
                 -emit-spirv-directly
@@ -78,7 +107,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -entry vertMain
                 -entry fragMain
                 -o "${SHADER_SPIRV}"
-            DEPENDS "${SHADER_SOURCE}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
             COMMENT "Compiling ${SHADER_NAME}.slang"
             VERBATIM
         )

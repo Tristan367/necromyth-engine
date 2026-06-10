@@ -8,6 +8,7 @@
 #include "renderer/draw_list.hpp"
 #include "renderer/msaa_color_image.hpp"
 #include "renderer/pass_recorder.hpp"
+#include "renderer/pipeline_id.hpp"
 #include "renderer/pipeline_registry.hpp"
 #include "renderer/scene_gpu.hpp"
 #include "renderer/shadow_map.hpp"
@@ -45,12 +46,15 @@ class VulkanContext {
 public:
   VulkanContext(SDL_Window *window, const EngineConfig &config, const Scene &scene)
       : window_(window),
-        device_(window, config.msaa, config.gpu_device_index) {
+        msaa_config_(resolve_msaa_for_scene(config.msaa, scene_uses_alpha_to_coverage(scene.instances()))),
+        msaa_boosted_for_a2c_(!config.msaa.enabled && msaa_config_.enabled),
+        startup_point_shadow_filter_(scene.shadow_settings().point_shadow_filter),
+        device_(window, msaa_config_, config.gpu_device_index) {
     swapchain_.create(device_, window, config.present_mode);
     create_pipeline_cache();
     create_msaa_color_image();
     create_depth_image();
-    create_shadow_map();
+    create_shadow_map(scene.shadow_settings().map_resolution);
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -87,8 +91,12 @@ public:
 #endif
     if (device_.msaa_enabled())
       std::cout << "MSAA samples: " << vk::to_string(device_.msaa_samples()) << '\n';
+    else if (!msaa_config_.enabled)
+      std::cout << "MSAA: off (set ENGINE_MSAA=4 to enable; A2C foliage needs MSAA)\n";
     else
-      std::cout << "MSAA: off\n";
+      std::cout << "MSAA: off (GPU supports up to " << vk::to_string(device_.max_msaa_samples()) << ")\n";
+    if (msaa_boosted_for_a2c_)
+      std::cout << "MSAA auto-enabled for AlphaToCoverage meshes\n";
     std::cout << "Present mode: " << present_mode_name(swapchain_.present_mode())
               << " (set ENGINE_PRESENT=mailbox to uncap for profiling)\n";
   }
@@ -146,6 +154,39 @@ public:
     };
   }
 
+  // Upload meshes/textures appended to Scene after construction; rebuilds texture descriptors when needed.
+  void sync_scene(const Scene &scene) {
+    if (gpu_shutdown_complete_)
+      return;
+
+    device_.wait_idle();
+
+    for (std::size_t mesh_index = mesh_gpus_.size(); mesh_index < scene.meshes().size(); ++mesh_index) {
+      MeshGpu gpu{};
+      gpu.upload(
+          device_.physical_device(),
+          device_.device(),
+          command_pool_,
+          device_.graphics_queue(),
+          scene.meshes()[mesh_index]);
+      mesh_gpus_.push_back(std::move(gpu));
+    }
+
+    if (scene.texture_paths().size() > texture_table_.count()) {
+      for (std::size_t texture_index = texture_table_.count(); texture_index < scene.texture_paths().size();
+           ++texture_index) {
+        texture_table_.append_from_file(
+            device_.physical_device(),
+            device_.device(),
+            command_pool_,
+            device_.graphics_queue(),
+            scene.texture_paths()[texture_index]);
+      }
+
+      recreate_descriptor_sets();
+    }
+  }
+
   void draw_frame(Scene &scene) {
     if (framebuffer_resized_) {
       if (SDL_GetTicks() - last_resize_ticks_ < detail::resize_debounce_ms)
@@ -191,16 +232,9 @@ public:
     shadow_settings.map_resolution = shadow_map_.extent().width;
 
     if (!logged_shadow_filter_mode_) {
-      std::cout << "Shadow filter: " << shadow_filter_mode_name(shadow_settings.filter_mode) << '\n';
+      std::cout << "Shadow filter: " << shadow_filter_mode_name(shadow_settings.filter_mode)
+                << " (restart to change; ENGINE_SHADOW_FILTER)\n";
       logged_shadow_filter_mode_ = true;
-    }
-
-    if (shadow_settings.point_shadow_filter != last_point_shadow_filter_) {
-      descriptor_resources_.update_shadow_sampler(
-          device_.device(),
-          shadow_map_.sampler_for_settings(shadow_settings.point_shadow_filter),
-          shadow_map_.view());
-      last_point_shadow_filter_ = shadow_settings.point_shadow_filter;
     }
 
     uniform_buffers_.write(
@@ -220,11 +254,6 @@ public:
                 scene.camera(),
                 scene.directional_light(),
                 shadow_settings),
-            .shadow_params = glm::vec4(
-                shadow_filter_mode_param(shadow_settings.filter_mode),
-                0.0F,
-                0.0F,
-                0.0F),
         });
 
     build_draw_list(scene, draw_list_);
@@ -244,7 +273,7 @@ public:
 
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
-        .stageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+        .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
     };
     const vk::CommandBufferSubmitInfo command_buffer_info{
         .commandBuffer = *command_buffer,
@@ -276,9 +305,7 @@ public:
     const vk::Result present_result = device_.present_queue().presentKHR(present_info);
     if (present_result == vk::Result::eErrorOutOfDateKHR)
       recreate_swapchain();
-    else if (present_result == vk::Result::eSuboptimalKHR)
-      recreate_swapchain();
-    else if (present_result != vk::Result::eSuccess)
+    else if (present_result != vk::Result::eSuccess && present_result != vk::Result::eSuboptimalKHR)
       throw std::runtime_error("Failed to present swapchain image");
 
     frame_index_ = (frame_index_ + 1) % detail::max_frames_in_flight;
@@ -318,8 +345,8 @@ private:
         device_.msaa_samples());
   }
 
-  void create_shadow_map() {
-    shadow_map_.create(device_.physical_device(), device_.device());
+  void create_shadow_map(std::uint32_t resolution) {
+    shadow_map_.create(device_.physical_device(), device_.device(), resolution);
   }
 
   void create_depth_image() {
@@ -355,12 +382,45 @@ private:
         texture_pointers,
         texture_array_.sampler(),
         texture_array_.view(),
-        shadow_map_.sampler_for_settings(false),
+        shadow_map_.sampler_for_settings(startup_point_shadow_filter_),
+        shadow_map_.view());
+  }
+
+  void recreate_descriptor_sets() {
+    descriptor_resources_.create_pool(
+        device_.device(),
+        detail::max_frames_in_flight,
+        texture_table_.count());
+
+    std::array<vk::Buffer, detail::max_frames_in_flight> buffers{};
+    for (std::uint32_t i = 0; i < detail::max_frames_in_flight; ++i)
+      buffers[i] = uniform_buffers_.buffer(i);
+
+    const auto texture_pointers = texture_table_.texture_pointers();
+    descriptor_resources_.allocate_sets(
+        device_.device(),
+        buffers,
+        texture_pointers,
+        texture_array_.sampler(),
+        texture_array_.view(),
+        shadow_map_.sampler_for_settings(startup_point_shadow_filter_),
         shadow_map_.view());
   }
 
   void create_pipelines(const Scene &scene) {
-    (void)scene;
+    const PipelineBuildProfile profile{
+        .shadow_filter = scene.shadow_settings().filter_mode,
+        .textured_alpha_modes = collect_used_alpha_modes(scene.instances()),
+    };
+
+    std::size_t textured_pipeline_count = 0;
+    for (const bool used : profile.textured_alpha_modes) {
+      if (used)
+        ++textured_pipeline_count;
+    }
+    std::cout << "Graphics pipelines: " << (2 + textured_pipeline_count)
+              << " (background + shadow depth + " << textured_pipeline_count << " textured)\n";
+
     pipelines_.create(
         device_.device(),
         swapchain_.image_format(),
@@ -372,7 +432,8 @@ private:
         descriptor_resources_.frame_layout(),
         descriptor_resources_.material_layout(),
         device_.msaa_samples(),
-        pipeline_cache_);
+        pipeline_cache_,
+        profile);
   }
 
   void create_command_pool() {
@@ -448,6 +509,9 @@ private:
   }
 
   SDL_Window *window_{};
+  MsaaSettings msaa_config_{};
+  bool msaa_boosted_for_a2c_{false};
+  bool startup_point_shadow_filter_{false};
   VulkanDevice device_;
   Swapchain swapchain_;
   vk::raii::PipelineCache pipeline_cache_{nullptr};
@@ -469,7 +533,6 @@ private:
   PassLayoutState pass_layouts_{};
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};
-  bool last_point_shadow_filter_{false};
   bool logged_shadow_filter_mode_{false};
   bool gpu_shutdown_complete_{false};
   FrameOverlayCallback frame_overlay_;

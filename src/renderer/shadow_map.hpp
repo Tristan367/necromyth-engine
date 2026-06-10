@@ -12,9 +12,13 @@ class ShadowMap {
 public:
   static constexpr std::uint32_t k_default_size = 2048;
 
-  void create(const vk::raii::PhysicalDevice &physical_device, vk::raii::Device &device) {
+  void create(
+      const vk::raii::PhysicalDevice &physical_device,
+      vk::raii::Device &device,
+      std::uint32_t size = k_default_size) {
     physical_device_ = &physical_device;
     device_ = &device;
+    size_ = std::max(256U, size);
     format_ = find_shadow_format(physical_device);
     create_resources();
   }
@@ -31,20 +35,20 @@ public:
     return *view_;
   }
 
-  [[nodiscard]] auto sampler() const -> vk::Sampler {
-    return *sampler_linear_;
+  [[nodiscard]] auto sampler_linear_compare() const -> vk::Sampler {
+    return *sampler_linear_compare_;
   }
 
-  [[nodiscard]] auto sampler_point() const -> vk::Sampler {
-    return *sampler_point_;
+  [[nodiscard]] auto sampler_point_compare() const -> vk::Sampler {
+    return *sampler_point_compare_;
   }
 
   [[nodiscard]] auto sampler_for_settings(bool point_filter) const -> vk::Sampler {
-    return point_filter ? sampler_point() : sampler();
+    return point_filter ? sampler_point_compare() : sampler_linear_compare();
   }
 
   [[nodiscard]] auto extent() const -> vk::Extent2D {
-    return {k_default_size, k_default_size};
+    return {size_, size_};
   }
 
   [[nodiscard]] auto aspect_mask() const -> vk::ImageAspectFlags {
@@ -90,7 +94,7 @@ private:
     const vk::ImageCreateInfo image_info{
         .imageType = vk::ImageType::e2D,
         .format = format_,
-        .extent = {k_default_size, k_default_size, 1},
+        .extent = {size_, size_, 1},
         .mipLevels = 1,
         .arrayLayers = 1,
         .samples = vk::SampleCountFlagBits::e1,
@@ -137,22 +141,23 @@ private:
         .addressModeW = vk::SamplerAddressMode::eClampToEdge,
         .anisotropyEnable = vk::False,
         .maxAnisotropy = 1.0F,
-        .compareEnable = vk::False,
+        .compareEnable = vk::True,
+        .compareOp = vk::CompareOp::eLessOrEqual,
         .minLod = 0.0F,
         .maxLod = 1.0F,
     };
 
-    vk::SamplerCreateInfo linear_info = sampler_info;
-    linear_info.magFilter = linear_filter;
-    linear_info.minFilter = linear_filter;
-    linear_info.mipmapMode = vk::SamplerMipmapMode::eLinear;
-    sampler_linear_ = vk::raii::Sampler(*device_, linear_info);
+    vk::SamplerCreateInfo linear_compare_info = sampler_info;
+    linear_compare_info.magFilter = linear_filter;
+    linear_compare_info.minFilter = linear_filter;
+    linear_compare_info.mipmapMode = vk::SamplerMipmapMode::eLinear;
+    sampler_linear_compare_ = vk::raii::Sampler(*device_, linear_compare_info);
 
-    vk::SamplerCreateInfo point_info = sampler_info;
-    point_info.magFilter = vk::Filter::eNearest;
-    point_info.minFilter = vk::Filter::eNearest;
-    point_info.mipmapMode = vk::SamplerMipmapMode::eNearest;
-    sampler_point_ = vk::raii::Sampler(*device_, point_info);
+    vk::SamplerCreateInfo point_compare_info = sampler_info;
+    point_compare_info.magFilter = vk::Filter::eNearest;
+    point_compare_info.minFilter = vk::Filter::eNearest;
+    point_compare_info.mipmapMode = vk::SamplerMipmapMode::eNearest;
+    sampler_point_compare_ = vk::raii::Sampler(*device_, point_compare_info);
   }
 
   [[nodiscard]] static auto find_memory_type(
@@ -171,11 +176,12 @@ private:
   const vk::raii::PhysicalDevice *physical_device_{};
   vk::raii::Device *device_{};
   vk::Format format_{vk::Format::eUndefined};
+  std::uint32_t size_{k_default_size};
   vk::raii::Image image_{nullptr};
   vk::raii::DeviceMemory memory_{nullptr};
   vk::raii::ImageView view_{nullptr};
-  vk::raii::Sampler sampler_linear_{nullptr};
-  vk::raii::Sampler sampler_point_{nullptr};
+  vk::raii::Sampler sampler_linear_compare_{nullptr};
+  vk::raii::Sampler sampler_point_compare_{nullptr};
 };
 
 } // namespace engine

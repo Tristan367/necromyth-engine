@@ -30,6 +30,17 @@ public:
     }
   }
 
+  void append_from_file(
+      const vk::raii::PhysicalDevice &physical_device,
+      vk::raii::Device &device,
+      vk::raii::CommandPool &command_pool,
+      vk::raii::Queue &queue,
+      const std::string &path) {
+    TextureImage texture{};
+    texture.load_from_file(physical_device, device, command_pool, queue, path);
+    textures_.push_back(std::move(texture));
+  }
+
   [[nodiscard]] auto count() const -> std::uint32_t {
     return static_cast<std::uint32_t>(textures_.size());
   }

@@ -193,31 +193,6 @@ public:
     }
   }
 
-  void update_shadow_sampler(
-      vk::raii::Device &device,
-      vk::Sampler shadow_sampler,
-      vk::ImageView shadow_view) {
-    const vk::DescriptorImageInfo shadow_image_info{
-        .sampler = shadow_sampler,
-        .imageView = shadow_view,
-        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-    };
-
-    for (std::uint32_t frame_index = 0; frame_index < frame_count_; ++frame_index) {
-      const std::array writes{
-          vk::WriteDescriptorSet{
-              .dstSet = frame_sets_[frame_index],
-              .dstBinding = 2,
-              .dstArrayElement = 0,
-              .descriptorCount = 1,
-              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-              .pImageInfo = &shadow_image_info,
-          },
-      };
-      device.updateDescriptorSets(writes, nullptr);
-    }
-  }
-
   [[nodiscard]] auto frame_layout() const -> vk::DescriptorSetLayout {
     return *frame_layout_;
   }

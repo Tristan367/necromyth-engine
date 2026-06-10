@@ -81,7 +81,7 @@ struct PassRecorder {
   }
 
   [[nodiscard]] auto material_descriptor_index(const DrawCommand &draw) const -> std::optional<std::uint32_t> {
-    if (draw.pipeline != PipelineId::TexturedMesh)
+    if (!is_textured_surface_pipeline(draw.pipeline))
       return std::nullopt;
 
     if (draw.texture_source == TextureSource::Table) {
@@ -176,7 +176,7 @@ struct PassRecorder {
 
     bind_pipeline(command_buffer, draw.pipeline, state);
 
-    if (draw.pipeline == PipelineId::TexturedMesh) {
+    if (is_textured_surface_pipeline(draw.pipeline)) {
       if (!material_descriptor_index(draw))
         return;
 

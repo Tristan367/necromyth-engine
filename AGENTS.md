@@ -10,12 +10,13 @@ Read this and `README.md` before large renderer changes.
 
 ## Shadows (current)
 
-**Fast path** (`DirectionalLightShadowSettings`, default): single ortho cascade, `CameraFootprint` focus, texel snap off, **bilinear** shadow fetch, **Poisson16** filter (default). Filter ladder: `Hard` → `Pcf3x3` → `Poisson16` → (future PCSS / CSM).
+**Fast path** (`DirectionalLightShadowSettings`, default): single ortho cascade, `CameraFootprint` focus, texel snap **on**, **bilinear** compare fetch, **Pcf3x3** filter. Filter ladder: `Hard` → `Pcf3x3` → (future PCSS / CSM). `ortho_half_extent` default 56 (world coverage, not texture resolution).
 
 **Future (optional):** separate fitted multi-cascade path (Godot / Sascha cascade / VulkanDemos #37) — layered depth, matrix array, no snap, PCF/PCSS. Keep as second `ShadowPipeline` when needed; do not complicate the fast path.
 
 - `shadow_utils.hpp`: matrix + snap logic
-- `triangle.slang`: `shadowParams.x` = `ShadowFilterMode` (0 hard, 1 pcf3x3, 2 poisson16)
+- `shaders/lib/shadow.slang`: separate fragment entry points per filter (no runtime branching)
+- `pipeline_registry.hpp`: `alpha_to_coverage` enabled on A2C pipelines when MSAA > 1
 - `frame_overlay.hpp`: optional app callback recorded after the main pass (ImGui lives in the app)
 - Shadow pass polygon offset: `k_shadow_depth_bias_*`
 

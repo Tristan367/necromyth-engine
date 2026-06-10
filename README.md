@@ -100,14 +100,16 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 **Shadow mapping:** Fast single-cascade ortho directional shadows. Two passes per frame:
 
 1. **Shadow pass** — depth-only into `2048×2048` (`ShadowMap::k_default_size`). Slope-scaled polygon offset on casters.
-2. **Main pass** — one shadow tap by default (optional 3×3 PCF), slope-scaled bias + normal offset on receivers (`triangle.slang`).
+2. **Main pass** — 3×3 PCF compare taps by default (optional hard single-tap), slope-scaled bias + normal offset on receivers (`shaders/lib/shadow.slang`).
 
 Focus modes (`ShadowFocusMode`):
 
 - **`CameraFootprint`** (default) — ortho on camera XZ; stable when rotating.
 - **`ViewWedge`** — Sascha cascade-0 frustum fit (opt-in).
 
-Quality toggles on `Scene::shadow_settings()`: `texel_snapping` (default off — Poisson16 hides edge aliasing; snap only helps camera rotation shimmer), `filter_mode` (`Hard`, `Pcf3x3`, `Poisson16` default), `point_shadow_filter` (default off). Env: `ENGINE_SHADOW_FILTER=hard|pcf|poisson`, `ENGINE_SHADOW_FOCUS=footprint|wedge`, legacy `ENGINE_SHADOW_PCF`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_DISTANCE`.
+**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping on, camera footprint, `ortho_half_extent` 56 (doubled world coverage; map resolution stays 2048²). Startup env: `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_FOCUS`.
+
+Quality toggles on `Scene::shadow_settings()`: `filter_mode` and `point_shadow_filter` are **startup-only** — each filter mode is one pre-built pipeline set; only alpha modes present in the scene get a `VkPipeline`. Runtime changes to filter or point filter require restart. `texel_snapping` and `focus_mode` still apply live.
 
 A multi-cascade fitted path (no snap, shadow array) can be added later as a separate pipeline without replacing this fast path.
 
@@ -115,9 +117,11 @@ A multi-cascade fitted path (no snap, shadow array) can be added later as a sepa
 
 Final shading: `baseColor * (ambient + diffuse * shadow)` with standard Lambert `max(N·L, 0)`.
 
-**Textures:** Each `MeshInstance` uses `texture_source` + `texture_index`:
+**Textures:** Each `MeshInstance` uses `texture_source` + `texture_index`. Opaque-surface draws also set `MeshAlphaMode` (`Opaque`, `Cutout`, `AlphaToCoverage`); the engine creates a textured pipeline only for alpha modes used in the scene, using the shadow filter from startup settings.
 - `TextureSource::Table` — array of textures (separate images, Sascha `descriptorsets/`)
 - `TextureSource::ArrayLayer` — layer index into `Scene::texture_array_layer_paths()` (same-size `texture2DArray`, voxel-atlas path)
+
+**Shaders:** Stock GLSL-like Slang sources under `shaders/`; shared helpers live in `shaders/lib/` (`frame_uniforms`, `shadow`, `surface`, etc.) and are `#include`d by entry shaders. Mods can reuse the same includes. Build output is SPIR-V (`slangc`); runtime user-shader compilation is planned, not implemented yet.
 
 **Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `Transparent`, `Overlay`). The main pass sorts by layer → pipeline → texture source → texture index → mesh. The shadow pass re-sorts opaque draws by layer → mesh so consecutive instances share vertex/index bindings. `PassRecorder` tracks bound pipeline, material (set 1), and mesh buffers and skips redundant binds (Sascha `gltfscenerendering` multi-set pattern).
 

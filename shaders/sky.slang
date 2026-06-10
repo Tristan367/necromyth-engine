@@ -1,19 +1,8 @@
+#include "lib/frame_uniforms.slang"
+
 struct VSInput {
     float3 inPosition;
 };
-
-struct FrameUniforms {
-    float4x4 view;
-    float4x4 proj;
-    float4 cameraPosition;
-    float4x4 viewSky;
-    float4 lightDirection;
-    float4 lightColor;
-    float4x4 lightViewProj;
-    float4 shadowParams;
-};
-[[vk::binding(0, 0)]]
-ConstantBuffer<FrameUniforms> ubo;
 
 struct PushConstants {
     float4x4 model;
@@ -51,7 +40,6 @@ float4 fragMain(VSOutput vertIn) : SV_Target {
     float3 sky = lerp(horizon, zenith, saturate(height * 1.35));
     float3 color = lerp(ground, sky, smoothstep(0.08, 0.42, height));
 
-    // Simple sun disc: view direction vs direction toward sun (same as directional light UBO).
     const float kSunCosRadius = 0.99965;
     const float kSunEdge = 0.00035;
     float3 sunDir = normalize(ubo.lightDirection.xyz);

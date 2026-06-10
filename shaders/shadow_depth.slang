@@ -1,30 +1,6 @@
-struct VSInput {
-    float3 inPosition;
-    float3 inNormal;
-    float3 inColor;
-    float2 inTexCoord;
-};
-
-struct FrameUniforms {
-    float4x4 view;
-    float4x4 proj;
-    float4 cameraPosition;
-    float4x4 viewSky;
-    float4 lightDirection;
-    float4 lightColor;
-    float4x4 lightViewProj;
-    float4 shadowParams;
-};
-[[vk::binding(0, 0)]]
-ConstantBuffer<FrameUniforms> ubo;
-
-struct PushConstants {
-    float4x4 model;
-    uint textureArrayLayer;
-    uint sampleTextureArray;
-};
-[[vk::push_constant]]
-ConstantBuffer<PushConstants> pushConstants;
+#include "lib/frame_uniforms.slang"
+#include "lib/mesh_types.slang"
+#include "lib/textured_push_constants.slang"
 
 [shader("vertex")]
 float4 vertMain(VSInput input) : SV_Position {

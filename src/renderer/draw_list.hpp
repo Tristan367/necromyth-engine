@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/pipeline_id.hpp"
 #include "scene/mesh_instance.hpp"
 #include "scene/scene.hpp"
 
@@ -16,7 +17,7 @@ struct DrawCommand {
   TextureSource texture_source{TextureSource::Table};
   glm::mat4 model{1.0F};
   RenderLayer layer{RenderLayer::Opaque};
-  PipelineId pipeline{PipelineId::TexturedMesh};
+  PipelineId pipeline{PipelineId::TexturedOpaque};
 };
 
 inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
@@ -24,13 +25,17 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
   out.reserve(scene.instances().size());
 
   for (const MeshInstance &instance : scene.instances()) {
+    const PipelineId pipeline = instance.layer == RenderLayer::Background
+        ? PipelineId::Background
+        : textured_pipeline(instance.alpha_mode);
+
     out.push_back({
         .mesh_index = instance.mesh_index,
         .texture_index = instance.texture_index,
         .texture_source = instance.texture_source,
         .model = instance.model,
         .layer = instance.layer,
-        .pipeline = instance.pipeline,
+        .pipeline = pipeline,
     });
   }
 
@@ -54,7 +59,7 @@ inline void build_shadow_draw_list(const std::vector<DrawCommand> &draw_list, st
   out.reserve(draw_list.size());
 
   for (const DrawCommand &draw : draw_list) {
-    if (draw.pipeline == PipelineId::TexturedMesh)
+    if (casts_shadow(draw.pipeline))
       out.push_back(draw);
   }
 

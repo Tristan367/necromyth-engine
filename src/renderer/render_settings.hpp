@@ -52,53 +52,60 @@ enum class PresentModePreference {
 
 struct MsaaSettings {
   bool enabled = true;
-  // When enabled and samples is e1, use up to max_msaa_cap (not device max).
-  // Otherwise clamp samples to what the GPU supports (e.g. request e8, get e4).
   vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1;
-  vk::SampleCountFlagBits max_cap = vk::SampleCountFlagBits::e4;
 };
 
 namespace detail {
 
-[[nodiscard]] inline auto clamp_sample_count(
-    vk::SampleCountFlagBits requested,
-    vk::SampleCountFlagBits max_supported) -> vk::SampleCountFlagBits {
-  const vk::SampleCountFlags supported{max_supported};
-  const auto requested_value = static_cast<std::uint32_t>(requested);
+[[nodiscard]] inline auto supported_framebuffer_sample_counts(const vk::PhysicalDeviceProperties &properties)
+    -> vk::SampleCountFlags {
+  return properties.limits.framebufferColorSampleCounts & properties.limits.framebufferDepthSampleCounts;
+}
 
+[[nodiscard]] inline auto highest_sample_count(vk::SampleCountFlags supported) -> vk::SampleCountFlagBits {
   constexpr std::array candidates{
-      vk::SampleCountFlagBits::e64,
-      vk::SampleCountFlagBits::e32,
-      vk::SampleCountFlagBits::e16,
       vk::SampleCountFlagBits::e8,
       vk::SampleCountFlagBits::e4,
       vk::SampleCountFlagBits::e2,
-      vk::SampleCountFlagBits::e1,
   };
 
-  for (const auto candidate : candidates) {
-    if (static_cast<std::uint32_t>(candidate) <= requested_value && (supported & candidate) != vk::SampleCountFlags{})
-      return candidate;
-  }
+  for (const auto sample : candidates)
+    if ((supported & sample) != vk::SampleCountFlags{})
+      return sample;
 
   return vk::SampleCountFlagBits::e1;
 }
 
-[[nodiscard]] inline auto resolve_msaa_samples(MsaaSettings settings, vk::SampleCountFlagBits max_supported)
+[[nodiscard]] inline auto resolve_msaa_samples(MsaaSettings settings, vk::SampleCountFlags supported)
     -> vk::SampleCountFlagBits {
   if (!settings.enabled)
     return vk::SampleCountFlagBits::e1;
 
-  if (settings.samples == vk::SampleCountFlagBits::e1)
-    return clamp_sample_count(settings.max_cap, max_supported);
+  if (settings.samples != vk::SampleCountFlagBits::e1) {
+    if ((supported & settings.samples) != vk::SampleCountFlags{})
+      return settings.samples;
+    return highest_sample_count(supported);
+  }
 
-  return clamp_sample_count(settings.samples, max_supported);
+  if ((supported & vk::SampleCountFlagBits::e4) != vk::SampleCountFlags{})
+    return vk::SampleCountFlagBits::e4;
+  if ((supported & vk::SampleCountFlagBits::e2) != vk::SampleCountFlags{})
+    return vk::SampleCountFlagBits::e2;
+
+  return vk::SampleCountFlagBits::e1;
 }
 
 } // namespace detail
 
 [[nodiscard]] inline auto msaa_is_active(vk::SampleCountFlagBits samples) -> bool {
   return samples != vk::SampleCountFlagBits::e1;
+}
+
+[[nodiscard]] inline auto resolve_msaa_for_scene(MsaaSettings settings, bool scene_uses_alpha_to_coverage)
+    -> MsaaSettings {
+  if (scene_uses_alpha_to_coverage && !settings.enabled)
+    settings.enabled = true;
+  return settings;
 }
 
 [[nodiscard]] inline auto msaa_settings_from_environment() -> MsaaSettings {

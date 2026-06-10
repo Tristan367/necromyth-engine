@@ -30,11 +30,10 @@ enum class ShadowFocusMode {
   ViewWedge,
 };
 
-// Fragment shadow filter quality ladder: Hard -> Pcf3x3 -> Poisson16 -> (future PCSS / CSM).
+// Fragment shadow filter: Hard (single tap) or Pcf3x3.
 enum class ShadowFilterMode : std::uint8_t {
   Hard = 0,
   Pcf3x3 = 1,
-  Poisson16 = 2,
 };
 
 struct DirectionalLightShadowSettings {
@@ -42,16 +41,12 @@ struct DirectionalLightShadowSettings {
   std::uint32_t map_resolution{2048};
   ShadowFocusMode focus_mode{ShadowFocusMode::CameraFootprint};
   float footprint_focus_y{0.0F};
-  float ortho_half_extent{28.0F};
-  bool texel_snapping{false};
-  ShadowFilterMode filter_mode{ShadowFilterMode::Poisson16};
-  // false = bilinear depth fetch (default); true = nearest (crisp texels, pairs well with PCF).
+  float ortho_half_extent{56.0F};
+  bool texel_snapping{true};
+  ShadowFilterMode filter_mode{ShadowFilterMode::Pcf3x3};
+  // false = bilinear compare fetch (default); true = nearest.
   bool point_shadow_filter{false};
 };
-
-[[nodiscard]] inline auto shadow_filter_mode_param(ShadowFilterMode mode) -> float {
-  return static_cast<float>(static_cast<std::uint8_t>(mode));
-}
 
 [[nodiscard]] inline auto shadow_filter_mode_name(ShadowFilterMode mode) -> const char * {
   switch (mode) {
@@ -59,8 +54,6 @@ struct DirectionalLightShadowSettings {
     return "hard";
   case ShadowFilterMode::Pcf3x3:
     return "pcf3x3";
-  case ShadowFilterMode::Poisson16:
-    return "poisson16";
   }
   return "unknown";
 }
@@ -91,9 +84,6 @@ namespace detail {
   if (shadow_filter_token_equals(value, "pcf") || shadow_filter_token_equals(value, "pcf3x3") ||
       shadow_filter_token_equals(value, "1"))
     return ShadowFilterMode::Pcf3x3;
-  if (shadow_filter_token_equals(value, "poisson") || shadow_filter_token_equals(value, "poisson16") ||
-      shadow_filter_token_equals(value, "2"))
-    return ShadowFilterMode::Poisson16;
 
   return std::nullopt;
 }

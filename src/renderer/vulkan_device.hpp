@@ -96,23 +96,7 @@ inline void warn_if_extension_missing(
 }
 
 [[nodiscard]] inline auto max_usable_sample_count(const vk::PhysicalDeviceProperties &properties) -> vk::SampleCountFlagBits {
-  const vk::SampleCountFlags counts = properties.limits.framebufferColorSampleCounts &
-                                      properties.limits.framebufferDepthSampleCounts;
-
-  constexpr std::array candidates{
-      vk::SampleCountFlagBits::e64,
-      vk::SampleCountFlagBits::e32,
-      vk::SampleCountFlagBits::e16,
-      vk::SampleCountFlagBits::e8,
-      vk::SampleCountFlagBits::e4,
-      vk::SampleCountFlagBits::e2,
-  };
-
-  for (const auto sample : candidates)
-    if ((counts & sample) != vk::SampleCountFlags{})
-      return sample;
-
-  return vk::SampleCountFlagBits::e1;
+  return highest_sample_count(supported_framebuffer_sample_counts(properties));
 }
 
 } // namespace detail
@@ -142,7 +126,9 @@ public:
     pick_physical_device();
     create_logical_device();
     max_msaa_samples_ = detail::max_usable_sample_count(physical_device_.getProperties());
-    msaa_samples_ = detail::resolve_msaa_samples(msaa_settings, max_msaa_samples_);
+    const vk::SampleCountFlags supported_sample_counts =
+        detail::supported_framebuffer_sample_counts(physical_device_.getProperties());
+    msaa_samples_ = detail::resolve_msaa_samples(msaa_settings, supported_sample_counts);
   }
 
   ~VulkanDevice() {
