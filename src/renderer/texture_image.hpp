@@ -325,6 +325,8 @@ private:
 
   void create_sampler(const vk::raii::PhysicalDevice &physical_device) {
     const vk::PhysicalDeviceProperties properties = physical_device.getProperties();
+    const vk::PhysicalDeviceFeatures features = physical_device.getFeatures();
+    const bool anisotropy_supported = features.samplerAnisotropy == vk::True;
 
     sampler_ = vk::raii::Sampler(
         *device_,
@@ -335,8 +337,8 @@ private:
             .addressModeU = vk::SamplerAddressMode::eRepeat,
             .addressModeV = vk::SamplerAddressMode::eRepeat,
             .addressModeW = vk::SamplerAddressMode::eRepeat,
-            .anisotropyEnable = vk::True,
-            .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+            .anisotropyEnable = anisotropy_supported ? vk::True : vk::False,
+            .maxAnisotropy = anisotropy_supported ? properties.limits.maxSamplerAnisotropy : 1.0F,
             .maxLod = static_cast<float>(mip_levels_),
         });
   }

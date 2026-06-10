@@ -1,6 +1,8 @@
-# Vulkan C++ Engine
+# Necromyth Engine
 
-Minimal Vulkan game engine in modern C++.
+Minimal Vulkan 1.3 renderer in modern C++ (`VCE::Engine`).
+
+**Demo client:** [necromyth-engine-demo](https://github.com/Tristan367/necromyth-engine-demo)
 
 ## Requirements
 
@@ -123,7 +125,7 @@ Final shading: `baseColor * (ambient + diffuse * shadow)` with standard Lambert 
 
 **Shaders:** Stock GLSL-like Slang sources under `shaders/`; shared helpers live in `shaders/lib/` (`frame_uniforms`, `shadow`, `surface`, etc.) and are `#include`d by entry shaders. Mods can reuse the same includes. Build output is SPIR-V (`slangc`); runtime user-shader compilation is planned, not implemented yet.
 
-**Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `Transparent`, `Overlay`). The main pass sorts by layer → pipeline → texture source → texture index → mesh. The shadow pass re-sorts opaque draws by layer → mesh so consecutive instances share vertex/index bindings. `PassRecorder` tracks bound pipeline, material (set 1), and mesh buffers and skips redundant binds (Sascha `gltfscenerendering` multi-set pattern).
+**Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `AlphaTested`, `Overlay`). `Transparent` remains as a backward-compatible alias of `AlphaTested` (ordering only; no separate blended pass yet). The main pass sorts by layer → pipeline → texture source → texture index → mesh. The shadow pass re-sorts opaque draws by layer → mesh so consecutive instances share vertex/index bindings. `PassRecorder` tracks bound pipeline, material (set 1), and mesh buffers and skips redundant binds (Sascha `gltfscenerendering` multi-set pattern).
 
 **Platforms:** SDL3 + Vulkan targets Linux and Windows with the same code. macOS requires MoltenVK — the engine enables `VK_KHR_portability_enumeration` and `VK_KHR_portability_subset` when available. Android/iOS are possible via SDL mobile targets but not set up yet.
 
