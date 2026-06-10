@@ -159,6 +159,18 @@ public:
     return instance_;
   }
 
+  [[nodiscard]] auto physical_device_handle() const -> vk::PhysicalDevice {
+    return *physical_device_;
+  }
+
+  [[nodiscard]] auto device_handle() const -> vk::Device {
+    return *device_;
+  }
+
+  [[nodiscard]] auto graphics_queue_handle() const -> vk::Queue {
+    return *graphics_queue_;
+  }
+
   [[nodiscard]] auto surface() const -> const vk::raii::SurfaceKHR & {
     return surface_;
   }

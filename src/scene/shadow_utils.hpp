@@ -11,9 +11,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <optional>
 #include <tuple>
 
 namespace engine {
@@ -28,17 +30,75 @@ enum class ShadowFocusMode {
   ViewWedge,
 };
 
+// Fragment shadow filter quality ladder: Hard -> Pcf3x3 -> Poisson16 -> (future PCSS / CSM).
+enum class ShadowFilterMode : std::uint8_t {
+  Hard = 0,
+  Pcf3x3 = 1,
+  Poisson16 = 2,
+};
+
 struct DirectionalLightShadowSettings {
   float max_distance{50.0F};
   std::uint32_t map_resolution{2048};
   ShadowFocusMode focus_mode{ShadowFocusMode::CameraFootprint};
   float footprint_focus_y{0.0F};
   float ortho_half_extent{28.0F};
-  bool texel_snapping{true};
-  bool pcf_filtering{true};
+  bool texel_snapping{false};
+  ShadowFilterMode filter_mode{ShadowFilterMode::Poisson16};
   // false = bilinear depth fetch (default); true = nearest (crisp texels, pairs well with PCF).
   bool point_shadow_filter{false};
 };
+
+[[nodiscard]] inline auto shadow_filter_mode_param(ShadowFilterMode mode) -> float {
+  return static_cast<float>(static_cast<std::uint8_t>(mode));
+}
+
+[[nodiscard]] inline auto shadow_filter_mode_name(ShadowFilterMode mode) -> const char * {
+  switch (mode) {
+  case ShadowFilterMode::Hard:
+    return "hard";
+  case ShadowFilterMode::Pcf3x3:
+    return "pcf3x3";
+  case ShadowFilterMode::Poisson16:
+    return "poisson16";
+  }
+  return "unknown";
+}
+
+namespace detail {
+
+[[nodiscard]] inline auto shadow_filter_token_equals(const char *token, const char *literal) -> bool {
+  if (token == nullptr || literal == nullptr)
+    return false;
+
+  while (*token != '\0' && *literal != '\0') {
+    if (std::tolower(static_cast<unsigned char>(*token)) != std::tolower(static_cast<unsigned char>(*literal)))
+      return false;
+    ++token;
+    ++literal;
+  }
+
+  return *token == *literal;
+}
+
+[[nodiscard]] inline auto parse_shadow_filter_mode(const char *value) -> std::optional<ShadowFilterMode> {
+  if (value == nullptr || value[0] == '\0')
+    return std::nullopt;
+
+  if (shadow_filter_token_equals(value, "hard") || shadow_filter_token_equals(value, "none") ||
+      shadow_filter_token_equals(value, "0"))
+    return ShadowFilterMode::Hard;
+  if (shadow_filter_token_equals(value, "pcf") || shadow_filter_token_equals(value, "pcf3x3") ||
+      shadow_filter_token_equals(value, "1"))
+    return ShadowFilterMode::Pcf3x3;
+  if (shadow_filter_token_equals(value, "poisson") || shadow_filter_token_equals(value, "poisson16") ||
+      shadow_filter_token_equals(value, "2"))
+    return ShadowFilterMode::Poisson16;
+
+  return std::nullopt;
+}
+
+} // namespace detail
 
 [[nodiscard]] inline auto shadow_settings_from_environment(
     DirectionalLightShadowSettings defaults = {}) -> DirectionalLightShadowSettings {
@@ -50,11 +110,23 @@ struct DirectionalLightShadowSettings {
   if (const char *env = std::getenv("ENGINE_SHADOW_TEXEL_SNAP"); env != nullptr && env[0] != '\0')
     settings.texel_snapping = env[0] != '0';
 
-  if (const char *env = std::getenv("ENGINE_SHADOW_PCF"); env != nullptr && env[0] != '\0')
-    settings.pcf_filtering = env[0] != '0';
+  if (const char *env = std::getenv("ENGINE_SHADOW_FILTER"); env != nullptr && env[0] != '\0') {
+    if (const std::optional<ShadowFilterMode> mode = detail::parse_shadow_filter_mode(env))
+      settings.filter_mode = *mode;
+  } else if (const char *env = std::getenv("ENGINE_SHADOW_PCF"); env != nullptr && env[0] != '\0') {
+    settings.filter_mode = env[0] != '0' ? ShadowFilterMode::Pcf3x3 : ShadowFilterMode::Hard;
+  }
 
   if (const char *env = std::getenv("ENGINE_SHADOW_POINT_FILTER"); env != nullptr && env[0] != '\0')
     settings.point_shadow_filter = env[0] != '0';
+
+  if (const char *env = std::getenv("ENGINE_SHADOW_FOCUS"); env != nullptr && env[0] != '\0') {
+    if (detail::shadow_filter_token_equals(env, "wedge") || detail::shadow_filter_token_equals(env, "view") ||
+        detail::shadow_filter_token_equals(env, "frustum"))
+      settings.focus_mode = ShadowFocusMode::ViewWedge;
+    else if (detail::shadow_filter_token_equals(env, "footprint") || detail::shadow_filter_token_equals(env, "camera"))
+      settings.focus_mode = ShadowFocusMode::CameraFootprint;
+  }
 
   return settings;
 }

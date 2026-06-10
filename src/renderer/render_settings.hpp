@@ -9,11 +9,53 @@
 
 namespace engine {
 
+enum class PresentModePreference {
+  Fifo,
+  Mailbox,
+};
+
+[[nodiscard]] inline auto present_mode_preference_from_environment() -> PresentModePreference {
+  const char *env = std::getenv("ENGINE_PRESENT");
+  if (env == nullptr || env[0] == '\0')
+    return PresentModePreference::Fifo;
+
+  if (std::string_view(env) == "mailbox" || std::string_view(env) == "uncapped")
+    return PresentModePreference::Mailbox;
+
+  return PresentModePreference::Fifo;
+}
+
+[[nodiscard]] inline auto present_mode_name(PresentModePreference preference) -> const char * {
+  switch (preference) {
+  case PresentModePreference::Fifo:
+    return "fifo";
+  case PresentModePreference::Mailbox:
+    return "mailbox";
+  }
+  return "unknown";
+}
+
+[[nodiscard]] inline auto present_mode_name(vk::PresentModeKHR mode) -> const char * {
+  switch (mode) {
+  case vk::PresentModeKHR::eFifo:
+    return "FIFO";
+  case vk::PresentModeKHR::eMailbox:
+    return "Mailbox";
+  case vk::PresentModeKHR::eFifoRelaxed:
+    return "FIFO relaxed";
+  case vk::PresentModeKHR::eImmediate:
+    return "Immediate";
+  default:
+    return "Unknown";
+  }
+}
+
 struct MsaaSettings {
   bool enabled = true;
-  // When enabled and samples is e1, use the device maximum supported count.
+  // When enabled and samples is e1, use up to max_msaa_cap (not device max).
   // Otherwise clamp samples to what the GPU supports (e.g. request e8, get e4).
   vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1;
+  vk::SampleCountFlagBits max_cap = vk::SampleCountFlagBits::e4;
 };
 
 namespace detail {
@@ -48,7 +90,7 @@ namespace detail {
     return vk::SampleCountFlagBits::e1;
 
   if (settings.samples == vk::SampleCountFlagBits::e1)
-    return max_supported;
+    return clamp_sample_count(settings.max_cap, max_supported);
 
   return clamp_sample_count(settings.samples, max_supported);
 }

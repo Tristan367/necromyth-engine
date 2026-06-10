@@ -107,7 +107,7 @@ Focus modes (`ShadowFocusMode`):
 - **`CameraFootprint`** (default) — ortho on camera XZ; stable when rotating.
 - **`ViewWedge`** — Sascha cascade-0 frustum fit (opt-in).
 
-Quality toggles on `Scene::shadow_settings()`: `texel_snapping` (default on), `pcf_filtering` (default on, 3×3 PCF), `point_shadow_filter` (default off — bilinear depth fetch; set true for nearest). Env: `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_PCF`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_DISTANCE`.
+Quality toggles on `Scene::shadow_settings()`: `texel_snapping` (default off — Poisson16 hides edge aliasing; snap only helps camera rotation shimmer), `filter_mode` (`Hard`, `Pcf3x3`, `Poisson16` default), `point_shadow_filter` (default off). Env: `ENGINE_SHADOW_FILTER=hard|pcf|poisson`, `ENGINE_SHADOW_FOCUS=footprint|wedge`, legacy `ENGINE_SHADOW_PCF`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_DISTANCE`.
 
 A multi-cascade fitted path (no snap, shadow array) can be added later as a separate pipeline without replacing this fast path.
 
@@ -161,7 +161,7 @@ Both score terms are required. Do not pick the first suitable device. Override w
 
 **Queue families:** first-match for graphics/compute/transfer/present, then prefer a unified family that supports graphics, compute, transfer, and present together.
 
-**Swapchain:** prefer `FIFO` (vsync to display refresh); fall back to `Mailbox` if unavailable; recreate with `oldSwapchain`; debounce window resize (~100 ms); wait for non-zero extent before recreating; recreate depth image on swapchain resize (Khronos ch. 27, HowToVulkan, Sascha `trianglevulkan13`).
+**Swapchain:** default `FIFO` (vsync); set `ENGINE_PRESENT=mailbox` to uncap FPS for profiling (falls back to `Immediate` or `FIFO` if mailbox is unavailable). Recreate with `oldSwapchain`; debounce window resize (~100 ms); wait for non-zero extent before recreating; recreate depth image on swapchain resize (Khronos ch. 27, HowToVulkan, Sascha `trianglevulkan13`).
 
 **Depth:** format selection tries `D32_SFLOAT`, then `D32_SFLOAT_S8_UINT`, then `D24_UNORM_S8_UINT`; device-local optimal image; clear to 1.0; `CompareOp::eLessOrEqual` (Sascha, HowToVulkan).
 
@@ -169,7 +169,7 @@ Both score terms are required. Do not pick the first suitable device. Override w
 
 **Validation:** Debug builds require `VK_LAYER_KHRONOS_validation` and fail fast if it is missing. Release builds run without validation. No validation output on startup usually means the layer is active and found nothing wrong — debug builds print `Vulkan validation: enabled` to confirm.
 
-**MSAA:** Configured at startup via `MsaaSettings` (`render_settings.hpp`). Default is enabled with device maximum samples. When disabled (`samples == 1`), the renderer draws directly to the swapchain with no multisampled color image or resolve pass. Quick override: `ENGINE_MSAA=0` (off), `ENGINE_MSAA=4`, or `ENGINE_MSAA=8` (clamped to GPU support). Runtime toggle can be added later; changing MSAA today requires restart.
+**MSAA:** Configured at startup via `MsaaSettings` (`render_settings.hpp`). Default is enabled, capped at **4×** (not device max). Override: `ENGINE_MSAA=0` (off), `ENGINE_MSAA=2`, `ENGINE_MSAA=4`, or `ENGINE_MSAA=8` (clamped to GPU support). Changing MSAA requires restart.
 
 **Swapchain surface:** probe `compositeAlpha`, prefer identity `preTransform`, and add `TRANSFER_DST` usage when supported (Sascha, Vulkan-Samples).
 

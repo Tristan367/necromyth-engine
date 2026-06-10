@@ -13,12 +13,14 @@ struct EngineConfig {
   int window_width{1280};
   int window_height{720};
   MsaaSettings msaa{};
+  PresentModePreference present_mode{PresentModePreference::Fifo};
   std::optional<std::uint32_t> gpu_device_index{};
 };
 
 [[nodiscard]] inline auto engine_config_from_environment() -> EngineConfig {
   EngineConfig config{};
   config.msaa = msaa_settings_from_environment();
+  config.present_mode = present_mode_preference_from_environment();
   return config;
 }
 

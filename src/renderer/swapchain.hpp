@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/vulkan_device.hpp"
+#include "renderer/render_settings.hpp"
 
 #include <SDL3/SDL_video.h>
 
@@ -11,17 +12,12 @@
 
 namespace engine {
 
-namespace detail {
-
-constexpr vk::PresentModeKHR desired_present_mode = vk::PresentModeKHR::eFifo;
-
-} // namespace detail
-
 class Swapchain {
 public:
-  void create(VulkanDevice &device, SDL_Window *window) {
+  void create(VulkanDevice &device, SDL_Window *window, PresentModePreference present_mode = PresentModePreference::Fifo) {
     device_ = &device;
     window_ = window;
+    present_preference_ = present_mode;
     create_swapchain(nullptr);
     create_image_views();
   }
@@ -57,6 +53,10 @@ public:
     return swapchain_images_.size();
   }
 
+  [[nodiscard]] auto present_mode() const -> vk::PresentModeKHR {
+    return present_mode_;
+  }
+
 private:
   [[nodiscard]] static auto choose_min_image_count(const vk::SurfaceCapabilitiesKHR &capabilities) -> std::uint32_t {
     auto image_count = std::max(3U, capabilities.minImageCount);
@@ -75,9 +75,18 @@ private:
     return preferred != formats.end() ? *preferred : formats.front();
   }
 
-  [[nodiscard]] static auto choose_present_mode(const std::vector<vk::PresentModeKHR> &modes) -> vk::PresentModeKHR {
-    if (std::ranges::find(modes, detail::desired_present_mode) != modes.end())
-      return detail::desired_present_mode;
+  [[nodiscard]] static auto choose_present_mode(
+      const std::vector<vk::PresentModeKHR> &modes,
+      PresentModePreference preference) -> vk::PresentModeKHR {
+    const vk::PresentModeKHR primary =
+        preference == PresentModePreference::Mailbox ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+
+    if (std::ranges::find(modes, primary) != modes.end())
+      return primary;
+
+    if (preference == PresentModePreference::Mailbox &&
+        std::ranges::find(modes, vk::PresentModeKHR::eImmediate) != modes.end())
+      return vk::PresentModeKHR::eImmediate;
 
     return vk::PresentModeKHR::eFifo;
   }
@@ -165,11 +174,12 @@ private:
         .pQueueFamilyIndices = separate_present_queue ? queue_family_indices.data() : nullptr,
         .preTransform = choose_pre_transform(capabilities.supportedTransforms, capabilities.currentTransform),
         .compositeAlpha = choose_composite_alpha(capabilities.supportedCompositeAlpha),
-        .presentMode = choose_present_mode(present_modes),
+        .presentMode = choose_present_mode(present_modes, present_preference_),
         .clipped = vk::True,
         .oldSwapchain = old_swapchain,
     };
 
+    present_mode_ = create_info.presentMode;
     swapchain_ = vk::raii::SwapchainKHR(device_->device(), create_info);
     swapchain_images_ = swapchain_.getImages();
   }
@@ -199,6 +209,8 @@ private:
 
   VulkanDevice *device_{nullptr};
   SDL_Window *window_{nullptr};
+  PresentModePreference present_preference_{PresentModePreference::Fifo};
+  vk::PresentModeKHR present_mode_{vk::PresentModeKHR::eFifo};
   vk::raii::SwapchainKHR swapchain_{nullptr};
   vk::Format swapchain_image_format_{vk::Format::eUndefined};
   vk::Extent2D swapchain_extent_{};

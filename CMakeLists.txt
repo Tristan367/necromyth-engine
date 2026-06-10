@@ -115,6 +115,10 @@ target_include_directories(vce_gltf_impl SYSTEM PRIVATE
 )
 target_compile_features(vce_gltf_impl PRIVATE cxx_std_23)
 
+add_library(vce_stb STATIC src/renderer/texture_image_stb.cpp)
+target_include_directories(vce_stb SYSTEM PRIVATE "${STB_INCLUDE_DIR}")
+target_compile_features(vce_stb PRIVATE cxx_std_23)
+
 add_library(vce_engine INTERFACE)
 add_library(VCE::Engine ALIAS vce_engine)
 
@@ -139,6 +143,7 @@ target_link_libraries(vce_engine INTERFACE
     Vulkan::Vulkan
     glm::glm
     vce_gltf_impl
+    vce_stb
 )
 
 add_dependencies(vce_engine vce_shaders)

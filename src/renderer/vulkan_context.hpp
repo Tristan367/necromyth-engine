@@ -1,6 +1,8 @@
 #pragma once
 
 #include "engine_config.hpp"
+#include "renderer/frame_overlay.hpp"
+#include "renderer/render_host.hpp"
 #include "renderer/depth_image.hpp"
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
@@ -9,6 +11,7 @@
 #include "renderer/pipeline_registry.hpp"
 #include "renderer/scene_gpu.hpp"
 #include "renderer/shadow_map.hpp"
+#include "renderer/render_settings.hpp"
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_array.hpp"
 #include "renderer/texture_table.hpp"
@@ -20,10 +23,11 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_timer.h>
-#include <SDL3/SDL_video.h>
 
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -42,7 +46,7 @@ public:
   VulkanContext(SDL_Window *window, const EngineConfig &config, const Scene &scene)
       : window_(window),
         device_(window, config.msaa, config.gpu_device_index) {
-    swapchain_.create(device_, window);
+    swapchain_.create(device_, window, config.present_mode);
     create_pipeline_cache();
     create_msaa_color_image();
     create_depth_image();
@@ -85,6 +89,12 @@ public:
       std::cout << "MSAA samples: " << vk::to_string(device_.msaa_samples()) << '\n';
     else
       std::cout << "MSAA: off\n";
+    std::cout << "Present mode: " << present_mode_name(swapchain_.present_mode())
+              << " (set ENGINE_PRESENT=mailbox to uncap for profiling)\n";
+  }
+
+  [[nodiscard]] auto present_mode() const -> vk::PresentModeKHR {
+    return swapchain_.present_mode();
   }
 
   VulkanContext(const VulkanContext &) = delete;
@@ -93,8 +103,19 @@ public:
   auto operator=(VulkanContext &&) -> VulkanContext & = delete;
 
   ~VulkanContext() {
-    if (*device_.device() != nullptr)
-      device_.wait_idle();
+    shutdown();
+  }
+
+  void shutdown() {
+    if (gpu_shutdown_complete_ || *device_.device() == nullptr)
+      return;
+
+    for (const vk::raii::Fence &fence : in_flight_fences_) {
+      (void)device_.device().waitForFences(*fence, vk::True, UINT64_MAX);
+    }
+
+    device_.wait_idle();
+    gpu_shutdown_complete_ = true;
   }
 
   [[nodiscard]] auto gpu_name() const -> const std::string & {
@@ -104,6 +125,25 @@ public:
   void mark_framebuffer_resized() {
     framebuffer_resized_ = true;
     last_resize_ticks_ = SDL_GetTicks();
+  }
+
+  void set_frame_overlay(FrameOverlayCallback callback) {
+    frame_overlay_ = std::move(callback);
+  }
+
+  [[nodiscard]] auto render_host_info() const -> RenderHostInfo {
+    return RenderHostInfo{
+        .instance = *device_.instance(),
+        .physical_device = device_.physical_device_handle(),
+        .device = device_.device_handle(),
+        .graphics_queue = device_.graphics_queue_handle(),
+        .graphics_queue_family_index = device_.queue_families().graphics,
+        .pipeline_cache = *pipeline_cache_,
+        .swapchain_color_format = swapchain_.image_format(),
+        .swapchain_extent = swapchain_.extent(),
+        .swapchain_image_count = static_cast<std::uint32_t>(swapchain_.image_count()),
+        .frames_in_flight = detail::max_frames_in_flight,
+    };
   }
 
   void draw_frame(Scene &scene) {
@@ -150,6 +190,11 @@ public:
     DirectionalLightShadowSettings shadow_settings = scene.shadow_settings();
     shadow_settings.map_resolution = shadow_map_.extent().width;
 
+    if (!logged_shadow_filter_mode_) {
+      std::cout << "Shadow filter: " << shadow_filter_mode_name(shadow_settings.filter_mode) << '\n';
+      logged_shadow_filter_mode_ = true;
+    }
+
     if (shadow_settings.point_shadow_filter != last_point_shadow_filter_) {
       descriptor_resources_.update_shadow_sampler(
           device_.device(),
@@ -176,7 +221,7 @@ public:
                 scene.directional_light(),
                 shadow_settings),
             .shadow_params = glm::vec4(
-                shadow_settings.pcf_filtering ? 1.0F : 0.0F,
+                shadow_filter_mode_param(shadow_settings.filter_mode),
                 0.0F,
                 0.0F,
                 0.0F),
@@ -188,7 +233,14 @@ public:
     command_buffer.reset();
     command_buffer.begin({});
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, draw_list_);
-    pass_recorder().record_main_pass(command_buffer, frame_index_, image_index, pass_layouts_, draw_list_);
+    const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
+    pass_recorder().record_main_pass(
+        command_buffer,
+        frame_index_,
+        image_index,
+        pass_layouts_,
+        draw_list_,
+        overlay_ptr);
 
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
@@ -418,6 +470,9 @@ private:
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};
   bool last_point_shadow_filter_{false};
+  bool logged_shadow_filter_mode_{false};
+  bool gpu_shutdown_complete_{false};
+  FrameOverlayCallback frame_overlay_;
   std::uint64_t last_resize_ticks_{};
 };
 

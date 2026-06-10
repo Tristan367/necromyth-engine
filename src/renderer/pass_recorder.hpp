@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/frame_overlay.hpp"
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
 #include "renderer/image_barrier.hpp"
@@ -31,6 +32,8 @@ struct PassLayoutState {
 };
 
 struct DrawBindState {
+  static constexpr std::uint32_t k_unbound_mesh = UINT32_MAX;
+
   struct MaterialKey {
     TextureSource texture_source{};
     std::uint32_t descriptor_index{};
@@ -39,8 +42,8 @@ struct DrawBindState {
   };
 
   std::optional<PipelineId> pipeline;
-  std::optional<std::uint32_t> mesh_index;
   std::optional<MaterialKey> material;
+  std::uint32_t mesh_index{k_unbound_mesh};
 };
 
 struct PassRecorder {
@@ -93,7 +96,7 @@ struct PassRecorder {
   }
 
   void bind_mesh_buffers(vk::raii::CommandBuffer &command_buffer, std::uint32_t mesh_index, DrawBindState &state) const {
-    if (state.mesh_index && *state.mesh_index == mesh_index)
+    if (state.mesh_index == mesh_index)
       return;
 
     const MeshGpu &mesh = mesh_gpus[mesh_index];
@@ -108,13 +111,13 @@ struct PassRecorder {
       vk::raii::CommandBuffer &command_buffer,
       PipelineId pipeline_id,
       DrawBindState &state) const {
-    if (state.pipeline && *state.pipeline == pipeline_id)
+    if (state.pipeline.has_value() && *state.pipeline == pipeline_id)
       return;
 
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelines.pipeline(pipeline_id));
     state.pipeline = pipeline_id;
     state.material.reset();
-    state.mesh_index.reset();
+    state.mesh_index = DrawBindState::k_unbound_mesh;
   }
 
   void bind_material(
@@ -130,7 +133,7 @@ struct PassRecorder {
         .descriptor_index = *descriptor_index,
     };
 
-    if (state.material && *state.material == material_key)
+    if (state.material.has_value() && *state.material == material_key)
       return;
 
     command_buffer.bindDescriptorSets(
@@ -364,7 +367,8 @@ struct PassRecorder {
       std::uint32_t frame_index,
       std::uint32_t image_index,
       PassLayoutState &layouts,
-      const std::vector<DrawCommand> &draw_list) const {
+      const std::vector<DrawCommand> &draw_list,
+      const FrameOverlayCallback *overlay = nullptr) const {
     transition_swapchain_to_color_attachment(command_buffer, image_index, layouts);
 
     if (msaa_enabled)
@@ -426,6 +430,40 @@ struct PassRecorder {
       draw_mesh(command_buffer, draw, bind_state);
 
     command_buffer.endRendering();
+
+    if (overlay != nullptr && *overlay) {
+      const vk::RenderingAttachmentInfo overlay_color{
+          .imageView = *swapchain.image_views()[image_index],
+          .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+          .loadOp = vk::AttachmentLoadOp::eLoad,
+          .storeOp = vk::AttachmentStoreOp::eStore,
+      };
+      const vk::RenderingInfo overlay_info{
+          .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain.extent()},
+          .layerCount = 1,
+          .colorAttachmentCount = 1,
+          .pColorAttachments = &overlay_color,
+      };
+      command_buffer.beginRendering(overlay_info);
+      command_buffer.setViewport(
+          0,
+          vk::Viewport{
+              0.0F,
+              0.0F,
+              static_cast<float>(swapchain.extent().width),
+              static_cast<float>(swapchain.extent().height),
+              0.0F,
+              1.0F,
+          });
+      command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain.extent()});
+      (*overlay)(FrameOverlayContext{
+          .command_buffer = command_buffer,
+          .frame_index = frame_index,
+          .image_index = image_index,
+          .extent = swapchain.extent(),
+      });
+      command_buffer.endRendering();
+    }
 
     transition_image_layout(
         command_buffer,
