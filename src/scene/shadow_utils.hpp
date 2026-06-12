@@ -47,7 +47,6 @@ struct DirectionalLightShadowSettings {
   float footprint_focus_y{0.0F};
   // Single-cascade footprint half-extent (meters); also scales the dual near cascade.
   float ortho_half_extent{64.0F};
-  bool texel_snapping{true};
   ShadowFilterMode filter_mode{ShadowFilterMode::Pcf3x3};
   // Shadow compare sampler: false = bilinear (default), true = nearest.
   bool point_shadow_filter{false};
@@ -67,7 +66,7 @@ struct DirectionalShadowCascadeData {
 };
 
 // Startup-only fields (cascade mode, filter, compare sampler, map resolution) are frozen in
-// VulkanContext; runtime Scene settings may change texel snap, fade, and blend width only.
+// VulkanContext; runtime Scene settings may change fade and blend width only.
 [[nodiscard]] inline auto effective_shadow_settings(
     const DirectionalLightShadowSettings &scene_settings,
     ShadowCascadeMode startup_cascade_mode,
@@ -140,9 +139,6 @@ namespace detail {
 
   if (const char *env = std::getenv("ENGINE_SHADOW_DISTANCE"); env != nullptr && env[0] != '\0')
     settings.max_distance = std::max(1.0F, static_cast<float>(std::atof(env)));
-
-  if (const char *env = std::getenv("ENGINE_SHADOW_TEXEL_SNAP"); env != nullptr && env[0] != '\0')
-    settings.texel_snapping = env[0] != '0';
 
   if (const char *env = std::getenv("ENGINE_SHADOW_FILTER"); env != nullptr && env[0] != '\0') {
     if (const std::optional<ShadowFilterMode> mode = detail::parse_shadow_filter_mode(env))
@@ -219,20 +215,13 @@ namespace detail {
 
   float half_x = radius;
   float half_y = radius;
-  glm::vec3 snapped_center = focus_center;
-
-  if (settings.texel_snapping) {
-    const std::array<float, 4> snapped =
-        snap_symmetric_bounds(center_x, center_y, radius, texel_world_size);
-    half_x = (snapped[1] - snapped[0]) * 0.5F;
-    half_y = (snapped[3] - snapped[2]) * 0.5F;
-    snapped_center =
-        x_axis * ((snapped[0] + snapped[1]) * 0.5F) + y_axis * ((snapped[2] + snapped[3]) * 0.5F) +
-        z_axis * center_z;
-  } else {
-    snapped_center =
-        x_axis * center_x + y_axis * center_y + z_axis * center_z;
-  }
+  const std::array<float, 4> snapped =
+      snap_symmetric_bounds(center_x, center_y, radius, texel_world_size);
+  half_x = (snapped[1] - snapped[0]) * 0.5F;
+  half_y = (snapped[3] - snapped[2]) * 0.5F;
+  const glm::vec3 snapped_center =
+      x_axis * ((snapped[0] + snapped[1]) * 0.5F) + y_axis * ((snapped[2] + snapped[3]) * 0.5F) +
+      z_axis * center_z;
 
   const glm::mat4 light_view = glm::lookAt(
       snapped_center + light_dir * radius,

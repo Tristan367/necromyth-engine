@@ -110,9 +110,9 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 
 Focus: **camera footprint** ortho on camera XZ — stable when rotating (Sascha-style, not view-frustum fit).
 
-**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping on, **dual cascades**, cascade blend **3** m, `max_distance` **100** (split placement only), single `ortho_half_extent` **64**, dual far footprint **127**, coverage fade **0.08**. Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_FADE_WIDTH`, `ENGINE_SHADOW_CASCADES=1|2` (default **2**).
+**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping (always on), **dual cascades**, cascade blend **3** m, `max_distance` **100** (split placement only), single `ortho_half_extent` **64**, dual far footprint **127**, coverage fade **0.08**. Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_FADE_WIDTH`, `ENGINE_SHADOW_CASCADES=1|2` (default **2**).
 
-**Startup-only** (restart to change): `filter_mode`, `point_shadow_filter`, `cascade_mode`. **Runtime:** `texel_snapping`, `coverage_fade_uv_width`, `cascade_blend_range` (dual).
+**Startup-only** (restart to change): `filter_mode`, `point_shadow_filter`, `cascade_mode`. **Runtime:** `coverage_fade_uv_width`, `cascade_blend_range` (dual).
 
 **Dual cascades:** two full shadow depth passes, view-Z split with band-limited cross-fade (dual-samples only inside the blend band). **Single cascade** (`ENGINE_SHADOW_CASCADES=1`): one layer, no blending, smaller footprint.
 
