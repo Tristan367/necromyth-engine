@@ -57,6 +57,7 @@ struct PassRecorder {
   const TextureArray &texture_array;
   const std::vector<MeshGpu> &mesh_gpus;
   bool msaa_enabled{};
+  std::uint32_t shadow_cascade_count{1};
 
   void bind_frame_descriptor_set(vk::raii::CommandBuffer &command_buffer, std::uint32_t frame_index) const {
     command_buffer.bindDescriptorSets(
@@ -148,6 +149,7 @@ struct PassRecorder {
   void draw_shadow_mesh(
       vk::raii::CommandBuffer &command_buffer,
       const DrawCommand &draw,
+      std::uint32_t cascade_index,
       DrawBindState &state) const {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
@@ -155,7 +157,10 @@ struct PassRecorder {
     bind_pipeline(command_buffer, PipelineId::ShadowDepth, state);
     bind_mesh_buffers(command_buffer, draw.mesh_index, state);
 
-    const TexturedPushConstants push_constants{.model = draw.model};
+    const TexturedPushConstants push_constants{
+        .model = draw.model,
+        .shadow_cascade_index = cascade_index,
+    };
     command_buffer.pushConstants(
         pipelines.layout(),
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
@@ -309,44 +314,47 @@ struct PassRecorder {
         vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
         shadow_map.aspect_mask());
 
-    const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
-    const vk::RenderingAttachmentInfo depth_attachment{
-        .imageView = shadow_map.view(),
-        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = clear_depth,
-    };
-    const vk::RenderingInfo rendering_info{
-        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = shadow_map.extent()},
-        .layerCount = 1,
-        .colorAttachmentCount = 0,
-        .pDepthAttachment = &depth_attachment,
-    };
-
-    command_buffer.beginRendering(rendering_info);
-    bind_frame_descriptor_set(command_buffer, frame_index);
-    command_buffer.setViewport(
-        0,
-        vk::Viewport{
-            0.0F,
-            0.0F,
-            static_cast<float>(shadow_map.extent().width),
-            static_cast<float>(shadow_map.extent().height),
-            0.0F,
-            1.0F,
-        });
-    command_buffer.setScissor(0, vk::Rect2D{{0, 0}, shadow_map.extent()});
-    command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
-
     std::vector<DrawCommand> shadow_draws;
     build_shadow_draw_list(draw_list, shadow_draws);
 
-    DrawBindState bind_state;
-    for (const DrawCommand &draw : shadow_draws)
-      draw_shadow_mesh(command_buffer, draw, bind_state);
+    for (std::uint32_t cascade_index = 0; cascade_index < shadow_cascade_count; ++cascade_index) {
+      const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
+      const vk::RenderingAttachmentInfo depth_attachment{
+          .imageView = shadow_map.layer_view(cascade_index),
+          .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+          .loadOp = vk::AttachmentLoadOp::eClear,
+          .storeOp = vk::AttachmentStoreOp::eStore,
+          .clearValue = clear_depth,
+      };
+      const vk::RenderingInfo rendering_info{
+          .renderArea = {.offset = {.x = 0, .y = 0}, .extent = shadow_map.extent()},
+          .layerCount = 1,
+          .colorAttachmentCount = 0,
+          .pDepthAttachment = &depth_attachment,
+      };
 
-    command_buffer.endRendering();
+      command_buffer.beginRendering(rendering_info);
+      if (cascade_index == 0)
+        bind_frame_descriptor_set(command_buffer, frame_index);
+      command_buffer.setViewport(
+          0,
+          vk::Viewport{
+              0.0F,
+              0.0F,
+              static_cast<float>(shadow_map.extent().width),
+              static_cast<float>(shadow_map.extent().height),
+              0.0F,
+              1.0F,
+          });
+      command_buffer.setScissor(0, vk::Rect2D{{0, 0}, shadow_map.extent()});
+      command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
+
+      DrawBindState bind_state;
+      for (const DrawCommand &draw : shadow_draws)
+        draw_shadow_mesh(command_buffer, draw, cascade_index, bind_state);
+
+      command_buffer.endRendering();
+    }
 
     transition_image_layout(
         command_buffer,

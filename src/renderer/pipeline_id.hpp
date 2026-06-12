@@ -30,7 +30,10 @@ enum class PipelineId : std::uint8_t {
   }
 }
 
-[[nodiscard]] inline auto textured_fragment_entry(ShadowFilterMode filter, MeshAlphaMode alpha_mode) -> const char * {
+[[nodiscard]] inline auto textured_fragment_entry(
+    ShadowFilterMode filter,
+    MeshAlphaMode alpha_mode,
+    ShadowCascadeMode cascade_mode) -> const char * {
   static constexpr std::array<const char *, 3> hard{
       "fragOpaqueHard",
       "fragCutoutHard",
@@ -41,8 +44,23 @@ enum class PipelineId : std::uint8_t {
       "fragCutoutPcf",
       "fragA2CPcf",
   };
+  static constexpr std::array<const char *, 3> hard_csm2{
+      "fragOpaqueHardCsm2",
+      "fragCutoutHardCsm2",
+      "fragA2CHardCsm2",
+  };
+  static constexpr std::array<const char *, 3> pcf_csm2{
+      "fragOpaquePcfCsm2",
+      "fragCutoutPcfCsm2",
+      "fragA2CPcfCsm2",
+  };
 
   const auto alpha_index = static_cast<std::size_t>(alpha_mode);
+  if (cascade_mode == ShadowCascadeMode::Dual) {
+    if (filter == ShadowFilterMode::Pcf3x3)
+      return pcf_csm2[alpha_index];
+    return hard_csm2[alpha_index];
+  }
   if (filter == ShadowFilterMode::Pcf3x3)
     return pcf[alpha_index];
   return hard[alpha_index];
@@ -75,6 +93,7 @@ enum class PipelineId : std::uint8_t {
 
 struct PipelineBuildProfile {
   ShadowFilterMode shadow_filter{ShadowFilterMode::Pcf3x3};
+  ShadowCascadeMode cascade_mode{ShadowCascadeMode::Single};
   std::array<bool, 3> textured_alpha_modes{{true, false, false}};
 };
 

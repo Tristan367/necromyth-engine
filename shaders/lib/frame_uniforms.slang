@@ -6,9 +6,11 @@ struct FrameUniforms {
     float4x4 viewSky;
     float4 lightDirection;
     float4 lightColor;
-    float4x4 lightViewProj;
-    // x = UV fade width, y = enabled (1/0)
-    float4 shadowFadeParams;
+    float4x4 lightViewProj[2];
+    // x = split distance (view depth), y = split blend range, z = cascade count
+    float4 cascadeParams;
+    // x = UV coverage fade width (0 = hard edge)
+    float4 shadowFadeWidth;
 };
 [[vk::binding(0, 0)]]
 ConstantBuffer<FrameUniforms> ubo;

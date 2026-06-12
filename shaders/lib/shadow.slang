@@ -1,5 +1,5 @@
 [[vk::binding(2, 0)]]
-Sampler2D shadowMap;
+Sampler2DArray shadowMap;
 
 static const float4x4 biasMatrix = float4x4(
     0.5, 0.0, 0.0, 0.5,
@@ -16,40 +16,43 @@ float shadowDepthBias(float cosTheta) {
     return max(kMinDepthBias, kSlopeScale * sinTheta);
 }
 
-float textureProj(float3 projection, float2 offset, float bias) {
-    return shadowMap.SampleCmp(projection.xy + offset, projection.z - bias);
+float textureProj(float3 projection, uint layer, float2 offset, float bias) {
+    return shadowMap.SampleCmp(float3(projection.xy + offset, float(layer)), projection.z - bias);
 }
 
-float filterPCF(float3 projection, float bias) {
-    int2 texDim;
-    shadowMap.GetDimensions(texDim.x, texDim.y);
+float filterPCF(float3 projection, uint layer, float bias) {
+    uint width;
+    uint height;
+    uint layers;
+    shadowMap.GetDimensions(width, height, layers);
     const float scale = 0.75;
-    const float dx = scale / float(texDim.x);
-    const float dy = scale / float(texDim.y);
+    const float dx = scale / float(width);
+    const float dy = scale / float(height);
 
     float accum = 0.0;
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y)
-            accum += textureProj(projection, float2(dx * x, dy * y), bias);
+            accum += textureProj(projection, layer, float2(dx * x, dy * y), bias);
     }
     return accum / 9.0;
 }
 
 float applyCoverageFade(float shadow, float2 projectionXY) {
-    if (ubo.shadowFadeParams.y <= 0.5)
+    const float fadeWidth = ubo.shadowFadeWidth.x;
+    if (fadeWidth <= 0.0)
         return shadow;
 
     float2 distToEdge = min(projectionXY, 1.0 - projectionXY);
     float edge = min(distToEdge.x, distToEdge.y);
-    float fade = smoothstep(0.0, ubo.shadowFadeParams.x, edge);
+    float fade = smoothstep(0.0, fadeWidth, edge);
     return lerp(1.0, shadow, fade);
 }
 
-float shadowVisibility(float3 worldPos, float3 normal, float3 lightDir, int filterMode) {
+float sampleCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, uint layer, int filterMode) {
     float cosTheta = clamp(dot(normalize(normal), lightDir), 0.0, 1.0);
     float3 receiverPos = worldPos + normalize(normal) * (kNormalOffsetScale * (1.0 - cosTheta));
 
-    float4 shadowCoord = mul(biasMatrix, mul(ubo.lightViewProj, float4(receiverPos, 1.0)));
+    float4 shadowCoord = mul(biasMatrix, mul(ubo.lightViewProj[layer], float4(receiverPos, 1.0)));
     float3 projection = shadowCoord.xyz / shadowCoord.w;
     if (projection.x < 0.0 || projection.x > 1.0 || projection.y < 0.0 || projection.y > 1.0 ||
         projection.z < 0.0 || projection.z > 1.0)
@@ -57,7 +60,33 @@ float shadowVisibility(float3 worldPos, float3 normal, float3 lightDir, int filt
 
     float bias = shadowDepthBias(cosTheta);
     float shadow = filterMode == 1
-        ? filterPCF(projection, bias)
-        : textureProj(projection, float2(0.0, 0.0), bias);
+        ? filterPCF(projection, layer, bias)
+        : textureProj(projection, layer, float2(0.0, 0.0), bias);
     return applyCoverageFade(shadow, projection.xy);
+}
+
+float shadowVisibilitySingle(float3 worldPos, float3 normal, float3 lightDir, int filterMode) {
+    return sampleCascadeShadow(worldPos, normal, lightDir, 0, filterMode);
+}
+
+float shadowVisibilityDual(float3 worldPos, float3 normal, float3 lightDir, int filterMode) {
+    float viewDepth = -((mul(ubo.view, float4(worldPos, 1.0))).z);
+    const float splitDist = ubo.cascadeParams.x;
+    const float blendRange = ubo.cascadeParams.y;
+
+    float shadow0 = sampleCascadeShadow(worldPos, normal, lightDir, 0, filterMode);
+    float shadow1 = sampleCascadeShadow(worldPos, normal, lightDir, 1, filterMode);
+
+    if (blendRange <= 0.0)
+        return viewDepth < splitDist ? shadow0 : shadow1;
+
+    const float blendStart = splitDist - blendRange;
+    const float blendEnd = splitDist + blendRange;
+    if (viewDepth <= blendStart)
+        return shadow0;
+    if (viewDepth >= blendEnd)
+        return shadow1;
+
+    float t = (viewDepth - blendStart) / max(blendEnd - blendStart, 1e-5);
+    return lerp(shadow0, shadow1, t);
 }

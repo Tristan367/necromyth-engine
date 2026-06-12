@@ -109,11 +109,11 @@ Focus modes (`ShadowFocusMode`):
 - **`CameraFootprint`** (default) — ortho on camera XZ; stable when rotating.
 - **`ViewWedge`** — Sascha cascade-0 frustum fit (opt-in).
 
-**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping on, camera footprint, `max_distance` **100**, `ortho_half_extent` **127**, **coverage edge fade on** (`coverage_fade_uv_width` 0.08). Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_FOCUS`, `ENGINE_SHADOW_COVERAGE_FADE`, `ENGINE_SHADOW_FADE_WIDTH`.
+**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping on, camera footprint, `max_distance` **100**, `ortho_half_extent` **127**, coverage fade width **0.08** (set **0** for hard map edge). Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_FOCUS`, `ENGINE_SHADOW_FADE_WIDTH`, `ENGINE_SHADOW_CASCADES=1|2`.
 
-Quality toggles on `Scene::shadow_settings()`: `filter_mode` and `point_shadow_filter` are **startup-only** — each filter mode is one pre-built pipeline set; only alpha modes present in the scene get a `VkPipeline`. Runtime changes to filter or point filter require restart. `texel_snapping`, `focus_mode`, and **`coverage_fade`** apply live.
+Quality toggles on `Scene::shadow_settings()`: `filter_mode`, `point_shadow_filter`, and `cascade_mode` are **startup-only** — separate pre-built pipeline sets. Runtime: `texel_snapping`, `focus_mode`, `coverage_fade_uv_width`, `cascade_blend_range` (dual mode).
 
-A **2-cascade** fitted path (texture array, two shadow passes) can be added as a separate pipeline family without replacing this fast path.
+**Dual cascades** (`ENGINE_SHADOW_CASCADES=2`): two shadow depth passes into a 2-layer texture array; frustum-fitted splits with blend at the boundary (standard CSM, same idea as Godot/Sascha). Single-cascade remains the default fast path.
 
 **Alpha surfaces:** cutout discard or alpha-to-coverage with MSAA — no true alpha blend pass. Use `RenderLayer::AlphaTested` for ordered foliage/fences.
 

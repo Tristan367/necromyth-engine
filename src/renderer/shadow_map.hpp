@@ -11,14 +11,17 @@ namespace engine {
 class ShadowMap {
 public:
   static constexpr std::uint32_t k_default_size = 2048;
+  static constexpr std::uint32_t k_max_layers = 2;
 
   void create(
       const vk::raii::PhysicalDevice &physical_device,
       vk::raii::Device &device,
-      std::uint32_t size = k_default_size) {
+      std::uint32_t size = k_default_size,
+      std::uint32_t layer_count = 1) {
     physical_device_ = &physical_device;
     device_ = &device;
     size_ = std::max(256U, size);
+    layer_count_ = std::clamp(layer_count, 1U, k_max_layers);
     format_ = find_shadow_format(physical_device);
     create_resources();
   }
@@ -32,7 +35,15 @@ public:
   }
 
   [[nodiscard]] auto view() const -> vk::ImageView {
-    return *view_;
+    return *array_view_;
+  }
+
+  [[nodiscard]] auto layer_view(std::uint32_t layer) const -> vk::ImageView {
+    return *layer_views_.at(layer);
+  }
+
+  [[nodiscard]] auto layer_count() const -> std::uint32_t {
+    return layer_count_;
   }
 
   [[nodiscard]] auto sampler_linear_compare() const -> vk::Sampler {
@@ -58,7 +69,7 @@ public:
   [[nodiscard]] auto descriptor_image_info(bool point_filter = false) const -> vk::DescriptorImageInfo {
     return {
         .sampler = sampler_for_settings(point_filter),
-        .imageView = *view_,
+        .imageView = *array_view_,
         .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
     };
   }
@@ -96,7 +107,7 @@ private:
         .format = format_,
         .extent = {size_, size_, 1},
         .mipLevels = 1,
-        .arrayLayers = 1,
+        .arrayLayers = layer_count_,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
@@ -117,20 +128,39 @@ private:
         });
     image_.bindMemory(*memory_, 0);
 
-    view_ = vk::raii::ImageView(
+    array_view_ = vk::raii::ImageView(
         *device_,
         vk::ImageViewCreateInfo{
             .image = *image_,
-            .viewType = vk::ImageViewType::e2D,
+            .viewType = vk::ImageViewType::e2DArray,
             .format = format_,
             .subresourceRange = {
                 .aspectMask = vk::ImageAspectFlagBits::eDepth,
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = 1,
+                .layerCount = layer_count_,
             },
         });
+
+    layer_views_.clear();
+    layer_views_.reserve(layer_count_);
+    for (std::uint32_t layer = 0; layer < layer_count_; ++layer) {
+      layer_views_.emplace_back(
+          *device_,
+          vk::ImageViewCreateInfo{
+              .image = *image_,
+              .viewType = vk::ImageViewType::e2D,
+              .format = format_,
+              .subresourceRange = {
+                  .aspectMask = vk::ImageAspectFlagBits::eDepth,
+                  .baseMipLevel = 0,
+                  .levelCount = 1,
+                  .baseArrayLayer = layer,
+                  .layerCount = 1,
+              },
+          });
+    }
 
     const vk::Filter linear_filter =
         format_is_filterable(*physical_device_, format_) ? vk::Filter::eLinear : vk::Filter::eNearest;
@@ -177,9 +207,11 @@ private:
   vk::raii::Device *device_{};
   vk::Format format_{vk::Format::eUndefined};
   std::uint32_t size_{k_default_size};
+  std::uint32_t layer_count_{1};
   vk::raii::Image image_{nullptr};
   vk::raii::DeviceMemory memory_{nullptr};
-  vk::raii::ImageView view_{nullptr};
+  vk::raii::ImageView array_view_{nullptr};
+  std::vector<vk::raii::ImageView> layer_views_;
   vk::raii::Sampler sampler_linear_compare_{nullptr};
   vk::raii::Sampler sampler_point_compare_{nullptr};
 };

@@ -15,6 +15,7 @@ struct TexturedPushConstants {
   alignas(16) glm::mat4 model{};
   std::uint32_t texture_array_layer{0};
   std::uint32_t sample_texture_array{0};
+  std::uint32_t shadow_cascade_index{0};
 };
 
 } // namespace engine

@@ -88,6 +88,12 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -entry fragOpaquePcf
                 -entry fragCutoutPcf
                 -entry fragA2CPcf
+                -entry fragOpaqueHardCsm2
+                -entry fragCutoutHardCsm2
+                -entry fragA2CHardCsm2
+                -entry fragOpaquePcfCsm2
+                -entry fragCutoutPcfCsm2
+                -entry fragA2CPcfCsm2
                 -o "${SHADER_SPIRV}"
             DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
             COMMENT "Compiling ${SHADER_NAME}.slang"

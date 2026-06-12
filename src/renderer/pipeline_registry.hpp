@@ -122,7 +122,7 @@ private:
           mesh_attributes,
           *pipeline_cache_,
           raster,
-          textured_fragment_entry(profile_.shadow_filter, alpha_mode));
+          textured_fragment_entry(profile_.shadow_filter, alpha_mode, profile_.cascade_mode));
     }
 
     pipelines_[static_cast<std::size_t>(PipelineId::ShadowDepth)] = create_depth_only_graphics_pipeline(

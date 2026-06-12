@@ -4,5 +4,6 @@
 
 [shader("vertex")]
 float4 vertMain(VSInput input) : SV_Position {
-    return mul(ubo.lightViewProj, mul(pushConstants.model, float4(input.inPosition, 1.0)));
+    uint cascade = pushConstants.shadowCascadeIndex;
+    return mul(ubo.lightViewProj[cascade], mul(pushConstants.model, float4(input.inPosition, 1.0)));
 }

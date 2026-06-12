@@ -49,12 +49,15 @@ public:
         msaa_config_(resolve_msaa_for_scene(config.msaa, scene_uses_alpha_to_coverage(scene.instances()))),
         msaa_boosted_for_a2c_(!config.msaa.enabled && msaa_config_.enabled),
         startup_point_shadow_filter_(scene.shadow_settings().point_shadow_filter),
+        startup_cascade_mode_(scene.shadow_settings().cascade_mode),
         device_(window, msaa_config_, config.gpu_device_index) {
     swapchain_.create(device_, window, config.present_mode);
     create_pipeline_cache();
     create_msaa_color_image();
     create_depth_image();
-    create_shadow_map(scene.shadow_settings().map_resolution);
+    create_shadow_map(
+        scene.shadow_settings().map_resolution,
+        shadow_cascade_layer_count(scene.shadow_settings().cascade_mode));
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -234,8 +237,15 @@ public:
     if (!logged_shadow_filter_mode_) {
       std::cout << "Shadow filter: " << shadow_filter_mode_name(shadow_settings.filter_mode)
                 << " (restart to change; ENGINE_SHADOW_FILTER)\n";
+      std::cout << "Shadow cascades: " << shadow_cascade_mode_name(shadow_settings.cascade_mode)
+                << " (restart to change; ENGINE_SHADOW_CASCADES=1|2)\n";
       logged_shadow_filter_mode_ = true;
     }
+
+    const DirectionalShadowCascadeData cascades = directional_shadow_cascades(
+        scene.camera(),
+        scene.directional_light(),
+        shadow_settings);
 
     uniform_buffers_.write(
         frame_index_,
@@ -250,15 +260,13 @@ public:
             .light_color = glm::vec4(
                 scene.directional_light().color * scene.directional_light().intensity,
                 scene.directional_light().ambient),
-            .light_view_proj = directional_light_view_projection(
-                scene.camera(),
-                scene.directional_light(),
-                shadow_settings),
-            .shadow_fade_params = glm::vec4(
-                shadow_settings.coverage_fade_uv_width,
-                shadow_settings.coverage_fade ? 1.0F : 0.0F,
-                0.0F,
+            .light_view_proj = cascades.light_view_proj,
+            .cascade_params = glm::vec4(
+                cascades.split_distance,
+                cascades.split_blend_range,
+                static_cast<float>(cascades.count),
                 0.0F),
+            .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
 
     build_draw_list(scene, draw_list_);
@@ -329,6 +337,7 @@ private:
         .texture_array = texture_array_,
         .mesh_gpus = mesh_gpus_,
         .msaa_enabled = device_.msaa_enabled(),
+        .shadow_cascade_count = shadow_cascade_layer_count(startup_cascade_mode_),
     };
   }
 
@@ -350,8 +359,8 @@ private:
         device_.msaa_samples());
   }
 
-  void create_shadow_map(std::uint32_t resolution) {
-    shadow_map_.create(device_.physical_device(), device_.device(), resolution);
+  void create_shadow_map(std::uint32_t resolution, std::uint32_t layer_count) {
+    shadow_map_.create(device_.physical_device(), device_.device(), resolution, layer_count);
   }
 
   void create_depth_image() {
@@ -415,6 +424,7 @@ private:
   void create_pipelines(const Scene &scene) {
     const PipelineBuildProfile profile{
         .shadow_filter = scene.shadow_settings().filter_mode,
+        .cascade_mode = scene.shadow_settings().cascade_mode,
         .textured_alpha_modes = collect_used_alpha_modes(scene.instances()),
     };
 
@@ -517,6 +527,7 @@ private:
   MsaaSettings msaa_config_{};
   bool msaa_boosted_for_a2c_{false};
   bool startup_point_shadow_filter_{false};
+  ShadowCascadeMode startup_cascade_mode_{ShadowCascadeMode::Single};
   VulkanDevice device_;
   Swapchain swapchain_;
   vk::raii::PipelineCache pipeline_cache_{nullptr};

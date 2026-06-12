@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/buffer.hpp"
+#include "scene/shadow_utils.hpp"
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -20,8 +21,9 @@ struct FrameUniformBufferObject {
   alignas(16) glm::mat4 view_sky{};
   alignas(16) glm::vec4 light_direction{};
   alignas(16) glm::vec4 light_color{};
-  alignas(16) glm::mat4 light_view_proj{};
-  alignas(16) glm::vec4 shadow_fade_params{};
+  alignas(16) std::array<glm::mat4, k_max_shadow_cascades> light_view_proj{};
+  alignas(16) glm::vec4 cascade_params{};
+  alignas(16) glm::vec4 shadow_fade_width{};
 };
 
 [[nodiscard]] inline auto view_without_translation(const glm::mat4 &view) -> glm::mat4 {

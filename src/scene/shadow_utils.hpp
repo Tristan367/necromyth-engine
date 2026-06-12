@@ -36,6 +36,13 @@ enum class ShadowFilterMode : std::uint8_t {
   Pcf3x3 = 1,
 };
 
+enum class ShadowCascadeMode : std::uint8_t {
+  Single = 1,
+  Dual = 2,
+};
+
+inline constexpr std::uint32_t k_max_shadow_cascades = 2;
+
 struct DirectionalLightShadowSettings {
   float max_distance{100.0F};
   std::uint32_t map_resolution{2048};
@@ -46,10 +53,33 @@ struct DirectionalLightShadowSettings {
   ShadowFilterMode filter_mode{ShadowFilterMode::Pcf3x3};
   // false = bilinear compare fetch (default); true = nearest.
   bool point_shadow_filter{false};
-  // Softens shadow map UV boundary (lerp toward fully lit at edges). Runtime-toggleable.
-  bool coverage_fade{true};
+  ShadowCascadeMode cascade_mode{ShadowCascadeMode::Single};
+  float split_lambda{0.5F};
+  float cascade_blend_range{3.0F};
+  // UV-space edge fade toward fully lit; 0 = hard cutoff.
   float coverage_fade_uv_width{0.08F};
 };
+
+struct DirectionalShadowCascadeData {
+  std::uint32_t count{1};
+  std::array<glm::mat4, k_max_shadow_cascades> light_view_proj{};
+  float split_distance{0.0F};
+  float split_blend_range{0.0F};
+};
+
+[[nodiscard]] inline auto shadow_cascade_layer_count(ShadowCascadeMode mode) -> std::uint32_t {
+  return mode == ShadowCascadeMode::Dual ? 2U : 1U;
+}
+
+[[nodiscard]] inline auto shadow_cascade_mode_name(ShadowCascadeMode mode) -> const char * {
+  switch (mode) {
+  case ShadowCascadeMode::Single:
+    return "single";
+  case ShadowCascadeMode::Dual:
+    return "dual";
+  }
+  return "unknown";
+}
 
 [[nodiscard]] inline auto shadow_filter_mode_name(ShadowFilterMode mode) -> const char * {
   switch (mode) {
@@ -121,11 +151,16 @@ namespace detail {
       settings.focus_mode = ShadowFocusMode::CameraFootprint;
   }
 
-  if (const char *env = std::getenv("ENGINE_SHADOW_COVERAGE_FADE"); env != nullptr && env[0] != '\0')
-    settings.coverage_fade = env[0] != '0';
-
   if (const char *env = std::getenv("ENGINE_SHADOW_FADE_WIDTH"); env != nullptr && env[0] != '\0')
     settings.coverage_fade_uv_width = std::max(0.0F, static_cast<float>(std::atof(env)));
+
+  if (const char *env = std::getenv("ENGINE_SHADOW_CASCADES"); env != nullptr && env[0] != '\0') {
+    const int cascades = std::atoi(env);
+    if (cascades >= 2)
+      settings.cascade_mode = ShadowCascadeMode::Dual;
+    else
+      settings.cascade_mode = ShadowCascadeMode::Single;
+  }
 
   return settings;
 }
@@ -166,9 +201,11 @@ namespace detail {
   return {min_x, max_x, min_y, max_y};
 }
 
-[[nodiscard]] inline auto unproject_view_frustum_wedge(
+[[nodiscard]] inline auto unproject_frustum_slice(
     const Camera &camera,
-    float split_dist) -> std::array<glm::vec3, 8> {
+    float range_near,
+    float range_far,
+    float shadow_far) -> std::array<glm::vec3, 8> {
   std::array<glm::vec3, 8> corners = {{
       {-1.0F, 1.0F, 0.0F},
       {1.0F, 1.0F, 0.0F},
@@ -186,14 +223,27 @@ namespace detail {
     corner = world / world.w;
   }
 
-  constexpr float last_split_dist = 0.0F;
+  const float near_clip = camera.near_plane();
+  const float clip_range = std::max(shadow_far - near_clip, 0.001F);
+  const float start_norm = std::clamp((range_near - near_clip) / clip_range, 0.0F, 1.0F);
+  const float end_norm = std::clamp((range_far - near_clip) / clip_range, 0.0F, 1.0F);
+
   for (std::uint32_t j = 0; j < 4; ++j) {
     const glm::vec3 edge = corners[j + 4] - corners[j];
-    corners[j + 4] = corners[j] + edge * split_dist;
-    corners[j] = corners[j] + edge * last_split_dist;
+    corners[j] = corners[j] + edge * start_norm;
+    corners[j + 4] = corners[j] + edge * end_norm;
   }
 
   return corners;
+}
+
+[[nodiscard]] inline auto unproject_view_frustum_wedge(
+    const Camera &camera,
+    float end_norm) -> std::array<glm::vec3, 8> {
+  const float near_clip = camera.near_plane();
+  const float far_clip = camera.far_plane();
+  const float range_far = near_clip + std::clamp(end_norm, 0.0F, 1.0F) * (far_clip - near_clip);
+  return unproject_frustum_slice(camera, near_clip, range_far, far_clip);
 }
 
 [[nodiscard]] inline auto wedge_frustum_center_and_radius(const std::array<glm::vec3, 8> &corners)
@@ -209,6 +259,50 @@ namespace detail {
   radius = std::ceil(radius * 16.0F) / 16.0F;
 
   return {center, radius};
+}
+
+[[nodiscard]] inline auto directional_light_view_projection_from_bounds(
+    const DirectionalLight &light,
+    const DirectionalLightShadowSettings &settings,
+    glm::vec3 focus_center,
+    float radius) -> glm::mat4 {
+  const glm::vec3 light_dir = glm::normalize(light.direction_toward_light);
+  const glm::vec3 up = stable_up_for_light(light_dir);
+  const auto [x_axis, y_axis, z_axis] = light_axes(light_dir, up);
+
+  const float center_x = glm::dot(focus_center, x_axis);
+  const float center_y = glm::dot(focus_center, y_axis);
+  const float center_z = glm::dot(focus_center, z_axis);
+
+  const float map_size = static_cast<float>(std::max(settings.map_resolution, 1U));
+  const float texel_world_size = (2.0F * radius) / map_size;
+
+  float half_x = radius;
+  float half_y = radius;
+  glm::vec3 snapped_center = focus_center;
+
+  if (settings.texel_snapping) {
+    const std::array<float, 4> snapped =
+        snap_symmetric_bounds(center_x, center_y, radius, texel_world_size);
+    half_x = (snapped[1] - snapped[0]) * 0.5F;
+    half_y = (snapped[3] - snapped[2]) * 0.5F;
+    snapped_center =
+        x_axis * ((snapped[0] + snapped[1]) * 0.5F) + y_axis * ((snapped[2] + snapped[3]) * 0.5F) +
+        z_axis * center_z;
+  } else {
+    snapped_center =
+        x_axis * center_x + y_axis * center_y + z_axis * center_z;
+  }
+
+  const glm::mat4 light_view = glm::lookAt(
+      snapped_center + light_dir * radius,
+      snapped_center,
+      up);
+
+  glm::mat4 light_ortho = glm::ortho(-half_x, half_x, -half_y, half_y, 0.0F, 2.0F * radius);
+  light_ortho[1][1] *= -1.0F;
+
+  return light_ortho * light_view;
 }
 
 } // namespace detail
@@ -243,43 +337,69 @@ namespace detail {
     radius = std::max(settings.ortho_half_extent, 12.0F);
   }
 
-  const glm::vec3 light_dir = glm::normalize(light.direction_toward_light);
-  const glm::vec3 up = detail::stable_up_for_light(light_dir);
-  const auto [x_axis, y_axis, z_axis] = detail::light_axes(light_dir, up);
+  return detail::directional_light_view_projection_from_bounds(
+      light,
+      settings,
+      focus_center,
+      radius);
+}
 
-  const float center_x = glm::dot(focus_center, x_axis);
-  const float center_y = glm::dot(focus_center, y_axis);
-  const float center_z = glm::dot(focus_center, z_axis);
+[[nodiscard]] inline auto compute_shadow_split_distance(
+    const Camera &camera,
+    const DirectionalLightShadowSettings &settings) -> float {
+  const float near_clip = camera.near_plane();
+  const float shadow_far = std::min(settings.max_distance, camera.far_plane());
+  const float clip_range = shadow_far - near_clip;
+  if (clip_range <= 0.001F)
+    return near_clip;
 
-  const float map_size = static_cast<float>(std::max(settings.map_resolution, 1U));
-  const float texel_world_size = (2.0F * radius) / map_size;
+  constexpr float cascade_ratio = 0.5F;
+  const float lambda = std::clamp(settings.split_lambda, 0.0F, 1.0F);
+  const float log_split = near_clip * std::pow(shadow_far / near_clip, cascade_ratio);
+  const float uniform_split = near_clip + clip_range * cascade_ratio;
+  return log_split * (1.0F - lambda) + uniform_split * lambda;
+}
 
-  float half_x = radius;
-  float half_y = radius;
-  glm::vec3 snapped_center = focus_center;
+[[nodiscard]] inline auto directional_shadow_cascades(
+    const Camera &camera,
+    const DirectionalLight &light,
+    const DirectionalLightShadowSettings &settings = {}) -> DirectionalShadowCascadeData {
+  DirectionalShadowCascadeData result{};
+  result.count = static_cast<std::uint32_t>(settings.cascade_mode);
+  result.split_blend_range = std::max(settings.cascade_blend_range, 0.0F);
 
-  if (settings.texel_snapping) {
-    const std::array<float, 4> snapped =
-        detail::snap_symmetric_bounds(center_x, center_y, radius, texel_world_size);
-    half_x = (snapped[1] - snapped[0]) * 0.5F;
-    half_y = (snapped[3] - snapped[2]) * 0.5F;
-    snapped_center =
-        x_axis * ((snapped[0] + snapped[1]) * 0.5F) + y_axis * ((snapped[2] + snapped[3]) * 0.5F) +
-        z_axis * center_z;
-  } else {
-    snapped_center =
-        x_axis * center_x + y_axis * center_y + z_axis * center_z;
+  if (settings.cascade_mode == ShadowCascadeMode::Single) {
+    result.light_view_proj[0] = directional_light_view_projection(camera, light, settings);
+    return result;
   }
 
-  const glm::mat4 light_view = glm::lookAt(
-      snapped_center + light_dir * radius,
-      snapped_center,
-      up);
+  const float near_clip = camera.near_plane();
+  const float shadow_far = std::min(settings.max_distance, camera.far_plane());
+  const float split = compute_shadow_split_distance(camera, settings);
+  result.split_distance = split;
 
-  glm::mat4 light_ortho = glm::ortho(-half_x, half_x, -half_y, half_y, 0.0F, 2.0F * radius);
-  light_ortho[1][1] *= -1.0F;
+  const std::array<std::pair<float, float>, k_max_shadow_cascades> ranges{{
+      {near_clip, split},
+      {split, shadow_far},
+  }};
 
-  return light_ortho * light_view;
+  for (std::uint32_t cascade = 0; cascade < k_max_shadow_cascades; ++cascade) {
+    const auto [range_near, range_far] = ranges[cascade];
+    const std::array<glm::vec3, 8> frustum_corners =
+        detail::unproject_frustum_slice(camera, range_near, range_far, shadow_far);
+    auto [focus_center, radius] = detail::wedge_frustum_center_and_radius(frustum_corners);
+    if (!std::isfinite(radius) || radius < 1.0F) {
+      focus_center = camera.position() + camera.look_direction() * ((range_near + range_far) * 0.5F);
+      radius = std::max(settings.ortho_half_extent * (cascade == 0 ? 0.5F : 1.0F), 12.0F);
+    }
+    result.light_view_proj[cascade] = detail::directional_light_view_projection_from_bounds(
+        light,
+        settings,
+        focus_center,
+        radius);
+  }
+
+  return result;
 }
 
 } // namespace engine
