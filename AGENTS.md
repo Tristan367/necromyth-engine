@@ -5,17 +5,19 @@ Read this and `README.md` before large renderer changes.
 ## Architecture
 
 - **Engine** (`VCE::Engine`): header-only library + compiled `vce_gltf_impl` + Slang SPIR-V. `vulkan_context.hpp` owns init/frame loop; `pass_recorder.hpp` records shadow/main passes.
-- **App** (`Vulkan-C-App`): demo client only (fly camera, `demo_scene.cpp`). Game logic does not belong in the engine repo.
+- **App** ([necromyth-engine-demo](https://github.com/Tristan367/necromyth-engine-demo)): demo client only (fly camera, `demo_scene.cpp`). Game logic does not belong in the engine repo.
 - **Shaders**: Slang → SPIR-V via `slangc`, `-profile spirv_1_4`. Runtime Vulkan **1.3** (dynamic rendering, sync2). Do not require 1.4.
 
 ## Shadows (current)
 
-**Fast path** (`DirectionalLightShadowSettings`, default): single ortho cascade, `CameraFootprint` focus, texel snap **on**, **bilinear** compare fetch, **Pcf3x3** filter. Filter ladder: `Hard` → `Pcf3x3` → (future PCSS / CSM). `ortho_half_extent` default 56 (world coverage, not texture resolution).
+**Fast path** (`DirectionalLightShadowSettings`, default): single ortho cascade, `CameraFootprint` focus, texel snap **on**, **bilinear** compare fetch, **Pcf3x3** filter. Filter ladder: `Hard` → `Pcf3x3` → (future PCSS / CSM). `max_distance` default **100**; `ortho_half_extent` default **127** world units (~254m box).
 
-**Future (optional):** separate fitted multi-cascade path (Godot / Sascha cascade / VulkanDemos #37) — layered depth, matrix array, no snap, PCF/PCSS. Keep as second `ShadowPipeline` when needed; do not complicate the fast path.
+**Alpha policy:** cutout or alpha-to-coverage only — no true alpha blend pass. `RenderLayer::AlphaTested` for ordered cutout/A2C draws.
+
+**Future (optional):** 2-cascade CSM as a **second shadow pipeline family** (texture array, two depth passes). Single-cascade fast path stays default. ViewWedge focus may be removed if CSM + footprint is enough.
 
 - `shadow_utils.hpp`: matrix + snap logic
-- `shaders/lib/shadow.slang`: separate fragment entry points per filter (no runtime branching)
+- `shaders/lib/shadow.slang`: separate fragment entry points per filter; optional **coverage edge fade** (`coverage_fade`, `coverage_fade_uv_width` → UBO `shadowFadeParams`)
 - `pipeline_registry.hpp`: `alpha_to_coverage` enabled on A2C pipelines when MSAA > 1
 - `frame_overlay.hpp`: optional app callback recorded after the main pass (ImGui lives in the app)
 - Shadow pass polygon offset: `k_shadow_depth_bias_*`
@@ -37,9 +39,8 @@ Read this and `README.md` before large renderer changes.
 ## Known follow-ups
 
 1. Split `vulkan_context.hpp` further (init vs resources) if it grows again.
-2. CSM (2–4 cascades) when shadow stability at range matters more than simplicity.
+2. **2-cascade CSM** — separate pipeline from single-cascade.
 3. glTF skinning / animation (Sascha `gltfskinning`).
-4. Transparent render pass (`RenderLayer::Transparent` exists, no pass yet).
 
 ## Do not
 

@@ -37,15 +37,18 @@ enum class ShadowFilterMode : std::uint8_t {
 };
 
 struct DirectionalLightShadowSettings {
-  float max_distance{50.0F};
+  float max_distance{100.0F};
   std::uint32_t map_resolution{2048};
   ShadowFocusMode focus_mode{ShadowFocusMode::CameraFootprint};
   float footprint_focus_y{0.0F};
-  float ortho_half_extent{56.0F};
+  float ortho_half_extent{127.0F};
   bool texel_snapping{true};
   ShadowFilterMode filter_mode{ShadowFilterMode::Pcf3x3};
   // false = bilinear compare fetch (default); true = nearest.
   bool point_shadow_filter{false};
+  // Softens shadow map UV boundary (lerp toward fully lit at edges). Runtime-toggleable.
+  bool coverage_fade{true};
+  float coverage_fade_uv_width{0.08F};
 };
 
 [[nodiscard]] inline auto shadow_filter_mode_name(ShadowFilterMode mode) -> const char * {
@@ -117,6 +120,12 @@ namespace detail {
     else if (detail::shadow_filter_token_equals(env, "footprint") || detail::shadow_filter_token_equals(env, "camera"))
       settings.focus_mode = ShadowFocusMode::CameraFootprint;
   }
+
+  if (const char *env = std::getenv("ENGINE_SHADOW_COVERAGE_FADE"); env != nullptr && env[0] != '\0')
+    settings.coverage_fade = env[0] != '0';
+
+  if (const char *env = std::getenv("ENGINE_SHADOW_FADE_WIDTH"); env != nullptr && env[0] != '\0')
+    settings.coverage_fade_uv_width = std::max(0.0F, static_cast<float>(std::atof(env)));
 
   return settings;
 }

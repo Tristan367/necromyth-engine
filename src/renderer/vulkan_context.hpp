@@ -254,6 +254,11 @@ public:
                 scene.camera(),
                 scene.directional_light(),
                 shadow_settings),
+            .shadow_fade_params = glm::vec4(
+                shadow_settings.coverage_fade_uv_width,
+                shadow_settings.coverage_fade ? 1.0F : 0.0F,
+                0.0F,
+                0.0F),
         });
 
     build_draw_list(scene, draw_list_);

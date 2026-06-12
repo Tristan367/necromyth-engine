@@ -7,6 +7,8 @@ struct FrameUniforms {
     float4 lightDirection;
     float4 lightColor;
     float4x4 lightViewProj;
+    // x = UV fade width, y = enabled (1/0)
+    float4 shadowFadeParams;
 };
 [[vk::binding(0, 0)]]
 ConstantBuffer<FrameUniforms> ubo;

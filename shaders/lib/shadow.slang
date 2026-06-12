@@ -35,6 +35,16 @@ float filterPCF(float3 projection, float bias) {
     return accum / 9.0;
 }
 
+float applyCoverageFade(float shadow, float2 projectionXY) {
+    if (ubo.shadowFadeParams.y <= 0.5)
+        return shadow;
+
+    float2 distToEdge = min(projectionXY, 1.0 - projectionXY);
+    float edge = min(distToEdge.x, distToEdge.y);
+    float fade = smoothstep(0.0, ubo.shadowFadeParams.x, edge);
+    return lerp(1.0, shadow, fade);
+}
+
 float shadowVisibility(float3 worldPos, float3 normal, float3 lightDir, int filterMode) {
     float cosTheta = clamp(dot(normalize(normal), lightDir), 0.0, 1.0);
     float3 receiverPos = worldPos + normalize(normal) * (kNormalOffsetScale * (1.0 - cosTheta));
@@ -46,8 +56,8 @@ float shadowVisibility(float3 worldPos, float3 normal, float3 lightDir, int filt
         return 1.0;
 
     float bias = shadowDepthBias(cosTheta);
-    if (filterMode == 1)
-        return filterPCF(projection, bias);
-
-    return textureProj(projection, float2(0.0, 0.0), bias);
+    float shadow = filterMode == 1
+        ? filterPCF(projection, bias)
+        : textureProj(projection, float2(0.0, 0.0), bias);
+    return applyCoverageFade(shadow, projection.xy);
 }

@@ -21,4 +21,4 @@ clean:
 	rm -rf "$(BUILD_DIR)"
 
 # Run the demo from the sibling app repo:
-#   cd ../Vulkan-C-App && make debug
+#   cd ../necromyth-engine-demo && make debug

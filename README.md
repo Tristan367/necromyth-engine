@@ -52,7 +52,7 @@ make clean
 **Run the demo** from the sibling app repo:
 
 ```bash
-cd ../Vulkan-C-App && make debug
+cd ../necromyth-engine-demo && make debug
 ```
 
 Optional in-tree executable: `cmake -DVCE_BUILD_IN_TREE_APP=ON ..` (legacy).
@@ -91,7 +91,7 @@ Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
-**Engine vs game:** This repo is the **engine library** (`VCE::Engine` CMake target). The [Vulkan-C-App](../Vulkan-C-App) repo is the demo/game client — fly camera, scene setup, and game logic live there. Link with `add_subdirectory(../Vulkan-C-Engine)` and `target_link_libraries(... VCE::Engine)`.
+**Engine vs game:** This repo is the **engine library** (`VCE::Engine` CMake target). The [necromyth-engine-demo](https://github.com/Tristan367/necromyth-engine-demo) repo is the demo client — fly camera, scene setup, and game logic live there. Link with `add_subdirectory(../necromyth-engine)` (or a sibling checkout) and `target_link_libraries(... VCE::Engine)`.
 
 **Repo split (current):** Renderer + scene/core live here as one library. A separate *renderer-only* repo makes sense when you add a second backend (e.g. Metal). Until then, keep renderer and engine unified to avoid submodule friction.
 
@@ -109,11 +109,13 @@ Focus modes (`ShadowFocusMode`):
 - **`CameraFootprint`** (default) — ortho on camera XZ; stable when rotating.
 - **`ViewWedge`** — Sascha cascade-0 frustum fit (opt-in).
 
-**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping on, camera footprint, `ortho_half_extent` 56 (doubled world coverage; map resolution stays 2048²). Startup env: `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_FOCUS`.
+**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping on, camera footprint, `max_distance` **100**, `ortho_half_extent` **127**, **coverage edge fade on** (`coverage_fade_uv_width` 0.08). Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_FOCUS`, `ENGINE_SHADOW_COVERAGE_FADE`, `ENGINE_SHADOW_FADE_WIDTH`.
 
-Quality toggles on `Scene::shadow_settings()`: `filter_mode` and `point_shadow_filter` are **startup-only** — each filter mode is one pre-built pipeline set; only alpha modes present in the scene get a `VkPipeline`. Runtime changes to filter or point filter require restart. `texel_snapping` and `focus_mode` still apply live.
+Quality toggles on `Scene::shadow_settings()`: `filter_mode` and `point_shadow_filter` are **startup-only** — each filter mode is one pre-built pipeline set; only alpha modes present in the scene get a `VkPipeline`. Runtime changes to filter or point filter require restart. `texel_snapping`, `focus_mode`, and **`coverage_fade`** apply live.
 
-A multi-cascade fitted path (no snap, shadow array) can be added later as a separate pipeline without replacing this fast path.
+A **2-cascade** fitted path (texture array, two shadow passes) can be added as a separate pipeline family without replacing this fast path.
+
+**Alpha surfaces:** cutout discard or alpha-to-coverage with MSAA — no true alpha blend pass. Use `RenderLayer::AlphaTested` for ordered foliage/fences.
 
 **Descriptors:** Set 0 holds per-frame UBO, texture array, and shadow map; set 1 holds the table texture for the current draw (Sascha multi-set pattern). This avoids allocating duplicate frame/shadow bindings for every table texture.
 
@@ -125,7 +127,7 @@ Final shading: `baseColor * (ambient + diffuse * shadow)` with standard Lambert 
 
 **Shaders:** Stock GLSL-like Slang sources under `shaders/`; shared helpers live in `shaders/lib/` (`frame_uniforms`, `shadow`, `surface`, etc.) and are `#include`d by entry shaders. Mods can reuse the same includes. Build output is SPIR-V (`slangc`); runtime user-shader compilation is planned, not implemented yet.
 
-**Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `AlphaTested`, `Overlay`). `Transparent` remains as a backward-compatible alias of `AlphaTested` (ordering only; no separate blended pass yet). The main pass sorts by layer → pipeline → texture source → texture index → mesh. The shadow pass re-sorts opaque draws by layer → mesh so consecutive instances share vertex/index bindings. `PassRecorder` tracks bound pipeline, material (set 1), and mesh buffers and skips redundant binds (Sascha `gltfscenerendering` multi-set pattern).
+**Draw order:** Instances carry a `RenderLayer` (`Background`, `Opaque`, `AlphaTested`, `Overlay`). The main pass sorts by layer → pipeline → texture source → texture index → mesh. The shadow pass re-sorts opaque draws by layer → mesh so consecutive instances share vertex/index bindings. `PassRecorder` tracks bound pipeline, material (set 1), and mesh buffers and skips redundant binds (Sascha `gltfscenerendering` multi-set pattern).
 
 **Platforms:** SDL3 + Vulkan targets Linux and Windows with the same code. macOS requires MoltenVK — the engine enables `VK_KHR_portability_enumeration` and `VK_KHR_portability_subset` when available. Android/iOS are possible via SDL mobile targets but not set up yet.
 

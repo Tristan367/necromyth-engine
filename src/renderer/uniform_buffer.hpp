@@ -21,6 +21,7 @@ struct FrameUniformBufferObject {
   alignas(16) glm::vec4 light_direction{};
   alignas(16) glm::vec4 light_color{};
   alignas(16) glm::mat4 light_view_proj{};
+  alignas(16) glm::vec4 shadow_fade_params{};
 };
 
 [[nodiscard]] inline auto view_without_translation(const glm::mat4 &view) -> glm::mat4 {
