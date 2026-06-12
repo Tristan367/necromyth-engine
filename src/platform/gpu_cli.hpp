@@ -221,7 +221,7 @@ inline void resolve_gpu_selection(EngineConfig &config, bool force_interactive_p
     }
 
     if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: NecromythEngine [options]\n"
+      std::cout << "Usage: [options]\n"
                 << "  -gl, --listgpus       List physical devices and exit\n"
                 << "  -g, --gpu <index>     Select physical device by index\n"
                 << "  -pg, --pick-gpu       Prompt to pick a GPU (also auto when multiple GPUs + TTY)\n"

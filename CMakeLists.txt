@@ -188,24 +188,3 @@ if(MSVC)
 else()
     target_compile_options(vce_engine INTERFACE -Wall -Wextra -Wpedantic)
 endif()
-
-set(_run_env_vars "")
-if(VULKAN_SDK_ROOT AND IS_DIRECTORY "${VULKAN_SDK_ROOT}/lib")
-    list(APPEND _run_env_vars "VULKAN_SDK=${VULKAN_SDK_ROOT}")
-    list(APPEND _run_env_vars "LD_LIBRARY_PATH=${VULKAN_SDK_ROOT}/lib")
-    list(APPEND _run_env_vars "VK_ADD_LAYER_PATH=${VULKAN_SDK_ROOT}/share/vulkan/explicit_layer.d")
-endif()
-
-option(VCE_BUILD_IN_TREE_APP "Build the legacy in-tree smoke-test executable" OFF)
-if(VCE_BUILD_IN_TREE_APP)
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-    add_executable(NecromythEngine src/main.cpp)
-    target_link_libraries(NecromythEngine PRIVATE VCE::Engine)
-    add_dependencies(NecromythEngine vce_shaders)
-    add_custom_target(run
-        COMMAND "${CMAKE_COMMAND}" -E env ${_run_env_vars} "$<TARGET_FILE:NecromythEngine>"
-        DEPENDS NecromythEngine
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        USES_TERMINAL
-    )
-endif()

@@ -39,9 +39,15 @@ Read this and `README.md` before large renderer changes.
 
 ## Known follow-ups
 
-1. Split `vulkan_context.hpp` further (init vs resources) if it grows again.
-2. glTF skinning / animation (Sascha `gltfskinning`).
-3. Alpha-threshold shadow discard (optional FS in shadow pass; A2C can stay opaque silhouette).
+1. **glTF skinning / animation** (Sascha `gltfskinning`) — next major feature; design for physics-driven root transforms and optional ragdoll/hit-reaction later.
+2. **Physics wrapper** (e.g. Jolt) — sync rigid bodies to `MeshInstance` transforms; collision rig parented to skeleton for headshots.
+3. Alpha-threshold shadow discard (optional; opaque silhouettes are fine for now).
+4. Split `vulkan_context.hpp` further if it grows again.
+5. Hard cleanup pass after animation lands (dead abstractions).
+
+## Engine vs demo boundaries
+
+**Engine stock:** camera, directional light + shadows, sky cube mesh helper, loaders, renderer. **Not engine:** floor/quad procedural meshes, game assets, scene layout — those live in [necromyth-engine-demo](https://github.com/Tristan367/necromyth-engine-demo).
 
 ## Do not
 

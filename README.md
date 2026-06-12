@@ -55,7 +55,7 @@ make clean
 cd ../necromyth-engine-demo && make debug
 ```
 
-Optional in-tree executable: `cmake -DVCE_BUILD_IN_TREE_APP=ON ..` (legacy).
+Run the demo from the sibling app repo (`make run` in necromyth-engine-demo).
 
 ## Reference Projects
 
@@ -87,7 +87,11 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `scene_gpu` (mesh/texture upload helpers), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `floor_mesh`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
+Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `scene_gpu` (mesh/texture upload helpers), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
+
+**Compiled sources:** `gltf_loader_impl.cpp` (tinygltf in one TU), `texture_image_stb.cpp` (stb_image in one TU). Everything else is headers.
+
+**No bundled assets.** Meshes, textures, and procedural demo geometry (floor quads, etc.) belong in the demo/game repo.
 
 The renderer avoids unnecessary complexity — no PBR, no normal maps unless direction changes.
 
@@ -134,7 +138,7 @@ Final shading: `baseColor * (ambient + diffuse * shadow)` with standard Lambert 
 
 Keep the project uncluttered. Avoid hundreds of tiny files, but also avoid one massive source file. Use minimal abstractions that make ownership and rendering flow clear.
 
-Prefer modern C++ and modern Vulkan (`vk::raii::*`). Single `main.cpp` with engine code in `.hpp` files. Use RAII for all resource ownership.
+Prefer modern C++ and modern Vulkan (`vk::raii::*`). Engine code lives in `.hpp` files; the demo app owns `main`. Use RAII for all resource ownership.
 
 Omit braces on single-statement `if`, `else`, and loop bodies:
 
