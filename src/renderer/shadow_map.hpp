@@ -66,14 +66,6 @@ public:
     return vk::ImageAspectFlagBits::eDepth;
   }
 
-  [[nodiscard]] auto descriptor_image_info(bool point_filter = false) const -> vk::DescriptorImageInfo {
-    return {
-        .sampler = sampler_for_settings(point_filter),
-        .imageView = *array_view_,
-        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-    };
-  }
-
 private:
   [[nodiscard]] static auto find_shadow_format(const vk::raii::PhysicalDevice &physical_device) -> vk::Format {
     const std::array candidates{

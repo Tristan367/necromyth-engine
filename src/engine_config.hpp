@@ -9,7 +9,7 @@
 namespace engine {
 
 struct EngineConfig {
-  std::string window_title{"Vulkan C++ Engine"};
+  std::string window_title{"Necromyth Engine"};
   int window_width{1280};
   int window_height{720};
   MsaaSettings msaa{};

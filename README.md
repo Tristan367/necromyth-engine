@@ -99,21 +99,20 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 
 **Lighting:** `Scene::directional_light()` feeds sun direction, color, intensity, and ambient into the frame UBO. The textured mesh shader applies Lambert diffuse modulated by a directional shadow map.
 
-**Shadow mapping:** Fast single-cascade ortho directional shadows. Two passes per frame:
+**Shadow mapping:** Dual-cascade directional shadows (default). Per frame:
 
-1. **Shadow pass** — depth-only into `2048×2048` (`ShadowMap::k_default_size`). Slope-scaled polygon offset on casters.
-2. **Main pass** — 3×3 PCF compare taps by default (optional hard single-tap), slope-scaled bias + normal offset on receivers (`shaders/lib/shadow.slang`).
+1. **Shadow pass(es)** — depth-only into a `2048×2048` 2D array (`ShadowMap::k_default_size`, 1 or 2 layers). Camera-footprint ortho, texel snapping, slope-scaled polygon offset on opaque casters.
+2. **Main pass** — 3×3 PCF depth compare by default (startup `Hard` = single tap), receiver bias + normal offset in `shaders/lib/shadow.slang`, optional UV coverage fade at map edges.
 
-Focus modes (`ShadowFocusMode`):
+Focus: **camera footprint** ortho on camera XZ — stable when rotating (Sascha-style, not view-frustum fit).
 
-- **`CameraFootprint`** (default) — ortho on camera XZ; stable when rotating.
-- **`ViewWedge`** — Sascha cascade-0 frustum fit (opt-in).
+**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping on, **dual cascades**, cascade blend **3** m, `max_distance` **100** (split placement only), single `ortho_half_extent` **64**, dual far footprint **127**, coverage fade **0.08**. Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_FADE_WIDTH`, `ENGINE_SHADOW_CASCADES=1|2` (default **2**).
 
-**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping on, camera footprint, `max_distance` **100**, `ortho_half_extent` **127**, coverage fade width **0.08** (set **0** for hard map edge). Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_TEXEL_SNAP`, `ENGINE_SHADOW_FOCUS`, `ENGINE_SHADOW_FADE_WIDTH`, `ENGINE_SHADOW_CASCADES=1|2`.
+**Startup-only** (restart to change): `filter_mode`, `point_shadow_filter`, `cascade_mode`. **Runtime:** `texel_snapping`, `coverage_fade_uv_width`, `cascade_blend_range` (dual).
 
-Quality toggles on `Scene::shadow_settings()`: `filter_mode`, `point_shadow_filter`, and `cascade_mode` are **startup-only** — separate pre-built pipeline sets. Runtime: `texel_snapping`, `focus_mode`, `coverage_fade_uv_width`, `cascade_blend_range` (dual mode).
+**Dual cascades:** two full shadow depth passes, view-Z split with band-limited cross-fade (dual-samples only inside the blend band). **Single cascade** (`ENGINE_SHADOW_CASCADES=1`): one layer, no blending, smaller footprint.
 
-**Dual cascades** (`ENGINE_SHADOW_CASCADES=2`): two shadow depth passes into a 2-layer texture array; frustum-fitted splits with blend at the boundary (standard CSM, same idea as Godot/Sascha). Single-cascade remains the default fast path.
+**Cutout/A2C:** cast **opaque** silhouettes in the shadow pass (VS-only). Optional follow-up: alpha-threshold discard in shadow FS.
 
 **Alpha surfaces:** cutout discard or alpha-to-coverage with MSAA — no true alpha blend pass. Use `RenderLayer::AlphaTested` for ordered foliage/fences.
 

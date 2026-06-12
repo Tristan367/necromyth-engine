@@ -80,9 +80,9 @@ struct VulkanListContext {
     }
 
     const vk::ApplicationInfo application_info{
-        .pApplicationName = "Vulkan C++ Engine",
+        .pApplicationName = "Necromyth Engine",
         .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
-        .pEngineName = "Vulkan C++ Engine",
+        .pEngineName = "Necromyth Engine",
         .engineVersion = VK_MAKE_VERSION(0, 1, 0),
         .apiVersion = vk::ApiVersion13,
     };
@@ -221,7 +221,7 @@ inline void resolve_gpu_selection(EngineConfig &config, bool force_interactive_p
     }
 
     if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: VulkanCppEngine [options]\n"
+      std::cout << "Usage: NecromythEngine [options]\n"
                 << "  -gl, --listgpus       List physical devices and exit\n"
                 << "  -g, --gpu <index>     Select physical device by index\n"
                 << "  -pg, --pick-gpu       Prompt to pick a GPU (also auto when multiple GPUs + TTY)\n"

@@ -22,15 +22,11 @@ namespace engine {
 
 inline constexpr float k_shadow_depth_bias_constant = 1.0F;
 inline constexpr float k_shadow_depth_bias_slope = 2.5F;
+// Practical split blend (GPU Gems / Sascha): 0 = uniform, 1 = logarithmic.
+inline constexpr float k_shadow_split_lambda = 0.75F;
 
-enum class ShadowFocusMode {
-  // Shadow box follows camera XZ; look direction does not move the map (stable when rotating).
-  CameraFootprint,
-  // Fit to the view frustum wedge (best coverage when looking around; may shimmer on rotation).
-  ViewWedge,
-};
+// Caster bias (depth pass polygon offset). Receiver bias lives in shaders/lib/shadow.slang.
 
-// Fragment shadow filter: Hard (single tap) or Pcf3x3.
 enum class ShadowFilterMode : std::uint8_t {
   Hard = 0,
   Pcf3x3 = 1,
@@ -44,28 +40,43 @@ enum class ShadowCascadeMode : std::uint8_t {
 inline constexpr std::uint32_t k_max_shadow_cascades = 2;
 
 struct DirectionalLightShadowSettings {
+  // Dual mode only: view-depth range used to place the near/far cascade split.
   float max_distance{100.0F};
   std::uint32_t map_resolution{2048};
-  ShadowFocusMode focus_mode{ShadowFocusMode::CameraFootprint};
+  // Footprint center Y when the ground is not at world Y=0.
   float footprint_focus_y{0.0F};
-  float ortho_half_extent{127.0F};
+  // Single-cascade footprint half-extent (meters); also scales the dual near cascade.
+  float ortho_half_extent{64.0F};
   bool texel_snapping{true};
   ShadowFilterMode filter_mode{ShadowFilterMode::Pcf3x3};
-  // false = bilinear compare fetch (default); true = nearest.
+  // Shadow compare sampler: false = bilinear (default), true = nearest.
   bool point_shadow_filter{false};
-  ShadowCascadeMode cascade_mode{ShadowCascadeMode::Single};
-  float split_lambda{0.5F};
+  ShadowCascadeMode cascade_mode{ShadowCascadeMode::Dual};
+  // Cross-fade width at the dual-cascade split (view-space meters).
   float cascade_blend_range{3.0F};
+  // Far-cascade footprint half-extent (dual mode only).
+  float dual_far_ortho_half_extent{127.0F};
   // UV-space edge fade toward fully lit; 0 = hard cutoff.
   float coverage_fade_uv_width{0.08F};
 };
 
 struct DirectionalShadowCascadeData {
-  std::uint32_t count{1};
   std::array<glm::mat4, k_max_shadow_cascades> light_view_proj{};
-  float split_distance{0.0F};
-  float split_blend_range{0.0F};
+  // View-space Z threshold between cascades (negative, Sascha shadowmappingcascade convention).
+  float split_view_z{0.0F};
 };
+
+// Startup-only fields (cascade mode, filter, compare sampler, map resolution) are frozen in
+// VulkanContext; runtime Scene settings may change texel snap, fade, and blend width only.
+[[nodiscard]] inline auto effective_shadow_settings(
+    const DirectionalLightShadowSettings &scene_settings,
+    ShadowCascadeMode startup_cascade_mode,
+    std::uint32_t shadow_map_resolution) -> DirectionalLightShadowSettings {
+  DirectionalLightShadowSettings settings = scene_settings;
+  settings.cascade_mode = startup_cascade_mode;
+  settings.map_resolution = shadow_map_resolution;
+  return settings;
+}
 
 [[nodiscard]] inline auto shadow_cascade_layer_count(ShadowCascadeMode mode) -> std::uint32_t {
   return mode == ShadowCascadeMode::Dual ? 2U : 1U;
@@ -136,27 +147,16 @@ namespace detail {
   if (const char *env = std::getenv("ENGINE_SHADOW_FILTER"); env != nullptr && env[0] != '\0') {
     if (const std::optional<ShadowFilterMode> mode = detail::parse_shadow_filter_mode(env))
       settings.filter_mode = *mode;
-  } else if (const char *env = std::getenv("ENGINE_SHADOW_PCF"); env != nullptr && env[0] != '\0') {
-    settings.filter_mode = env[0] != '0' ? ShadowFilterMode::Pcf3x3 : ShadowFilterMode::Hard;
   }
 
   if (const char *env = std::getenv("ENGINE_SHADOW_POINT_FILTER"); env != nullptr && env[0] != '\0')
     settings.point_shadow_filter = env[0] != '0';
 
-  if (const char *env = std::getenv("ENGINE_SHADOW_FOCUS"); env != nullptr && env[0] != '\0') {
-    if (detail::shadow_filter_token_equals(env, "wedge") || detail::shadow_filter_token_equals(env, "view") ||
-        detail::shadow_filter_token_equals(env, "frustum"))
-      settings.focus_mode = ShadowFocusMode::ViewWedge;
-    else if (detail::shadow_filter_token_equals(env, "footprint") || detail::shadow_filter_token_equals(env, "camera"))
-      settings.focus_mode = ShadowFocusMode::CameraFootprint;
-  }
-
   if (const char *env = std::getenv("ENGINE_SHADOW_FADE_WIDTH"); env != nullptr && env[0] != '\0')
     settings.coverage_fade_uv_width = std::max(0.0F, static_cast<float>(std::atof(env)));
 
   if (const char *env = std::getenv("ENGINE_SHADOW_CASCADES"); env != nullptr && env[0] != '\0') {
-    const int cascades = std::atoi(env);
-    if (cascades >= 2)
+    if (std::atoi(env) >= 2)
       settings.cascade_mode = ShadowCascadeMode::Dual;
     else
       settings.cascade_mode = ShadowCascadeMode::Single;
@@ -199,66 +199,6 @@ namespace detail {
     max_y = min_y + min_extent;
 
   return {min_x, max_x, min_y, max_y};
-}
-
-[[nodiscard]] inline auto unproject_frustum_slice(
-    const Camera &camera,
-    float range_near,
-    float range_far,
-    float shadow_far) -> std::array<glm::vec3, 8> {
-  std::array<glm::vec3, 8> corners = {{
-      {-1.0F, 1.0F, 0.0F},
-      {1.0F, 1.0F, 0.0F},
-      {1.0F, -1.0F, 0.0F},
-      {-1.0F, -1.0F, 0.0F},
-      {-1.0F, 1.0F, 1.0F},
-      {1.0F, 1.0F, 1.0F},
-      {1.0F, -1.0F, 1.0F},
-      {-1.0F, -1.0F, 1.0F},
-  }};
-
-  const glm::mat4 inv_cam = glm::inverse(camera.projection_matrix() * camera.view_matrix());
-  for (glm::vec3 &corner : corners) {
-    const glm::vec4 world = inv_cam * glm::vec4(corner, 1.0F);
-    corner = world / world.w;
-  }
-
-  const float near_clip = camera.near_plane();
-  const float clip_range = std::max(shadow_far - near_clip, 0.001F);
-  const float start_norm = std::clamp((range_near - near_clip) / clip_range, 0.0F, 1.0F);
-  const float end_norm = std::clamp((range_far - near_clip) / clip_range, 0.0F, 1.0F);
-
-  for (std::uint32_t j = 0; j < 4; ++j) {
-    const glm::vec3 edge = corners[j + 4] - corners[j];
-    corners[j] = corners[j] + edge * start_norm;
-    corners[j + 4] = corners[j] + edge * end_norm;
-  }
-
-  return corners;
-}
-
-[[nodiscard]] inline auto unproject_view_frustum_wedge(
-    const Camera &camera,
-    float end_norm) -> std::array<glm::vec3, 8> {
-  const float near_clip = camera.near_plane();
-  const float far_clip = camera.far_plane();
-  const float range_far = near_clip + std::clamp(end_norm, 0.0F, 1.0F) * (far_clip - near_clip);
-  return unproject_frustum_slice(camera, near_clip, range_far, far_clip);
-}
-
-[[nodiscard]] inline auto wedge_frustum_center_and_radius(const std::array<glm::vec3, 8> &corners)
-    -> std::pair<glm::vec3, float> {
-  glm::vec3 center{0.0F};
-  for (const glm::vec3 &corner : corners)
-    center += corner;
-  center /= static_cast<float>(corners.size());
-
-  float radius = 0.0F;
-  for (const glm::vec3 &corner : corners)
-    radius = std::max(radius, glm::length(corner - center));
-  radius = std::ceil(radius * 16.0F) / 16.0F;
-
-  return {center, radius};
 }
 
 [[nodiscard]] inline auto directional_light_view_projection_from_bounds(
@@ -307,57 +247,44 @@ namespace detail {
 
 } // namespace detail
 
-// Directional shadow matrix: view-frustum wedge (Sascha cascade 0) or rotation-stable camera footprint.
-// Texel snapping on light XY (Godot renderer_scene_cull, VulkanDemos 37_CascadedShadow).
+// Camera footprint: ortho box centered on camera XZ, stable when rotating (no view-frustum fit).
+[[nodiscard]] inline auto directional_light_footprint_projection(
+    const Camera &camera,
+    const DirectionalLight &light,
+    const DirectionalLightShadowSettings &settings,
+    float ortho_half_extent) -> glm::mat4 {
+  const glm::vec3 position = camera.position();
+  const glm::vec3 focus_center{position.x, settings.footprint_focus_y, position.z};
+  const float radius = std::max(ortho_half_extent, 1.0F);
+  return detail::directional_light_view_projection_from_bounds(light, settings, focus_center, radius);
+}
+
 [[nodiscard]] inline auto directional_light_view_projection(
     const Camera &camera,
     const DirectionalLight &light,
     const DirectionalLightShadowSettings &settings = {}) -> glm::mat4 {
-  const float near_clip = camera.near_plane();
-  const float camera_far = camera.far_plane();
-  const float clip_range = camera_far - near_clip;
-  const float shadow_far = std::min(settings.max_distance, camera_far);
-  const float split_dist = std::clamp((shadow_far - near_clip) / clip_range, 0.01F, 1.0F);
-
-  glm::vec3 focus_center{};
-  float radius = settings.ortho_half_extent;
-
-  if (settings.focus_mode == ShadowFocusMode::CameraFootprint) {
-    const glm::vec3 position = camera.position();
-    focus_center = glm::vec3{position.x, settings.footprint_focus_y, position.z};
-    radius = std::max(settings.ortho_half_extent, 1.0F);
-  } else {
-    const std::array<glm::vec3, 8> frustum_corners =
-        detail::unproject_view_frustum_wedge(camera, split_dist);
-    std::tie(focus_center, radius) = detail::wedge_frustum_center_and_radius(frustum_corners);
-  }
-
-  if (!std::isfinite(radius) || radius < 1.0F) {
-    focus_center = camera.position() + camera.look_direction() * std::min(settings.max_distance * 0.5F, 25.0F);
-    radius = std::max(settings.ortho_half_extent, 12.0F);
-  }
-
-  return detail::directional_light_view_projection_from_bounds(
-      light,
-      settings,
-      focus_center,
-      radius);
+  return directional_light_footprint_projection(camera, light, settings, settings.ortho_half_extent);
 }
 
-[[nodiscard]] inline auto compute_shadow_split_distance(
+// GPU Gems / Sascha practical split over [near, shadow_far].
+[[nodiscard]] inline auto compute_cascade_split_normalized(
     const Camera &camera,
-    const DirectionalLightShadowSettings &settings) -> float {
+    const DirectionalLightShadowSettings &settings,
+    float shadow_far,
+    std::uint32_t cascade_index,
+    std::uint32_t cascade_count) -> float {
   const float near_clip = camera.near_plane();
-  const float shadow_far = std::min(settings.max_distance, camera.far_plane());
-  const float clip_range = shadow_far - near_clip;
-  if (clip_range <= 0.001F)
-    return near_clip;
-
-  constexpr float cascade_ratio = 0.5F;
-  const float lambda = std::clamp(settings.split_lambda, 0.0F, 1.0F);
-  const float log_split = near_clip * std::pow(shadow_far / near_clip, cascade_ratio);
-  const float uniform_split = near_clip + clip_range * cascade_ratio;
-  return log_split * (1.0F - lambda) + uniform_split * lambda;
+  const float clip_range = std::max(shadow_far - near_clip, 0.001F);
+  const float min_z = near_clip;
+  const float max_z = near_clip + clip_range;
+  const float range = max_z - min_z;
+  const float ratio = max_z / min_z;
+  const float p = static_cast<float>(cascade_index + 1) / static_cast<float>(cascade_count);
+  const float log_split = min_z * std::pow(ratio, p);
+  const float uniform_split = min_z + range * p;
+  const float lambda = std::clamp(k_shadow_split_lambda, 0.0F, 1.0F);
+  const float d = lambda * (log_split - uniform_split) + uniform_split;
+  return (d - near_clip) / clip_range;
 }
 
 [[nodiscard]] inline auto directional_shadow_cascades(
@@ -365,8 +292,6 @@ namespace detail {
     const DirectionalLight &light,
     const DirectionalLightShadowSettings &settings = {}) -> DirectionalShadowCascadeData {
   DirectionalShadowCascadeData result{};
-  result.count = static_cast<std::uint32_t>(settings.cascade_mode);
-  result.split_blend_range = std::max(settings.cascade_blend_range, 0.0F);
 
   if (settings.cascade_mode == ShadowCascadeMode::Single) {
     result.light_view_proj[0] = directional_light_view_projection(camera, light, settings);
@@ -375,29 +300,21 @@ namespace detail {
 
   const float near_clip = camera.near_plane();
   const float shadow_far = std::min(settings.max_distance, camera.far_plane());
-  const float split = compute_shadow_split_distance(camera, settings);
-  result.split_distance = split;
+  const float clip_range = std::max(shadow_far - near_clip, 0.001F);
+  const float split_norm =
+      compute_cascade_split_normalized(camera, settings, shadow_far, 0, k_max_shadow_cascades);
 
-  const std::array<std::pair<float, float>, k_max_shadow_cascades> ranges{{
-      {near_clip, split},
-      {split, shadow_far},
-  }};
+  // Near cascade: smaller footprint → higher texel density close to the camera.
+  const float near_half = std::max(
+      settings.ortho_half_extent * std::clamp(split_norm * 2.0F, 0.25F, 0.55F),
+      16.0F);
+  const float far_half = std::max(settings.dual_far_ortho_half_extent, 1.0F);
 
-  for (std::uint32_t cascade = 0; cascade < k_max_shadow_cascades; ++cascade) {
-    const auto [range_near, range_far] = ranges[cascade];
-    const std::array<glm::vec3, 8> frustum_corners =
-        detail::unproject_frustum_slice(camera, range_near, range_far, shadow_far);
-    auto [focus_center, radius] = detail::wedge_frustum_center_and_radius(frustum_corners);
-    if (!std::isfinite(radius) || radius < 1.0F) {
-      focus_center = camera.position() + camera.look_direction() * ((range_near + range_far) * 0.5F);
-      radius = std::max(settings.ortho_half_extent * (cascade == 0 ? 0.5F : 1.0F), 12.0F);
-    }
-    result.light_view_proj[cascade] = detail::directional_light_view_projection_from_bounds(
-        light,
-        settings,
-        focus_center,
-        radius);
-  }
+  result.light_view_proj[0] =
+      directional_light_footprint_projection(camera, light, settings, near_half);
+  result.light_view_proj[1] =
+      directional_light_footprint_projection(camera, light, settings, far_half);
+  result.split_view_z = -(near_clip + split_norm * clip_range);
 
   return result;
 }

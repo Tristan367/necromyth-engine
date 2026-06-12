@@ -93,7 +93,7 @@ enum class PipelineId : std::uint8_t {
 
 struct PipelineBuildProfile {
   ShadowFilterMode shadow_filter{ShadowFilterMode::Pcf3x3};
-  ShadowCascadeMode cascade_mode{ShadowCascadeMode::Single};
+  ShadowCascadeMode cascade_mode{ShadowCascadeMode::Dual};
   std::array<bool, 3> textured_alpha_modes{{true, false, false}};
 };
 

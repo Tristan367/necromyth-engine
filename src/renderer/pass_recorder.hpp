@@ -312,7 +312,11 @@ struct PassRecorder {
         vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
         previous_stage,
         vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        shadow_map.aspect_mask());
+        shadow_map.aspect_mask(),
+        0,
+        1,
+        0,
+        shadow_map.layer_count());
 
     std::vector<DrawCommand> shadow_draws;
     build_shadow_draw_list(draw_list, shadow_draws);
@@ -334,8 +338,7 @@ struct PassRecorder {
       };
 
       command_buffer.beginRendering(rendering_info);
-      if (cascade_index == 0)
-        bind_frame_descriptor_set(command_buffer, frame_index);
+      bind_frame_descriptor_set(command_buffer, frame_index);
       command_buffer.setViewport(
           0,
           vk::Viewport{
@@ -365,7 +368,11 @@ struct PassRecorder {
         vk::AccessFlagBits2::eShaderRead,
         vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
         vk::PipelineStageFlagBits2::eFragmentShader,
-        shadow_map.aspect_mask());
+        shadow_map.aspect_mask(),
+        0,
+        1,
+        0,
+        shadow_map.layer_count());
 
     layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
   }

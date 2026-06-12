@@ -10,17 +10,18 @@ Read this and `README.md` before large renderer changes.
 
 ## Shadows (current)
 
-**Fast path** (`DirectionalLightShadowSettings`, default): single ortho cascade, `CameraFootprint` focus, texel snap **on**, **bilinear** compare fetch, **Pcf3x3** filter, **coverage edge fade** (`coverage_fade_uv_width`, 0 = hard edge). Filter ladder: `Hard` → `Pcf3x3`. `max_distance` default **100**; `ortho_half_extent` default **127**.
+**Fast path** (`DirectionalLightShadowSettings`, default): **dual** cascades, camera footprint ortho, texel snap **on**, **bilinear** compare fetch, **Pcf3x3** filter, cascade blend **3** m, coverage edge fade. Single cascade: `ortho_half_extent` **64**; dual far footprint **127**; `max_distance` **100** (dual split only).
 
-**Dual cascade** (`ENGINE_SHADOW_CASCADES=2`, startup-only): depth **texture array** (2 layers), two full shadow passes, separate textured pipeline entries (`*Csm2`), split blend between cascades (Godot/Sascha standard). Single-cascade path unchanged.
+**Dual cascade** (default, startup-only): depth **texture array** (2 layers), two shadow depth passes, separate textured pipeline entries (`*Csm2`), band-limited split blend. Single-cascade: `ENGINE_SHADOW_CASCADES=1`.
 
-**Alpha policy:** cutout or alpha-to-coverage only — no true alpha blend pass. `RenderLayer::AlphaTested` for ordered cutout/A2C draws.
+**Startup-only in `VulkanContext`:** `filter_mode`, `point_shadow_filter`, `cascade_mode`, map resolution/layer count. Runtime on `Scene::shadow_settings()`: texel snap, coverage fade, blend width.
 
-- `shadow_utils.hpp`: matrix + snap + cascade splits
-- `shaders/lib/shadow.slang`: single vs dual visibility paths; `Sampler2DArray` depth compare
-- `pipeline_registry.hpp`: `alpha_to_coverage` enabled on A2C pipelines when MSAA > 1
-- `frame_overlay.hpp`: optional app callback recorded after the main pass (ImGui lives in the app)
-- Shadow pass polygon offset: `k_shadow_depth_bias_*`
+**Alpha policy:** cutout or alpha-to-coverage in the main pass only — no true alpha blend. Cutout/A2C meshes cast **opaque** silhouettes in the VS-only shadow pass; alpha-threshold shadow discard is an optional follow-up.
+
+- `shadow_utils.hpp`: footprint matrices, texel snap, cascade splits, `effective_shadow_settings()`
+- `shaders/lib/shadow.slang`: single/dual visibility, band-limited blend, PCF
+- `pass_recorder.hpp`: shadow pass barriers (all array layers), per-cascade dynamic rendering
+- Caster bias: `k_shadow_depth_bias_*`; receiver bias: `shadow.slang`
 
 ## References (`~/Projects/vulkan examples/`)
 
@@ -40,7 +41,7 @@ Read this and `README.md` before large renderer changes.
 
 1. Split `vulkan_context.hpp` further (init vs resources) if it grows again.
 2. glTF skinning / animation (Sascha `gltfskinning`).
-3. Remove `ViewWedge` if dual CSM + footprint is enough in practice.
+3. Alpha-threshold shadow discard (optional FS in shadow pass; A2C can stay opaque silhouette).
 
 ## Do not
 

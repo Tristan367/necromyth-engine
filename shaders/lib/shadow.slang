@@ -10,6 +10,7 @@ static const float4x4 biasMatrix = float4x4(
 static const float kMinDepthBias = 0.00015;
 static const float kSlopeScale = 0.0025;
 static const float kNormalOffsetScale = 0.0012;
+// Receiver-side bias (main pass). Caster polygon offset: k_shadow_depth_bias_* in shadow_utils.hpp.
 
 float shadowDepthBias(float cosTheta) {
     float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
@@ -70,23 +71,22 @@ float shadowVisibilitySingle(float3 worldPos, float3 normal, float3 lightDir, in
 }
 
 float shadowVisibilityDual(float3 worldPos, float3 normal, float3 lightDir, int filterMode) {
-    float viewDepth = -((mul(ubo.view, float4(worldPos, 1.0))).z);
-    const float splitDist = ubo.cascadeParams.x;
+    const float viewZ = (mul(ubo.view, float4(worldPos, 1.0))).z;
+    const float split = ubo.cascadeParams.x;
     const float blendRange = ubo.cascadeParams.y;
-
-    float shadow0 = sampleCascadeShadow(worldPos, normal, lightDir, 0, filterMode);
-    float shadow1 = sampleCascadeShadow(worldPos, normal, lightDir, 1, filterMode);
+    const uint cascadeNear = 0u;
+    const uint cascadeFar = 1u;
+    const uint primary = viewZ < split ? cascadeFar : cascadeNear;
 
     if (blendRange <= 0.0)
-        return viewDepth < splitDist ? shadow0 : shadow1;
+        return sampleCascadeShadow(worldPos, normal, lightDir, primary, filterMode);
 
-    const float blendStart = splitDist - blendRange;
-    const float blendEnd = splitDist + blendRange;
-    if (viewDepth <= blendStart)
-        return shadow0;
-    if (viewDepth >= blendEnd)
-        return shadow1;
+    const float distFromSplit = viewZ - split;
+    if (abs(distFromSplit) >= blendRange)
+        return sampleCascadeShadow(worldPos, normal, lightDir, primary, filterMode);
 
-    float t = (viewDepth - blendStart) / max(blendEnd - blendStart, 1e-5);
-    return lerp(shadow0, shadow1, t);
+    const float shadowNear = sampleCascadeShadow(worldPos, normal, lightDir, cascadeNear, filterMode);
+    const float shadowFar = sampleCascadeShadow(worldPos, normal, lightDir, cascadeFar, filterMode);
+    const float blend = smoothstep(split - blendRange, split + blendRange, viewZ);
+    return lerp(shadowFar, shadowNear, blend);
 }

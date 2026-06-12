@@ -258,9 +258,9 @@ private:
 #endif
 
     const vk::ApplicationInfo application_info{
-        .pApplicationName = "Vulkan C++ Engine",
+        .pApplicationName = "Necromyth Engine",
         .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
-        .pEngineName = "Vulkan C++ Engine",
+        .pEngineName = "Necromyth Engine",
         .engineVersion = VK_MAKE_VERSION(0, 1, 0),
         .apiVersion = vk::ApiVersion13,
     };

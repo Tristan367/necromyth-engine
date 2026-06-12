@@ -52,8 +52,7 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
   });
 }
 
-// Shadow depth only needs mesh + model matrix. Sort by layer then mesh to reuse vertex/index buffers
-// (Sascha gltfscenerendering binds geometry once per mesh; main pass keeps texture-first order above).
+// Shadow casters: all textured surface pipelines (opaque silhouettes for cutout/A2C until alpha-tested shadow FS).
 inline void build_shadow_draw_list(const std::vector<DrawCommand> &draw_list, std::vector<DrawCommand> &out) {
   out.clear();
   out.reserve(draw_list.size());

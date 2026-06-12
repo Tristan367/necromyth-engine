@@ -2,6 +2,7 @@
 #include "lib/mesh_types.slang"
 #include "lib/textured_push_constants.slang"
 
+// Depth-only pass (VS): cutout/A2C cast opaque silhouettes until alpha-tested shadow FS exists.
 [shader("vertex")]
 float4 vertMain(VSInput input) : SV_Position {
     uint cascade = pushConstants.shadowCascadeIndex;
