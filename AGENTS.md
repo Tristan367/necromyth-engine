@@ -14,7 +14,9 @@ Read this and `README.md` before large renderer changes.
 
 **Dual cascade** (default, startup-only): depth **texture array** (2 layers), two shadow depth passes, separate textured pipeline entries (`*Csm2`), band-limited split blend. Single-cascade: `ENGINE_SHADOW_CASCADES=1`.
 
-**Startup-only in `VulkanContext`:** `filter_mode`, `point_shadow_filter`, `cascade_mode`, map resolution/layer count. Runtime on `Scene::shadow_settings()`: coverage fade, blend width.
+**Startup-only in `VulkanContext`:** `filter_mode`, `point_shadow_filter`, `cascade_mode`, map resolution (via `ENGINE_SHADOW_SCALE` on scene base size). Runtime on `Scene::shadow_settings()`: coverage fade, blend width.
+
+**Profiling knobs (startup env, restart):** `ENGINE_RENDER_SCALE` (main pass resolution), `ENGINE_SHADOW_SCALE` (shadow map resolution), `ENGINE_PRESENT=mailbox` (uncap FPS).
 
 **Alpha policy:** cutout or alpha-to-coverage in the main pass only — no true alpha blend. Cutout/A2C meshes cast **opaque** silhouettes in the VS-only shadow pass; alpha-threshold shadow discard is an optional follow-up.
 
@@ -37,10 +39,32 @@ Read this and `README.md` before large renderer changes.
 
 **Two-repo rule** (from README): adopt a pattern only if two references agree, or one is clearly authoritative for that feature.
 
+## Animation / skinning (next)
+
+**Not implemented yet.** Static glTF only today (`POSITION`, `NORMAL`, `TEXCOORD_0`, indices). No `JOINTS_0` / `WEIGHTS_0`, no skins, no animation clips.
+
+### Readiness checklist (engine gaps)
+
+1. **Vertex layout** — extend `MeshVertex` + `mesh_types.slang` with 4 bone indices + 4 weights (normalize weights in loader).
+2. **glTF loader** — read skins (inverse bind matrices, joint node indices), `JOINTS_0`/`WEIGHTS_0`; keep skeleton as asset, not baked into `node_transform`.
+3. **GPU path** — bone palette SSBO (or UBO if ≤256 bones); skinned VS in main + shadow depth passes.
+4. **Scene API** — `SkinnedMeshInstance` or flag on instance: clip name, time, root transform; update palette per frame before `draw_frame`.
+5. **Pipeline** — startup variant `TexturedSkinned` (+ shadow depth skinned VS), same fragment entries as static.
+
+Design for physics later: **skeleton asset** (bind pose) + **runtime pose** (animation or physics) + **root transform** on instance. Shadow pass uses same skinned matrices.
+
+### Blender → glTF export (test model)
+
+- **+Y up** on export (glTF default; matches engine).
+- Apply transforms; triangulate; export **skin weights** (4 influences max is fine).
+- **Animations:** NLA or actions → glTF; name clips clearly (`idle`, `walk`).
+- Export **.glb** for simplest path (mesh + rig + clips in one file).
+- Drop test asset in demo `assets/models/`; wire one instance in `demo_scene.cpp`.
+
 ## Known follow-ups
 
-1. **glTF skinning / animation** (Sascha `gltfskinning`) — next major feature; design for physics-driven root transforms and optional ragdoll/hit-reaction later.
-2. **Physics wrapper** (e.g. Jolt) — sync rigid bodies to `MeshInstance` transforms; collision rig parented to skeleton for headshots.
+1. **glTF skinning / animation** — active next feature (see checklist above).
+2. **Physics wrapper** (e.g. Jolt) — after skinning; sync root transform; collision rig on bones later.
 3. Alpha-threshold shadow discard (optional; opaque silhouettes are fine for now).
 4. Split `vulkan_context.hpp` further if it grows again.
 5. Hard cleanup pass after animation lands (dead abstractions).

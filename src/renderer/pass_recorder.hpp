@@ -8,6 +8,7 @@
 #include "renderer/msaa_color_image.hpp"
 #include "renderer/pipeline_id.hpp"
 #include "renderer/pipeline_registry.hpp"
+#include "renderer/render_color_image.hpp"
 #include "renderer/shadow_map.hpp"
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_array.hpp"
@@ -18,6 +19,7 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -29,6 +31,7 @@ struct PassLayoutState {
   mutable std::vector<vk::ImageLayout> swapchain_image_layouts;
   mutable vk::ImageLayout depth_image_layout{vk::ImageLayout::eUndefined};
   mutable vk::ImageLayout msaa_color_layout{vk::ImageLayout::eUndefined};
+  mutable vk::ImageLayout render_color_layout{vk::ImageLayout::eUndefined};
 };
 
 struct DrawBindState {
@@ -58,6 +61,18 @@ struct PassRecorder {
   const std::vector<MeshGpu> &mesh_gpus;
   bool msaa_enabled{};
   std::uint32_t shadow_cascade_count{1};
+  vk::Extent2D render_extent{};
+  const RenderColorImage *render_color_image{nullptr};
+
+  [[nodiscard]] auto uses_render_scale() const -> bool {
+    return render_color_image != nullptr;
+  }
+
+  [[nodiscard]] auto main_pass_color_target(std::uint32_t image_index) const -> vk::ImageView {
+    if (render_color_image != nullptr)
+      return *render_color_image->view();
+    return *swapchain.image_views()[image_index];
+  }
 
   void bind_frame_descriptor_set(vk::raii::CommandBuffer &command_buffer, std::uint32_t frame_index) const {
     command_buffer.bindDescriptorSets(
@@ -291,6 +306,242 @@ struct PassRecorder {
     layouts.depth_image_layout = vk::ImageLayout::eDepthAttachmentOptimal;
   }
 
+  void transition_render_color_to_color_attachment(vk::raii::CommandBuffer &command_buffer, PassLayoutState &layouts) const {
+    if (render_color_image == nullptr)
+      return;
+
+    if (layouts.render_color_layout == vk::ImageLayout::eColorAttachmentOptimal)
+      return;
+
+    const vk::PipelineStageFlags2 previous_stage =
+        layouts.render_color_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe
+                                                                   : vk::PipelineStageFlagBits2::eTransfer;
+
+    transition_image_layout(
+        command_buffer,
+        render_color_image->image(),
+        layouts.render_color_layout,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        {},
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        previous_stage,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    layouts.render_color_layout = vk::ImageLayout::eColorAttachmentOptimal;
+  }
+
+  void transition_swapchain_to_transfer_dst(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t image_index,
+      PassLayoutState &layouts) const {
+    vk::ImageLayout &tracked_layout = layouts.swapchain_image_layouts.at(image_index);
+    const vk::Image image = swapchain.images()[image_index];
+
+    if (tracked_layout == vk::ImageLayout::eTransferDstOptimal)
+      return;
+
+    if (tracked_layout == vk::ImageLayout::eUndefined) {
+      transition_image_layout(
+          command_buffer,
+          image,
+          vk::ImageLayout::eUndefined,
+          vk::ImageLayout::eTransferDstOptimal,
+          {},
+          vk::AccessFlagBits2::eTransferWrite,
+          vk::PipelineStageFlagBits2::eTopOfPipe,
+          vk::PipelineStageFlagBits2::eTransfer);
+    } else if (tracked_layout == vk::ImageLayout::ePresentSrcKHR) {
+      transition_image_layout(
+          command_buffer,
+          image,
+          vk::ImageLayout::ePresentSrcKHR,
+          vk::ImageLayout::eTransferDstOptimal,
+          {},
+          vk::AccessFlagBits2::eTransferWrite,
+          vk::PipelineStageFlagBits2::eBottomOfPipe,
+          vk::PipelineStageFlagBits2::eTransfer);
+    } else {
+      transition_image_layout(
+          command_buffer,
+          image,
+          tracked_layout,
+          vk::ImageLayout::eTransferDstOptimal,
+          vk::AccessFlagBits2::eColorAttachmentWrite,
+          vk::AccessFlagBits2::eTransferWrite,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+          vk::PipelineStageFlagBits2::eTransfer);
+    }
+
+    tracked_layout = vk::ImageLayout::eTransferDstOptimal;
+  }
+
+  void blit_render_color_to_swapchain(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t image_index,
+      PassLayoutState &layouts) const {
+    transition_image_layout(
+        command_buffer,
+        render_color_image->image(),
+        vk::ImageLayout::eColorAttachmentOptimal,
+        vk::ImageLayout::eTransferSrcOptimal,
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::AccessFlagBits2::eTransferRead,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits2::eTransfer);
+    layouts.render_color_layout = vk::ImageLayout::eTransferSrcOptimal;
+
+    transition_swapchain_to_transfer_dst(command_buffer, image_index, layouts);
+
+    const std::array<vk::Offset3D, 2> src_offsets{
+        vk::Offset3D{0, 0, 0},
+        vk::Offset3D{
+            static_cast<int32_t>(render_extent.width),
+            static_cast<int32_t>(render_extent.height),
+            1,
+        },
+    };
+    const std::array<vk::Offset3D, 2> dst_offsets{
+        vk::Offset3D{0, 0, 0},
+        vk::Offset3D{
+            static_cast<int32_t>(swapchain.extent().width),
+            static_cast<int32_t>(swapchain.extent().height),
+            1,
+        },
+    };
+
+    command_buffer.blitImage(
+        render_color_image->image(),
+        vk::ImageLayout::eTransferSrcOptimal,
+        swapchain.images()[image_index],
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageBlit{
+            .srcSubresource =
+                {
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            .srcOffsets = src_offsets,
+            .dstSubresource =
+                {
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            .dstOffsets = dst_offsets,
+        },
+        vk::Filter::eNearest);
+  }
+
+  void transition_swapchain_to_overlay_target(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t image_index,
+      PassLayoutState &layouts) const {
+    transition_image_layout(
+        command_buffer,
+        swapchain.images()[image_index],
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        vk::AccessFlagBits2::eTransferWrite,
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::PipelineStageFlagBits2::eTransfer,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    layouts.swapchain_image_layouts[image_index] = vk::ImageLayout::eColorAttachmentOptimal;
+  }
+
+  [[nodiscard]] auto make_main_color_attachment(
+      std::uint32_t image_index,
+      const vk::ClearValue &clear_value) const -> vk::RenderingAttachmentInfo {
+    const vk::ImageView color_target = main_pass_color_target(image_index);
+
+    if (msaa_enabled) {
+      return vk::RenderingAttachmentInfo{
+          .imageView = *msaa_color_image.view(),
+          .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+          .resolveMode = vk::ResolveModeFlagBits::eAverage,
+          .resolveImageView = color_target,
+          .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+          .loadOp = vk::AttachmentLoadOp::eClear,
+          .storeOp = vk::AttachmentStoreOp::eStore,
+          .clearValue = clear_value,
+      };
+    }
+
+    return vk::RenderingAttachmentInfo{
+        .imageView = color_target,
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = clear_value,
+    };
+  }
+
+  void record_scene_rendering(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t frame_index,
+      const vk::RenderingAttachmentInfo &color_attachment,
+      const vk::RenderingAttachmentInfo &depth_attachment) const {
+    const vk::RenderingInfo rendering_info{
+        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = render_extent},
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color_attachment,
+        .pDepthAttachment = &depth_attachment,
+    };
+    command_buffer.beginRendering(rendering_info);
+    bind_pass_descriptor_sets(command_buffer, frame_index);
+    command_buffer.setViewport(
+        0,
+        vk::Viewport{
+            0.0F,
+            0.0F,
+            static_cast<float>(render_extent.width),
+            static_cast<float>(render_extent.height),
+            0.0F,
+            1.0F,
+        });
+    command_buffer.setScissor(0, vk::Rect2D{{0, 0}, render_extent});
+  }
+
+  void record_overlay_pass(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t frame_index,
+      std::uint32_t image_index,
+      const FrameOverlayCallback &overlay) const {
+    const vk::RenderingAttachmentInfo overlay_color{
+        .imageView = *swapchain.image_views()[image_index],
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eLoad,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+    };
+    const vk::RenderingInfo overlay_info{
+        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain.extent()},
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &overlay_color,
+    };
+    command_buffer.beginRendering(overlay_info);
+    command_buffer.setViewport(
+        0,
+        vk::Viewport{
+            0.0F,
+            0.0F,
+            static_cast<float>(swapchain.extent().width),
+            static_cast<float>(swapchain.extent().height),
+            0.0F,
+            1.0F,
+        });
+    command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain.extent()});
+    overlay(FrameOverlayContext{
+        .command_buffer = command_buffer,
+        .frame_index = frame_index,
+        .image_index = image_index,
+        .extent = swapchain.extent(),
+    });
+    command_buffer.endRendering();
+  }
+
   void record_shadow_pass(
       vk::raii::CommandBuffer &command_buffer,
       std::uint32_t frame_index,
@@ -377,109 +628,10 @@ struct PassRecorder {
     layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
   }
 
-  void record_main_pass(
+  void finish_main_pass(
       vk::raii::CommandBuffer &command_buffer,
-      std::uint32_t frame_index,
       std::uint32_t image_index,
-      PassLayoutState &layouts,
-      const std::vector<DrawCommand> &draw_list,
-      const FrameOverlayCallback *overlay = nullptr) const {
-    transition_swapchain_to_color_attachment(command_buffer, image_index, layouts);
-
-    if (msaa_enabled)
-      transition_msaa_to_color_attachment(command_buffer, layouts);
-
-    transition_depth_to_attachment(command_buffer, layouts);
-
-    const vk::ClearValue clear_value{vk::ClearColorValue{std::array{0.02F, 0.03F, 0.05F, 1.0F}}};
-    const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
-
-    const vk::RenderingAttachmentInfo color_attachment = msaa_enabled
-        ? vk::RenderingAttachmentInfo{
-              .imageView = *msaa_color_image.view(),
-              .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-              .resolveMode = vk::ResolveModeFlagBits::eAverage,
-              .resolveImageView = *swapchain.image_views()[image_index],
-              .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-              .loadOp = vk::AttachmentLoadOp::eClear,
-              .storeOp = vk::AttachmentStoreOp::eStore,
-              .clearValue = clear_value,
-          }
-        : vk::RenderingAttachmentInfo{
-              .imageView = *swapchain.image_views()[image_index],
-              .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-              .loadOp = vk::AttachmentLoadOp::eClear,
-              .storeOp = vk::AttachmentStoreOp::eStore,
-              .clearValue = clear_value,
-          };
-    const vk::RenderingAttachmentInfo depth_attachment{
-        .imageView = *depth_image.view(),
-        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eDontCare,
-        .clearValue = clear_depth,
-    };
-    const vk::RenderingInfo rendering_info{
-        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain.extent()},
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color_attachment,
-        .pDepthAttachment = &depth_attachment,
-    };
-    command_buffer.beginRendering(rendering_info);
-    bind_pass_descriptor_sets(command_buffer, frame_index);
-    command_buffer.setViewport(
-        0,
-        vk::Viewport{
-            0.0F,
-            0.0F,
-            static_cast<float>(swapchain.extent().width),
-            static_cast<float>(swapchain.extent().height),
-            0.0F,
-            1.0F,
-        });
-    command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain.extent()});
-
-    DrawBindState bind_state;
-    for (const DrawCommand &draw : draw_list)
-      draw_mesh(command_buffer, draw, bind_state);
-
-    command_buffer.endRendering();
-
-    if (overlay != nullptr && *overlay) {
-      const vk::RenderingAttachmentInfo overlay_color{
-          .imageView = *swapchain.image_views()[image_index],
-          .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-          .loadOp = vk::AttachmentLoadOp::eLoad,
-          .storeOp = vk::AttachmentStoreOp::eStore,
-      };
-      const vk::RenderingInfo overlay_info{
-          .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain.extent()},
-          .layerCount = 1,
-          .colorAttachmentCount = 1,
-          .pColorAttachments = &overlay_color,
-      };
-      command_buffer.beginRendering(overlay_info);
-      command_buffer.setViewport(
-          0,
-          vk::Viewport{
-              0.0F,
-              0.0F,
-              static_cast<float>(swapchain.extent().width),
-              static_cast<float>(swapchain.extent().height),
-              0.0F,
-              1.0F,
-          });
-      command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain.extent()});
-      (*overlay)(FrameOverlayContext{
-          .command_buffer = command_buffer,
-          .frame_index = frame_index,
-          .image_index = image_index,
-          .extent = swapchain.extent(),
-      });
-      command_buffer.endRendering();
-    }
-
+      PassLayoutState &layouts) const {
     transition_image_layout(
         command_buffer,
         swapchain.images()[image_index],
@@ -490,8 +642,69 @@ struct PassRecorder {
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::PipelineStageFlagBits2::eBottomOfPipe);
     layouts.swapchain_image_layouts[image_index] = vk::ImageLayout::ePresentSrcKHR;
-
     command_buffer.end();
+  }
+
+  void record_main_pass(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t frame_index,
+      std::uint32_t image_index,
+      PassLayoutState &layouts,
+      const std::vector<DrawCommand> &draw_list,
+      const FrameOverlayCallback *overlay = nullptr) const {
+    if (uses_render_scale())
+      transition_render_color_to_color_attachment(command_buffer, layouts);
+    else
+      transition_swapchain_to_color_attachment(command_buffer, image_index, layouts);
+
+    if (msaa_enabled)
+      transition_msaa_to_color_attachment(command_buffer, layouts);
+
+    transition_depth_to_attachment(command_buffer, layouts);
+
+    const vk::ClearValue clear_value{vk::ClearColorValue{std::array{0.02F, 0.03F, 0.05F, 1.0F}}};
+    const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
+    const vk::RenderingAttachmentInfo color_attachment = make_main_color_attachment(image_index, clear_value);
+    const vk::RenderingAttachmentInfo depth_attachment{
+        .imageView = *depth_image.view(),
+        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eDontCare,
+        .clearValue = clear_depth,
+    };
+
+    record_scene_rendering(command_buffer, frame_index, color_attachment, depth_attachment);
+
+    DrawBindState bind_state;
+    for (const DrawCommand &draw : draw_list)
+      draw_mesh(command_buffer, draw, bind_state);
+
+    command_buffer.endRendering();
+
+    if (uses_render_scale()) {
+      blit_render_color_to_swapchain(command_buffer, image_index, layouts);
+      if (overlay != nullptr && *overlay)
+        transition_swapchain_to_overlay_target(command_buffer, image_index, layouts);
+      else {
+        transition_image_layout(
+            command_buffer,
+            swapchain.images()[image_index],
+            vk::ImageLayout::eTransferDstOptimal,
+            vk::ImageLayout::ePresentSrcKHR,
+            vk::AccessFlagBits2::eTransferWrite,
+            {},
+            vk::PipelineStageFlagBits2::eTransfer,
+            vk::PipelineStageFlagBits2::eBottomOfPipe);
+        layouts.swapchain_image_layouts[image_index] = vk::ImageLayout::ePresentSrcKHR;
+        command_buffer.end();
+        return;
+      }
+    }
+
+    if (overlay != nullptr && *overlay)
+      record_overlay_pass(command_buffer, frame_index, image_index, *overlay);
+
+    finish_main_pass(command_buffer, image_index, layouts);
   }
 };
 

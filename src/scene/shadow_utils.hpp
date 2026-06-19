@@ -38,11 +38,40 @@ enum class ShadowCascadeMode : std::uint8_t {
 };
 
 inline constexpr std::uint32_t k_max_shadow_cascades = 2;
+inline constexpr std::uint32_t k_default_shadow_map_resolution = 2048U;
+inline constexpr std::uint32_t k_min_shadow_map_resolution = 256U;
+inline constexpr std::uint32_t k_max_shadow_scale = 64U;
+
+// Integer divisor on map_resolution: 1 = full size, 2 = half edge length (quarter texels), etc.
+[[nodiscard]] inline auto scaled_shadow_map_resolution(
+    std::uint32_t base_resolution,
+    std::uint32_t shadow_scale) -> std::uint32_t {
+  if (shadow_scale <= 1U)
+    return base_resolution;
+
+  return std::max(k_min_shadow_map_resolution, base_resolution / shadow_scale);
+}
+
+[[nodiscard]] inline auto shadow_scale_active(std::uint32_t shadow_scale) -> bool {
+  return shadow_scale > 1U;
+}
+
+[[nodiscard]] inline auto shadow_scale_settings_from_environment() -> std::uint32_t {
+  const char *env = std::getenv("ENGINE_SHADOW_SCALE");
+  if (env == nullptr || env[0] == '\0')
+    return 1U;
+
+  const int requested = std::atoi(env);
+  if (requested <= 1)
+    return 1U;
+
+  return std::min(static_cast<std::uint32_t>(requested), k_max_shadow_scale);
+}
 
 struct DirectionalLightShadowSettings {
   // Dual mode only: view-depth range used to place the near/far cascade split.
   float max_distance{100.0F};
-  std::uint32_t map_resolution{2048};
+  std::uint32_t map_resolution{k_default_shadow_map_resolution};
   // Footprint center Y when the ground is not at world Y=0.
   float footprint_focus_y{0.0F};
   // Single-cascade footprint half-extent (meters); also scales the dual near cascade.
@@ -65,7 +94,7 @@ struct DirectionalShadowCascadeData {
   float split_view_z{0.0F};
 };
 
-// Startup-only fields (cascade mode, filter, compare sampler, map resolution) are frozen in
+// Startup-only fields (cascade mode, filter, compare sampler, map resolution, shadow scale) are frozen in
 // VulkanContext; runtime Scene settings may change fade and blend width only.
 [[nodiscard]] inline auto effective_shadow_settings(
     const DirectionalLightShadowSettings &scene_settings,

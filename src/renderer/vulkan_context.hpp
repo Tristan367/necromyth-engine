@@ -10,6 +10,7 @@
 #include "renderer/pass_recorder.hpp"
 #include "renderer/pipeline_id.hpp"
 #include "renderer/pipeline_registry.hpp"
+#include "renderer/render_color_image.hpp"
 #include "renderer/scene_gpu.hpp"
 #include "renderer/shadow_map.hpp"
 #include "renderer/render_settings.hpp"
@@ -51,13 +52,19 @@ public:
         startup_point_shadow_filter_(scene.shadow_settings().point_shadow_filter),
         startup_shadow_filter_mode_(scene.shadow_settings().filter_mode),
         startup_cascade_mode_(scene.shadow_settings().cascade_mode),
+        startup_render_scale_(config.render_scale),
+        startup_shadow_scale_(config.shadow_scale),
+        startup_shadow_map_resolution_(scaled_shadow_map_resolution(
+            scene.shadow_settings().map_resolution,
+            config.shadow_scale)),
         device_(window, msaa_config_, config.gpu_device_index) {
     swapchain_.create(device_, window, config.present_mode);
     create_pipeline_cache();
     create_msaa_color_image();
+    create_render_color_image();
     create_depth_image();
     create_shadow_map(
-        scene.shadow_settings().map_resolution,
+        startup_shadow_map_resolution_,
         shadow_cascade_layer_count(scene.shadow_settings().cascade_mode));
     create_command_pool();
     engine::upload_scene_meshes(
@@ -103,6 +110,18 @@ public:
       std::cout << "MSAA auto-enabled for AlphaToCoverage meshes\n";
     std::cout << "Present mode: " << present_mode_name(swapchain_.present_mode())
               << " (set ENGINE_PRESENT=mailbox to uncap for profiling)\n";
+    if (render_scale_active(startup_render_scale_)) {
+      const vk::Extent2D internal = render_extent();
+      std::cout << "Render scale: " << startup_render_scale_ << " (internal "
+                << internal.width << 'x' << internal.height << ", restart to change; ENGINE_RENDER_SCALE)\n";
+    }
+    if (shadow_scale_active(startup_shadow_scale_))
+      std::cout << "Shadow scale: " << startup_shadow_scale_ << " (map "
+                << startup_shadow_map_resolution_ << 'x' << startup_shadow_map_resolution_
+                << ", restart to change; ENGINE_SHADOW_SCALE)\n";
+    else
+      std::cout << "Shadow map: " << startup_shadow_map_resolution_ << 'x'
+                << startup_shadow_map_resolution_ << '\n';
   }
 
   [[nodiscard]] auto present_mode() const -> vk::PresentModeKHR {
@@ -228,8 +247,9 @@ public:
       }
     } submit_guard{this};
 
-    const float aspect = static_cast<float>(swapchain_.extent().width) /
-                         static_cast<float>(swapchain_.extent().height);
+    const vk::Extent2D internal_extent = render_extent();
+    const float aspect = static_cast<float>(internal_extent.width) /
+                         static_cast<float>(internal_extent.height);
     scene.camera().set_aspect(aspect);
 
     const DirectionalLightShadowSettings shadow_settings = effective_shadow_settings(
@@ -341,7 +361,13 @@ private:
         .mesh_gpus = mesh_gpus_,
         .msaa_enabled = device_.msaa_enabled(),
         .shadow_cascade_count = shadow_cascade_layer_count(startup_cascade_mode_),
+        .render_extent = render_extent(),
+        .render_color_image = render_scale_active(startup_render_scale_) ? &render_color_image_ : nullptr,
     };
+  }
+
+  [[nodiscard]] auto render_extent() const -> vk::Extent2D {
+    return scaled_render_extent(swapchain_.extent(), startup_render_scale_);
   }
 
   void submit_empty_frame() {
@@ -357,9 +383,36 @@ private:
     msaa_color_image_.create(
         device_.physical_device(),
         device_.device(),
-        swapchain_.extent(),
+        render_extent(),
         swapchain_.image_format(),
         device_.msaa_samples());
+  }
+
+  void create_render_color_image() {
+    if (!render_scale_active(startup_render_scale_))
+      return;
+
+    render_color_image_.create(
+        device_.physical_device(),
+        device_.device(),
+        render_extent(),
+        swapchain_.image_format());
+  }
+
+  void recreate_render_color_image() {
+    if (!render_scale_active(startup_render_scale_))
+      return;
+
+    if (render_color_image_.active())
+      render_color_image_.recreate(render_extent());
+    else
+      create_render_color_image();
+  }
+
+  void recreate_render_targets() {
+    create_msaa_color_image();
+    recreate_render_color_image();
+    depth_image_.recreate(render_extent());
   }
 
   void create_shadow_map(std::uint32_t resolution, std::uint32_t layer_count) {
@@ -370,7 +423,7 @@ private:
     depth_image_.create(
         device_.physical_device(),
         device_.device(),
-        swapchain_.extent(),
+        render_extent(),
         device_.msaa_samples());
   }
 
@@ -498,6 +551,7 @@ private:
     pass_layouts_.swapchain_image_layouts.assign(swapchain_.image_count(), vk::ImageLayout::eUndefined);
     pass_layouts_.depth_image_layout = vk::ImageLayout::eUndefined;
     pass_layouts_.msaa_color_layout = vk::ImageLayout::eUndefined;
+    pass_layouts_.render_color_layout = vk::ImageLayout::eUndefined;
   }
 
   void wait_for_nonzero_extent() const {
@@ -518,8 +572,7 @@ private:
     wait_for_nonzero_extent();
     device_.wait_idle();
     swapchain_.recreate();
-    create_msaa_color_image();
-    depth_image_.recreate(swapchain_.extent());
+    recreate_render_targets();
     pipelines_.recreate(device_.device(), swapchain_.image_format(), depth_image_.format());
     create_sync_objects();
     reset_image_layout_tracking();
@@ -532,6 +585,9 @@ private:
   bool startup_point_shadow_filter_{false};
   ShadowFilterMode startup_shadow_filter_mode_{ShadowFilterMode::Pcf3x3};
   ShadowCascadeMode startup_cascade_mode_{ShadowCascadeMode::Dual};
+  std::uint32_t startup_render_scale_{1};
+  std::uint32_t startup_shadow_scale_{1};
+  std::uint32_t startup_shadow_map_resolution_{k_default_shadow_map_resolution};
   VulkanDevice device_;
   Swapchain swapchain_;
   vk::raii::PipelineCache pipeline_cache_{nullptr};
@@ -541,6 +597,7 @@ private:
   std::vector<vk::raii::Semaphore> render_finished_semaphores_;
   std::vector<vk::raii::Fence> in_flight_fences_;
   MsaaColorImage msaa_color_image_;
+  RenderColorImage render_color_image_;
   DepthImage depth_image_;
   ShadowMap shadow_map_;
   TextureTable texture_table_;

@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -54,6 +55,24 @@ struct MsaaSettings {
   bool enabled = true;
   vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1;
 };
+
+inline constexpr std::uint32_t k_max_render_scale = 64U;
+
+// Integer divisor: 1 = full swapchain resolution, 2 = half, etc.
+[[nodiscard]] inline auto scaled_render_extent(vk::Extent2D swapchain_extent, std::uint32_t render_scale)
+    -> vk::Extent2D {
+  if (render_scale <= 1U)
+    return swapchain_extent;
+
+  return {
+      .width = std::max(1U, swapchain_extent.width / render_scale),
+      .height = std::max(1U, swapchain_extent.height / render_scale),
+  };
+}
+
+[[nodiscard]] inline auto render_scale_active(std::uint32_t render_scale) -> bool {
+  return render_scale > 1U;
+}
 
 namespace detail {
 
@@ -138,6 +157,18 @@ namespace detail {
   }
 
   return settings;
+}
+
+[[nodiscard]] inline auto render_scale_settings_from_environment() -> std::uint32_t {
+  const char *env = std::getenv("ENGINE_RENDER_SCALE");
+  if (env == nullptr || env[0] == '\0')
+    return 1U;
+
+  const int requested = std::atoi(env);
+  if (requested <= 1)
+    return 1U;
+
+  return std::min(static_cast<std::uint32_t>(requested), k_max_render_scale);
 }
 
 } // namespace engine

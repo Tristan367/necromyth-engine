@@ -87,7 +87,7 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `scene_gpu` (mesh/texture upload helpers), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
+Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `scene_gpu` (mesh/texture upload helpers), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `render_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
 
 **Compiled sources:** `gltf_loader_impl.cpp` (tinygltf in one TU), `texture_image_stb.cpp` (stb_image in one TU). Everything else is headers.
 
@@ -110,9 +110,9 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 
 Focus: **camera footprint** ortho on camera XZ — stable when rotating (Sascha-style, not view-frustum fit).
 
-**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping (always on), **dual cascades**, cascade blend **3** m, `max_distance` **100** (split placement only), single `ortho_half_extent` **64**, dual far footprint **127**, coverage fade **0.08**. Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_FADE_WIDTH`, `ENGINE_SHADOW_CASCADES=1|2` (default **2**).
+**Defaults:** PCF 3×3, bilinear compare fetch, texel snapping (always on), **dual cascades**, cascade blend **3** m, `max_distance` **100** (split placement only), single `ortho_half_extent` **64**, dual far footprint **127**, coverage fade **0.08**. Startup env: `ENGINE_SHADOW_DISTANCE`, `ENGINE_SHADOW_FILTER`, `ENGINE_SHADOW_POINT_FILTER`, `ENGINE_SHADOW_FADE_WIDTH`, `ENGINE_SHADOW_CASCADES=1|2` (default **2**), `ENGINE_SHADOW_SCALE` (integer divisor on map size; default **1** = 2048², **2** = 1024², min **256**, max divisor **64**).
 
-**Startup-only** (restart to change): `filter_mode`, `point_shadow_filter`, `cascade_mode`. **Runtime:** `coverage_fade_uv_width`, `cascade_blend_range` (dual).
+**Startup-only** (restart to change): `filter_mode`, `point_shadow_filter`, `cascade_mode`, shadow map resolution scale. **Runtime:** `coverage_fade_uv_width`, `cascade_blend_range` (dual).
 
 **Dual cascades:** two full shadow depth passes, view-Z split with band-limited cross-fade (dual-samples only inside the blend band). **Single cascade** (`ENGINE_SHADOW_CASCADES=1`): one layer, no blending, smaller footprint.
 
@@ -181,6 +181,10 @@ Both score terms are required. Do not pick the first suitable device. Override w
 **Validation:** Debug builds require `VK_LAYER_KHRONOS_validation` and fail fast if it is missing. Release builds run without validation. No validation output on startup usually means the layer is active and found nothing wrong — debug builds print `Vulkan validation: enabled` to confirm.
 
 **MSAA:** Configured at startup via `MsaaSettings` (`render_settings.hpp`). Default is enabled, capped at **4×** (not device max). Override: `ENGINE_MSAA=0` (off), `ENGINE_MSAA=2`, `ENGINE_MSAA=4`, or `ENGINE_MSAA=8` (clamped to GPU support). Changing MSAA requires restart.
+
+**Render scale:** Integer divisor at startup (`ENGINE_RENDER_SCALE`). Default **1** = full swapchain resolution with no extra images or blit (same path as before). **2** renders at half width/height, then nearest-neighbor blits to the swapchain (crisp pixel upscale); ImGui/overlays stay at full swapchain resolution. MSAA and depth use the internal extent; shadows stay at map resolution. Useful for profiling GPU-bound scenes (`ENGINE_PRESENT=mailbox` + `ENGINE_RENDER_SCALE=2`). Max divisor **64** (clamped; internal extent never below 1×1); restart to change.
+
+**Shadow scale:** Integer divisor on shadow map edge length (`ENGINE_SHADOW_SCALE`). Default **1** = scene base resolution (2048²). **2** → 1024² per cascade layer (quarter fill rate). Min **256**; max divisor **64**. Restart to change. Pairs with render scale for profiling (`ENGINE_PRESENT=mailbox ENGINE_RENDER_SCALE=2 ENGINE_SHADOW_SCALE=2`).
 
 **Swapchain surface:** probe `compositeAlpha`, prefer identity `preTransform`, and add `TRANSFER_DST` usage when supported (Sascha, Vulkan-Samples).
 
