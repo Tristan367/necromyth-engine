@@ -2,7 +2,7 @@
 
 #include "renderer/graphics_pipeline.hpp"
 #include "renderer/pipeline_id.hpp"
-#include "renderer/vertex.hpp"
+#include "renderer/vertex_attributes.hpp"
 #include "scene/shadow_utils.hpp"
 #include <array>
 #include <cstddef>
@@ -83,12 +83,12 @@ private:
       skinned_pipeline_layout_ = create_pipeline_layout(device, skinned_set_layouts);
     }
 
-    const auto mesh_binding = MeshVertex::binding_description();
-    const auto static_mesh_attributes = MeshVertex::static_attribute_descriptions();
-    const auto mesh_attributes = MeshVertex::attribute_descriptions();
-    const std::array sky_attributes{MeshVertex::attribute_descriptions()[0]};
-    const std::array shadow_attributes{MeshVertex::attribute_descriptions()[0]};
-    const auto shadow_skinned_attributes = MeshVertex::shadow_skinned_attribute_descriptions();
+    const auto mesh_binding = mesh_binding_description();
+    const auto static_mesh_attributes = static_attribute_descriptions();
+    const auto mesh_attributes = attribute_descriptions();
+    const std::array sky_attributes{attribute_descriptions()[0]};
+    const std::array shadow_attributes{attribute_descriptions()[0]};
+    const auto shadow_skinned_attributes = shadow_skinned_attribute_descriptions();
 
     pipelines_[static_cast<std::size_t>(PipelineId::Background)] = create_graphics_pipeline(
         device, color_format_, depth_format_, background_spirv_,

@@ -30,7 +30,6 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_timer.h>
 
-#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -306,14 +305,8 @@ public:
         });
 
     if (!bone_buffers_.empty()) {
-      const std::uint64_t now_ticks = SDL_GetTicks();
-      const float delta_seconds = last_frame_ticks_ > 0
-          ? static_cast<float>(now_ticks - last_frame_ticks_) / 1000.0F
-          : 0.0F;
-      last_frame_ticks_ = now_ticks;
-
       std::uint32_t bone_buffer_index = 0;
-      for (MeshInstance &instance : scene.instances()) {
+      for (const MeshInstance &instance : scene.instances()) {
         if (instance.skin_index == k_invalid_skin_index || instance.animation_index == k_invalid_skin_index)
           continue;
         if (instance.skin_index >= scene.skeletons().size())
@@ -323,46 +316,30 @@ public:
         if (bone_buffer_index >= bone_buffers_.size())
           break;
 
-        const AnimationClip &clip = scene.animations()[instance.animation_index];
-        instance.animation_time += delta_seconds * instance.animation_speed;
-        if (instance.animation_loop && clip.duration > 0.0F && instance.animation_time > clip.duration)
-          instance.animation_time = std::fmod(instance.animation_time, clip.duration);
-
         std::vector<glm::mat4> joint_matrices;
 
         if (instance.next_animation_index < scene.animations().size()) {
+          const AnimationClip &clip = scene.animations()[instance.animation_index];
           const AnimationClip &next_clip = scene.animations()[instance.next_animation_index];
-          instance.next_animation_time += delta_seconds * instance.animation_speed;
-          if (instance.animation_loop && next_clip.duration > 0.0F &&
-              instance.next_animation_time > next_clip.duration)
-            instance.next_animation_time = std::fmod(instance.next_animation_time, next_clip.duration);
 
-          instance.blend_factor += delta_seconds / instance.blend_duration;
-          if (instance.blend_factor >= 1.0F) {
-            instance.animation_index = instance.next_animation_index;
-            instance.animation_time = instance.next_animation_time;
-            instance.next_animation_index = std::numeric_limits<std::uint32_t>::max();
-            instance.blend_factor = 1.0F;
-          }
-
-          if (instance.blend_factor < 1.0F) {
+          if (instance.blend_factor < 1.0F)
             compute_joint_matrices_blended(
                 scene.skeletons()[instance.skin_index],
                 clip, instance.animation_time,
                 next_clip, instance.next_animation_time,
                 instance.blend_factor,
                 joint_matrices);
-          } else {
+          else
             compute_joint_matrices(
                 scene.skeletons()[instance.skin_index],
                 scene.animations()[instance.animation_index],
                 instance.animation_time,
                 joint_matrices);
-          }
         } else {
           compute_joint_matrices(
               scene.skeletons()[instance.skin_index],
-              clip, instance.animation_time,
+              scene.animations()[instance.animation_index],
+              instance.animation_time,
               joint_matrices);
         }
 
@@ -750,7 +727,6 @@ private:
   bool gpu_shutdown_complete_{false};
   FrameOverlayCallback frame_overlay_;
   std::uint64_t last_resize_ticks_{};
-  std::uint64_t last_frame_ticks_{};
 };
 
 } // namespace engine

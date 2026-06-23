@@ -192,12 +192,33 @@ add_library(vce_stb STATIC src/renderer/texture_image_stb.cpp)
 target_include_directories(vce_stb SYSTEM PRIVATE "${STB_INCLUDE_DIR}")
 target_compile_features(vce_stb PRIVATE cxx_std_23)
 
-add_library(vce_engine INTERFACE)
-add_library(VCE::Engine ALIAS vce_engine)
+add_library(vce_core INTERFACE)
+add_library(VCE::Core ALIAS vce_core)
 
-target_compile_features(vce_engine INTERFACE cxx_std_23)
+target_compile_features(vce_core INTERFACE cxx_std_23)
 
-target_compile_definitions(vce_engine INTERFACE
+target_include_directories(vce_core SYSTEM INTERFACE
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>"
+    "$<BUILD_INTERFACE:${STB_INCLUDE_DIR}>"
+)
+
+target_link_libraries(vce_core INTERFACE
+    glm::glm
+    vce_gltf_impl
+    vce_stb
+)
+
+if(MSVC)
+    target_compile_options(vce_core INTERFACE /W4 /permissive-)
+else()
+    target_compile_options(vce_core INTERFACE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(vce_renderer INTERFACE)
+add_library(VCE::Renderer ALIAS vce_renderer)
+
+target_compile_definitions(vce_renderer INTERFACE
     VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
     ENGINE_SHADER_SPIRV="${VCE_SHADER_SPIRV}"
@@ -207,24 +228,15 @@ target_compile_definitions(vce_engine INTERFACE
     ENGINE_SKINNED_SHADOW_DEPTH_SPIRV="${VCE_SKINNED_SHADOW_DEPTH_SPIRV}"
 )
 
-target_include_directories(vce_engine SYSTEM INTERFACE
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>"
-    "$<BUILD_INTERFACE:${STB_INCLUDE_DIR}>"
-)
-
-target_link_libraries(vce_engine INTERFACE
+target_link_libraries(vce_renderer INTERFACE
+    vce_core
     SDL3::SDL3
     Vulkan::Vulkan
-    glm::glm
-    vce_gltf_impl
-    vce_stb
 )
 
-add_dependencies(vce_engine vce_shaders)
+add_dependencies(vce_renderer vce_shaders)
 
-if(MSVC)
-    target_compile_options(vce_engine INTERFACE /W4 /permissive-)
-else()
-    target_compile_options(vce_engine INTERFACE -Wall -Wextra -Wpedantic)
-endif()
+# Backward compatibility alias
+add_library(vce_engine INTERFACE)
+add_library(VCE::Engine ALIAS vce_engine)
+target_link_libraries(vce_engine INTERFACE vce_renderer)
