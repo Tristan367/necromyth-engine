@@ -39,19 +39,32 @@ Read this and `README.md` before large renderer changes.
 
 **Two-repo rule** (from README): adopt a pattern only if two references agree, or one is clearly authoritative for that feature.
 
-## Animation / skinning (next)
+## Animation / skinning (implemented)
 
-**Not implemented yet.** Static glTF only today (`POSITION`, `NORMAL`, `TEXCOORD_0`, indices). No `JOINTS_0` / `WEIGHTS_0`, no skins, no animation clips.
+**Vertex layout:** `MeshVertex` extended with `joint_indices[4]` + `joint_weights[4]` (float[4] each, locations 4-5, `R32G32B32A32_SFLOAT`). Static meshes use `static_attribute_descriptions()` (4 attrs) — no joint fetch overhead for non-skinned draws.
 
-### Readiness checklist (engine gaps)
+**glTF loader:** reads `JOINTS_0` (uint8/uint16), `WEIGHTS_0`, `model.skins` (inverse bind matrices, joint nodes), `model.animations` (clips, channels, samplers). `SkeletonAsset` stores IBM + joint_nodes + `node_parents` map; `AnimationClip`, `AnimationSampler`, `AnimationChannel` in `animation_types.hpp`. Skinned node transforms NOT baked into primitives (identity instead — bone matrices handle placement).
 
-1. **Vertex layout** — extend `MeshVertex` + `mesh_types.slang` with 4 bone indices + 4 weights (normalize weights in loader).
-2. **glTF loader** — read skins (inverse bind matrices, joint node indices), `JOINTS_0`/`WEIGHTS_0`; keep skeleton as asset, not baked into `node_transform`.
-3. **GPU path** — bone palette SSBO (or UBO if ≤256 bones); skinned VS in main + shadow depth passes.
-4. **Scene API** — `SkinnedMeshInstance` or flag on instance: clip name, time, root transform; update palette per frame before `draw_frame`.
-5. **Pipeline** — startup variant `TexturedSkinned` (+ shadow depth skinned VS), same fragment entries as static.
+**GPU path:** `BoneStorageBufferSet` — per-instance, host-visible + host-coherent SSBOs, double-buffered (2 per frame-in-flight). Exact bone-count sizing (not k_max_bones). `BoneTRS`-based sampling with SLERP (quaternion) and LERP (translation/scale). Binary keyframe search (`std::upper_bound`). Pre-built per-node channel maps. Thread-local chain vector (zero heap-alloc per frame).
 
-Design for physics later: **skeleton asset** (bind pose) + **runtime pose** (animation or physics) + **root transform** on instance. Shadow pass uses same skinned matrices.
+**Scene API:** `MeshInstance` has `skin_index`, `animation_index`, `animation_time`, `animation_speed`, `animation_loop`. Blending: `next_animation_index`, `blend_factor`, `blend_duration`. `Scene` stores `skeletons_` and `animations_` (add_skeleton/add_animation). `Scene::instance()` returns mutable ref for runtime control.
+
+**Pipeline:** 4 new `PipelineId` variants: `TexturedOpaqueSkinned`, `TexturedCutoutSkinned`, `TexturedAlphaToCoverageSkinned`, `ShadowDepthSkinned` (IDs 5-8). Skinned main pipelines use separate VS SPIR-V (`triangle_skinned.spv`, `vertMainSkinned`) + reuse fragment shaders from `triangle.spv`. Skinned shadow uses dedicated `shadow_depth_skinned.spv` with 3-attr vertex input (pos + joints, no normal/color/tex).
+
+**Descriptor layouts:** `material_skinned_layout_` (set 1: sampler b=0 + SSBO b=1) for main pass skinned; shadow skinned reuses same layout (dummy sampler at b=0, SSBO at b=1). Non-skinned uses `material_layout_` (set 1: sampler b=0 only). Zero overhead for non-skinned scenes — `build_skinned` flag gates skinned pipeline creation.
+
+**Animation blending:** `compute_joint_matrices_blended()` blends at TRS level (lerp T/S, slerp R) before world matrix construction. Single-animation path delegates to blended with `blend_factor = 1.0F`. Crossfade auto-advances `blend_factor += delta / blend_duration`, promotes `next_animation_index` to `animation_index` on completion.
+
+### key files
+
+- `animation_types.hpp`: `SkeletonAsset`, `AnimationClip`, `AnimationSampler`, `AnimationChannel`, `k_max_bones = 128`
+- `animation_utils.hpp`: `sample_animation_trs()`, `compute_joint_matrices()`, `compute_joint_matrices_blended()`, `BoneTRS`, `trs_to_mat4()`
+- `bone_buffer.hpp`: `BoneStorageBufferSet` (host-visible SSBO per instance)
+- `vulkan_context.hpp`: animation update loop in `draw_frame()`, `create_bone_buffers()`
+- `gltf_loader.hpp`: `read_joint_accessor()`, `load_skeletons()`, `load_animations()`, `node_parents` map
+- `pass_recorder.hpp`: `bind_material()` handles skinned sets, `draw_shadow_mesh()` binds bone SSBO
+- `pipeline_id.hpp`: `textured_pipeline(alpha_mode, skinned)`, `is_skinned_pipeline()`
+- Shaders: `triangle_skinned.slang`, `shadow_depth_skinned.slang`, `lib/mesh_types_skinned.slang`
 
 ### Blender → glTF export (test model)
 
@@ -63,11 +76,11 @@ Design for physics later: **skeleton asset** (bind pose) + **runtime pose** (ani
 
 ## Known follow-ups
 
-1. **glTF skinning / animation** — active next feature (see checklist above).
-2. **Physics wrapper** (e.g. Jolt) — after skinning; sync root transform; collision rig on bones later.
-3. Alpha-threshold shadow discard (optional; opaque silhouettes are fine for now).
-4. Split `vulkan_context.hpp` further if it grows again.
-5. Hard cleanup pass after animation lands (dead abstractions).
+1. **Physics wrapper** (e.g. Jolt) — after skinning; sync root transform; collision rig on bones later.
+2. Alpha-threshold shadow discard (optional; opaque silhouettes are fine for now).
+3. Split `vulkan_context.hpp` further if it grows again.
+4. Per-skin bone buffers instead of per-instance (shared skeletons).
+5. Cubic spline interpolation for glTF animations (rare in practice).
 
 ## Engine vs demo boundaries
 

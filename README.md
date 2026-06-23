@@ -87,7 +87,7 @@ The engine stays minimal:
 - Sky shader or traditional skybox mesh
 - Khronos tutorial fundamentals: MSAA, mip mapping, texture sampling, depth buffering, model loading
 
-Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `scene_gpu` (mesh/texture upload helpers), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `render_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `platform/sdl_window`, `platform/gpu_cli`.
+Current renderer modules: `vulkan_context` (frame loop, init), `pass_recorder` (shadow/main pass recording), `scene_gpu` (mesh/texture upload helpers), `vulkan_device`, `swapchain`, `render_settings`, `engine_config`, `scene` (`camera`, `scene`, `mesh_instance`, `render_layer`, `directional_light`, `shadow_utils`, `sky_mesh`), `draw_list`, `mesh_gpu`, `pipeline_id`, `graphics_pipeline`, `pipeline_registry`, `depth_image`, `msaa_color_image`, `render_color_image`, `shadow_map`, `buffer`, `vertex`, `model_loader`, `gltf_loader`, `texture_image`, `uniform_buffer`, `descriptors`, `image_barrier`, `bone_buffer`, `platform/sdl_window`, `platform/gpu_cli`. Animation: `animation_types`, `animation_utils`.
 
 **Compiled sources:** `gltf_loader_impl.cpp` (tinygltf in one TU), `texture_image_stb.cpp` (stb_image in one TU). Everything else is headers.
 
@@ -99,7 +99,7 @@ The renderer avoids unnecessary complexity — no PBR, no normal maps unless dir
 
 **Repo split (current):** Renderer + scene/core live here as one library. A separate *renderer-only* repo makes sense when you add a second backend (e.g. Metal). Until then, keep renderer and engine unified to avoid submodule friction.
 
-**Models:** `load_gltf_model()` loads glTF 2.0 static meshes (tinygltf, Sascha-style CPU path). `load_obj_model()` remains for simple `.obj` assets. glTF sidecar textures (`.png`/`.jpg` next to the `.gltf`) resolve via material paths; `.glb` bundles everything into one file.
+**Models:** `load_gltf_model()` loads glTF 2.0 meshes (static + skinned), skeletons, and animation clips (tinygltf, Sascha-style CPU path). `load_obj_model()` remains for simple `.obj` assets. glTF sidecar textures (`.png`/`.jpg` next to the `.gltf`) resolve via material paths; `.glb` bundles everything into one file.
 
 **Lighting:** `Scene::directional_light()` feeds sun direction, color, intensity, and ambient into the frame UBO. The textured mesh shader applies Lambert diffuse modulated by a directional shadow map.
 
@@ -120,9 +120,11 @@ Focus: **camera footprint** ortho on camera XZ — stable when rotating (Sascha-
 
 **Alpha surfaces:** cutout discard or alpha-to-coverage with MSAA — no true alpha blend pass. Use `RenderLayer::AlphaTested` for ordered foliage/fences.
 
-**Descriptors:** Set 0 holds per-frame UBO, texture array, and shadow map; set 1 holds the table texture for the current draw (Sascha multi-set pattern). This avoids allocating duplicate frame/shadow bindings for every table texture.
+**Descriptors:** Set 0 holds per-frame UBO, texture array, and shadow map; set 1 holds the table texture for the current draw (or texture + bone SSBO for skinned draws). Shadow skinned draws reuse the same combo layout with a dummy sampler at binding 0. This avoids allocating duplicate frame/shadow bindings for every table texture. Non-skinned scenes pay zero overhead for skinned resources.
 
 Final shading: `baseColor * (ambient + diffuse * shadow)` with standard Lambert `max(N·L, 0)`.
+
+**Skeletal animation:** Bone matrices are computed CPU-side via `compute_joint_matrices()` in `animation_utils.hpp` and uploaded to a host-coherent SSBO each frame. Joint transforms sample animation clips at the TRS level (SLERP for rotation, LERP for translation/scale), walk the parent-chain hierarchy, multiply by inverse bind matrices, and write into the bone palette. The skinned vertex shader (`triangle_skinned.slang`) performs 4-bone linear blend skinning weighted by vertex joint attributes. Animation blending (`compute_joint_matrices_blended()`) crossfades between two clips by blending TRS before world matrix construction. Shadow pass handles skinned casters identically. Per-instance control via `MeshInstance` fields: `skin_index`, `animation_index`, `animation_time`, `animation_speed`, `animation_loop`; crossfade via `next_animation_index`, `blend_factor`, `blend_duration`.
 
 **Textures:** Each `MeshInstance` uses `texture_source` + `texture_index`. Opaque-surface draws also set `MeshAlphaMode` (`Opaque`, `Cutout`, `AlphaToCoverage`); the engine creates a textured pipeline only for alpha modes used in the scene, using the shadow filter from startup settings.
 - `TextureSource::Table` — array of textures (separate images, Sascha `descriptorsets/`)
