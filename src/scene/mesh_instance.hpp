@@ -6,6 +6,7 @@
 #include <glm/mat4x4.hpp>
 
 #include <cstdint>
+#include <limits>
 
 namespace engine {
 
@@ -22,6 +23,19 @@ struct MeshInstance {
   glm::mat4 model{1.0F};
   RenderLayer layer{RenderLayer::Opaque};
   MeshAlphaMode alpha_mode{MeshAlphaMode::Opaque};
+
+  std::uint32_t skin_index{std::numeric_limits<std::uint32_t>::max()};
+  std::uint32_t animation_index{std::numeric_limits<std::uint32_t>::max()};
+  float animation_time{0.0F};
+  float animation_speed{1.0F};
+  bool animation_loop{true};
+
+  std::uint32_t next_animation_index{std::numeric_limits<std::uint32_t>::max()};
+  float next_animation_time{0.0F};
+  float blend_factor{1.0F};
+  float blend_duration{0.3F};
 };
+
+constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();
 
 } // namespace engine

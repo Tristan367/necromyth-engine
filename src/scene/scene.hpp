@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene/animation_types.hpp"
 #include "scene/camera.hpp"
 #include "scene/directional_light.hpp"
 #include "scene/shadow_utils.hpp"
@@ -27,6 +28,10 @@ public:
   }
 
   [[nodiscard]] auto instances() const -> const std::vector<MeshInstance> & {
+    return instances_;
+  }
+
+  [[nodiscard]] auto instances() -> std::vector<MeshInstance> & {
     return instances_;
   }
 
@@ -58,6 +63,14 @@ public:
     return shadow_settings_;
   }
 
+  [[nodiscard]] auto skeletons() const -> const std::vector<SkeletonAsset> & {
+    return skeletons_;
+  }
+
+  [[nodiscard]] auto animations() const -> const std::vector<AnimationClip> & {
+    return animations_;
+  }
+
   [[nodiscard]] auto add_mesh(MeshSource mesh) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(meshes_.size());
     meshes_.push_back(std::move(mesh));
@@ -82,6 +95,18 @@ public:
     return index;
   }
 
+  [[nodiscard]] auto add_skeleton(SkeletonAsset skeleton) -> std::uint32_t {
+    const std::uint32_t index = static_cast<std::uint32_t>(skeletons_.size());
+    skeletons_.push_back(std::move(skeleton));
+    return index;
+  }
+
+  [[nodiscard]] auto add_animation(AnimationClip animation) -> std::uint32_t {
+    const std::uint32_t index = static_cast<std::uint32_t>(animations_.size());
+    animations_.push_back(std::move(animation));
+    return index;
+  }
+
 private:
   Camera camera_;
   DirectionalLight directional_light_{};
@@ -90,6 +115,8 @@ private:
   std::vector<std::string> texture_paths_;
   std::vector<std::string> texture_array_layer_paths_;
   std::vector<MeshInstance> instances_;
+  std::vector<SkeletonAsset> skeletons_;
+  std::vector<AnimationClip> animations_;
 };
 
 } // namespace engine

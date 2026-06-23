@@ -70,6 +70,125 @@ struct GraphicsPipelineRasterState {
     vk::raii::Device &device,
     vk::Format color_format,
     vk::Format depth_format,
+    std::string_view vertex_spirv_path,
+    std::string_view fragment_spirv_path,
+    vk::PipelineLayout pipeline_layout,
+    vk::SampleCountFlagBits sample_count,
+    vk::VertexInputBindingDescription binding,
+    std::span<const vk::VertexInputAttributeDescription> attributes,
+    const vk::raii::PipelineCache &pipeline_cache,
+    GraphicsPipelineRasterState raster_state = {},
+    const char *vertex_entry_point = "vertMain",
+    const char *fragment_entry_point = "fragMain") -> vk::raii::Pipeline {
+  const auto vertex_spirv = read_spirv_file(vertex_spirv_path);
+  const auto fragment_spirv = read_spirv_file(fragment_spirv_path);
+  const vk::raii::ShaderModule vertex_module = create_shader_module(device, vertex_spirv);
+  const vk::raii::ShaderModule fragment_module = create_shader_module(device, fragment_spirv);
+
+  const std::array stages{
+      vk::PipelineShaderStageCreateInfo{
+          .stage = vk::ShaderStageFlagBits::eVertex,
+          .module = *vertex_module,
+          .pName = vertex_entry_point,
+      },
+      vk::PipelineShaderStageCreateInfo{
+          .stage = vk::ShaderStageFlagBits::eFragment,
+          .module = *fragment_module,
+          .pName = fragment_entry_point,
+      },
+  };
+
+  const vk::PipelineVertexInputStateCreateInfo vertex_input_info{
+      .vertexBindingDescriptionCount = 1,
+      .pVertexBindingDescriptions = &binding,
+      .vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size()),
+      .pVertexAttributeDescriptions = attributes.data(),
+  };
+  const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
+      .topology = vk::PrimitiveTopology::eTriangleList,
+  };
+  const vk::PipelineViewportStateCreateInfo viewport_state{
+      .viewportCount = 1,
+      .scissorCount = 1,
+  };
+  const vk::PipelineRasterizationStateCreateInfo rasterizer{
+      .depthClampEnable = vk::False,
+      .rasterizerDiscardEnable = vk::False,
+      .polygonMode = vk::PolygonMode::eFill,
+      .cullMode = raster_state.cull_mode,
+      .frontFace = raster_state.front_face,
+      .depthBiasEnable = raster_state.depth_bias_enable ? vk::True : vk::False,
+      .depthBiasConstantFactor = raster_state.depth_bias_constant,
+      .depthBiasSlopeFactor = raster_state.depth_bias_slope,
+      .lineWidth = 1.0F,
+  };
+  const vk::PipelineMultisampleStateCreateInfo multisampling{
+      .rasterizationSamples = sample_count,
+      .alphaToCoverageEnable = raster_state.alpha_to_coverage ? vk::True : vk::False,
+  };
+  const vk::PipelineColorBlendAttachmentState color_blend_attachment{
+      .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+  };
+  const vk::PipelineColorBlendStateCreateInfo color_blending{
+      .attachmentCount = 1,
+      .pAttachments = &color_blend_attachment,
+  };
+
+  const vk::PipelineDepthStencilStateCreateInfo depth_stencil{
+      .depthTestEnable = raster_state.depth_test ? vk::True : vk::False,
+      .depthWriteEnable = raster_state.depth_write ? vk::True : vk::False,
+      .depthCompareOp = raster_state.depth_compare,
+  };
+
+  const std::array dynamic_states{
+      vk::DynamicState::eViewport,
+      vk::DynamicState::eScissor,
+  };
+  std::vector<vk::DynamicState> dynamic_state_list{dynamic_states.begin(), dynamic_states.end()};
+  if (raster_state.depth_bias_enable)
+    dynamic_state_list.push_back(vk::DynamicState::eDepthBias);
+
+  const vk::PipelineDynamicStateCreateInfo dynamic_state{
+      .dynamicStateCount = static_cast<std::uint32_t>(dynamic_state_list.size()),
+      .pDynamicStates = dynamic_state_list.data(),
+  };
+
+  vk::Format color_attachment_format = color_format;
+  vk::Format depth_attachment_format = depth_format;
+
+  vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipeline_chain{
+      vk::GraphicsPipelineCreateInfo{
+          .stageCount = static_cast<std::uint32_t>(stages.size()),
+          .pStages = stages.data(),
+          .pVertexInputState = &vertex_input_info,
+          .pInputAssemblyState = &input_assembly,
+          .pViewportState = &viewport_state,
+          .pRasterizationState = &rasterizer,
+          .pMultisampleState = &multisampling,
+          .pDepthStencilState = &depth_stencil,
+          .pColorBlendState = &color_blending,
+          .pDynamicState = &dynamic_state,
+          .layout = pipeline_layout,
+          .renderPass = nullptr,
+      },
+      vk::PipelineRenderingCreateInfo{
+          .colorAttachmentCount = 1,
+          .pColorAttachmentFormats = &color_attachment_format,
+          .depthAttachmentFormat = depth_attachment_format,
+      },
+  };
+
+  return vk::raii::Pipeline(
+      device,
+      pipeline_cache,
+      pipeline_chain.get<vk::GraphicsPipelineCreateInfo>());
+}
+
+[[nodiscard]] inline auto create_graphics_pipeline(
+    vk::raii::Device &device,
+    vk::Format color_format,
+    vk::Format depth_format,
     std::string_view spirv_path,
     vk::PipelineLayout pipeline_layout,
     vk::SampleCountFlagBits sample_count,
@@ -189,14 +308,15 @@ struct GraphicsPipelineRasterState {
     const vk::raii::PipelineCache &pipeline_cache,
     vk::VertexInputBindingDescription binding,
     std::span<const vk::VertexInputAttributeDescription> attributes,
-    GraphicsPipelineRasterState raster_state = {}) -> vk::raii::Pipeline {
+    GraphicsPipelineRasterState raster_state = {},
+    const char *entry_point = "vertMain") -> vk::raii::Pipeline {
   const auto spirv = read_spirv_file(vert_spirv_path);
   const vk::raii::ShaderModule shader_module = create_shader_module(device, spirv);
 
   const vk::PipelineShaderStageCreateInfo vert_stage{
       .stage = vk::ShaderStageFlagBits::eVertex,
       .module = *shader_module,
-      .pName = "vertMain",
+      .pName = entry_point,
   };
 
   const vk::PipelineVertexInputStateCreateInfo vertex_input_info{

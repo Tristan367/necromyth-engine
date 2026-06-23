@@ -47,6 +47,7 @@ struct DrawBindState {
   std::optional<PipelineId> pipeline;
   std::optional<MaterialKey> material;
   std::uint32_t mesh_index{k_unbound_mesh};
+  std::uint32_t frame_index{};
 };
 
 struct PassRecorder {
@@ -74,26 +75,15 @@ struct PassRecorder {
     return *swapchain.image_views()[image_index];
   }
 
-  void bind_frame_descriptor_set(vk::raii::CommandBuffer &command_buffer, std::uint32_t frame_index) const {
-    command_buffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        pipelines.layout(),
-        0,
-        descriptors.frame_set(frame_index),
-        nullptr);
-  }
-
-  void bind_pass_descriptor_sets(vk::raii::CommandBuffer &command_buffer, std::uint32_t frame_index) const {
-    const vk::DescriptorSet descriptor_sets[] = {
-        descriptors.frame_set(frame_index),
-        descriptors.material_set(0),
-    };
-    command_buffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        pipelines.layout(),
-        0,
-        descriptor_sets,
-        nullptr);
+  void bind_pass_descriptors(vk::raii::CommandBuffer &command_buffer, std::uint32_t frame_index,
+                               bool bind_material = false) const {
+    if (bind_material) {
+      const vk::DescriptorSet sets[] = {descriptors.frame_set(frame_index), descriptors.material_set(0)};
+      command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelines.layout(), 0, sets, nullptr);
+    } else {
+      command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelines.layout(), 0,
+                                        descriptors.frame_set(frame_index), nullptr);
+    }
   }
 
   [[nodiscard]] auto material_descriptor_index(const DrawCommand &draw) const -> std::optional<std::uint32_t> {
@@ -152,12 +142,23 @@ struct PassRecorder {
     if (state.material.has_value() && *state.material == material_key)
       return;
 
-    command_buffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        pipelines.layout(),
-        1,
-        descriptors.material_set(*descriptor_index),
-        nullptr);
+    const bool is_skinned = is_skinned_pipeline(draw.pipeline);
+
+    if (is_skinned && draw.bone_instance_index != k_invalid_skin_index) {
+      command_buffer.bindDescriptorSets(
+          vk::PipelineBindPoint::eGraphics,
+          pipelines.layout_for(draw.pipeline),
+          1,
+          descriptors.skinned_set(draw.bone_instance_index, state.frame_index),
+          nullptr);
+    } else {
+      command_buffer.bindDescriptorSets(
+          vk::PipelineBindPoint::eGraphics,
+          pipelines.layout_for(draw.pipeline),
+          1,
+          descriptors.material_set(*descriptor_index),
+          nullptr);
+    }
     state.material = material_key;
   }
 
@@ -165,11 +166,27 @@ struct PassRecorder {
       vk::raii::CommandBuffer &command_buffer,
       const DrawCommand &draw,
       std::uint32_t cascade_index,
+      std::uint32_t frame_index,
       DrawBindState &state) const {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
 
-    bind_pipeline(command_buffer, PipelineId::ShadowDepth, state);
+    const bool is_skinned = is_skinned_pipeline(draw.pipeline);
+
+    if (is_skinned)
+      bind_pipeline(command_buffer, PipelineId::ShadowDepthSkinned, state);
+    else
+      bind_pipeline(command_buffer, PipelineId::ShadowDepth, state);
+
+    if (is_skinned && draw.bone_instance_index != k_invalid_skin_index) {
+      command_buffer.bindDescriptorSets(
+          vk::PipelineBindPoint::eGraphics,
+          pipelines.layout_for(PipelineId::ShadowDepthSkinned),
+          1,
+          descriptors.shadow_bone_set(draw.bone_instance_index, frame_index),
+          nullptr);
+    }
+
     bind_mesh_buffers(command_buffer, draw.mesh_index, state);
 
     const TexturedPushConstants push_constants{
@@ -177,7 +194,7 @@ struct PassRecorder {
         .shadow_cascade_index = cascade_index,
     };
     command_buffer.pushConstants(
-        pipelines.layout(),
+        pipelines.layout_for(is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth),
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
         0,
         sizeof(TexturedPushConstants),
@@ -208,7 +225,7 @@ struct PassRecorder {
           .sample_texture_array = draw.texture_source == TextureSource::ArrayLayer ? 1U : 0U,
       };
       command_buffer.pushConstants(
-          pipelines.layout(),
+          pipelines.layout_for(draw.pipeline),
           vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
           0,
           sizeof(TexturedPushConstants),
@@ -216,7 +233,7 @@ struct PassRecorder {
     } else if (draw.pipeline == PipelineId::Background) {
       const TexturedPushConstants push_constants{.model = draw.model};
       command_buffer.pushConstants(
-          pipelines.layout(),
+          pipelines.layout_for(draw.pipeline),
           vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
           0,
           sizeof(TexturedPushConstants),
@@ -490,7 +507,7 @@ struct PassRecorder {
         .pDepthAttachment = &depth_attachment,
     };
     command_buffer.beginRendering(rendering_info);
-    bind_pass_descriptor_sets(command_buffer, frame_index);
+    bind_pass_descriptors(command_buffer, frame_index, true);
     command_buffer.setViewport(
         0,
         vk::Viewport{
@@ -589,7 +606,7 @@ struct PassRecorder {
       };
 
       command_buffer.beginRendering(rendering_info);
-      bind_frame_descriptor_set(command_buffer, frame_index);
+      bind_pass_descriptors(command_buffer, frame_index);
       command_buffer.setViewport(
           0,
           vk::Viewport{
@@ -603,9 +620,10 @@ struct PassRecorder {
       command_buffer.setScissor(0, vk::Rect2D{{0, 0}, shadow_map.extent()});
       command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
-      DrawBindState bind_state;
+      DrawBindState bind_state{};
+      bind_state.frame_index = frame_index;
       for (const DrawCommand &draw : shadow_draws)
-        draw_shadow_mesh(command_buffer, draw, cascade_index, bind_state);
+        draw_shadow_mesh(command_buffer, draw, cascade_index, frame_index, bind_state);
 
       command_buffer.endRendering();
     }
@@ -675,7 +693,8 @@ struct PassRecorder {
 
     record_scene_rendering(command_buffer, frame_index, color_attachment, depth_attachment);
 
-    DrawBindState bind_state;
+    DrawBindState bind_state{};
+    bind_state.frame_index = frame_index;
     for (const DrawCommand &draw : draw_list)
       draw_mesh(command_buffer, draw, bind_state);
 

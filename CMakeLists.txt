@@ -46,6 +46,8 @@ set(SHADER_SPIRV_OUTPUTS "")
 set(VCE_SHADER_SPIRV "")
 set(VCE_SKY_SHADER_SPIRV "")
 set(VCE_SHADOW_DEPTH_SPIRV "")
+set(VCE_SKINNED_SHADER_SPIRV "")
+set(VCE_SKINNED_SHADOW_DEPTH_SPIRV "")
 
 foreach(SHADER_SOURCE ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME_WE)
@@ -82,8 +84,6 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -entry vertMain
                 -entry fragOpaqueHard
                 -entry fragCutoutHard
-                -entry fragOpaqueHard
-                -entry fragCutoutHard
                 -entry fragA2CHard
                 -entry fragOpaquePcf
                 -entry fragCutoutPcf
@@ -94,6 +94,40 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -entry fragOpaquePcfCsm2
                 -entry fragCutoutPcfCsm2
                 -entry fragA2CPcfCsm2
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    elseif(SHADER_NAME STREQUAL "triangle_skinned")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMainSkinned
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    elseif(SHADER_NAME STREQUAL "shadow_depth_skinned")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMainSkinned
                 -o "${SHADER_SPIRV}"
             DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
             COMMENT "Compiling ${SHADER_NAME}.slang"
@@ -126,6 +160,10 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
         set(VCE_SKY_SHADER_SPIRV "${SHADER_SPIRV}")
     elseif(SHADER_NAME STREQUAL "shadow_depth")
         set(VCE_SHADOW_DEPTH_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "triangle_skinned")
+        set(VCE_SKINNED_SHADER_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "shadow_depth_skinned")
+        set(VCE_SKINNED_SHADOW_DEPTH_SPIRV "${SHADER_SPIRV}")
     endif()
 endforeach()
 
@@ -165,6 +203,8 @@ target_compile_definitions(vce_engine INTERFACE
     ENGINE_SHADER_SPIRV="${VCE_SHADER_SPIRV}"
     ENGINE_SKY_SHADER_SPIRV="${VCE_SKY_SHADER_SPIRV}"
     ENGINE_SHADOW_DEPTH_SPIRV="${VCE_SHADOW_DEPTH_SPIRV}"
+    ENGINE_SKINNED_SHADER_SPIRV="${VCE_SKINNED_SHADER_SPIRV}"
+    ENGINE_SKINNED_SHADOW_DEPTH_SPIRV="${VCE_SKINNED_SHADOW_DEPTH_SPIRV}"
 )
 
 target_include_directories(vce_engine SYSTEM INTERFACE

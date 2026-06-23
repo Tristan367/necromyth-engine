@@ -16,9 +16,24 @@ enum class PipelineId : std::uint8_t {
   TexturedCutout = 2,
   TexturedAlphaToCoverage = 3,
   ShadowDepth = 4,
+  TexturedOpaqueSkinned = 5,
+  TexturedCutoutSkinned = 6,
+  TexturedAlphaToCoverageSkinned = 7,
+  ShadowDepthSkinned = 8,
 };
 
-[[nodiscard]] constexpr auto textured_pipeline(MeshAlphaMode alpha_mode) -> PipelineId {
+[[nodiscard]] constexpr auto textured_pipeline(MeshAlphaMode alpha_mode, bool skinned = false) -> PipelineId {
+  if (skinned) {
+    switch (alpha_mode) {
+    case MeshAlphaMode::Cutout:
+      return PipelineId::TexturedCutoutSkinned;
+    case MeshAlphaMode::AlphaToCoverage:
+      return PipelineId::TexturedAlphaToCoverageSkinned;
+    case MeshAlphaMode::Opaque:
+    default:
+      return PipelineId::TexturedOpaqueSkinned;
+    }
+  }
   switch (alpha_mode) {
   case MeshAlphaMode::Cutout:
     return PipelineId::TexturedCutout;
@@ -34,36 +49,15 @@ enum class PipelineId : std::uint8_t {
     ShadowFilterMode filter,
     MeshAlphaMode alpha_mode,
     ShadowCascadeMode cascade_mode) -> const char * {
-  static constexpr std::array<const char *, 3> hard{
-      "fragOpaqueHard",
-      "fragCutoutHard",
-      "fragA2CHard",
+  static constexpr const char *k_entries[2][2][3] = {
+      {{"fragOpaqueHard", "fragCutoutHard", "fragA2CHard"},
+       {"fragOpaquePcf", "fragCutoutPcf", "fragA2CPcf"}},
+      {{"fragOpaqueHardCsm2", "fragCutoutHardCsm2", "fragA2CHardCsm2"},
+       {"fragOpaquePcfCsm2", "fragCutoutPcfCsm2", "fragA2CPcfCsm2"}},
   };
-  static constexpr std::array<const char *, 3> pcf{
-      "fragOpaquePcf",
-      "fragCutoutPcf",
-      "fragA2CPcf",
-  };
-  static constexpr std::array<const char *, 3> hard_csm2{
-      "fragOpaqueHardCsm2",
-      "fragCutoutHardCsm2",
-      "fragA2CHardCsm2",
-  };
-  static constexpr std::array<const char *, 3> pcf_csm2{
-      "fragOpaquePcfCsm2",
-      "fragCutoutPcfCsm2",
-      "fragA2CPcfCsm2",
-  };
-
-  const auto alpha_index = static_cast<std::size_t>(alpha_mode);
-  if (cascade_mode == ShadowCascadeMode::Dual) {
-    if (filter == ShadowFilterMode::Pcf3x3)
-      return pcf_csm2[alpha_index];
-    return hard_csm2[alpha_index];
-  }
-  if (filter == ShadowFilterMode::Pcf3x3)
-    return pcf[alpha_index];
-  return hard[alpha_index];
+  return k_entries[cascade_mode == ShadowCascadeMode::Dual ? 1 : 0]
+                  [filter == ShadowFilterMode::Pcf3x3 ? 1 : 0]
+                  [static_cast<std::uint8_t>(alpha_mode)];
 }
 
 [[nodiscard]] inline auto collect_used_alpha_modes(const std::vector<MeshInstance> &instances) -> std::array<bool, 3> {
@@ -83,8 +77,12 @@ enum class PipelineId : std::uint8_t {
 }
 
 [[nodiscard]] constexpr auto is_textured_surface_pipeline(PipelineId id) -> bool {
-  return id == PipelineId::TexturedOpaque || id == PipelineId::TexturedCutout ||
-         id == PipelineId::TexturedAlphaToCoverage;
+  const auto v = static_cast<std::uint8_t>(id);
+  return (v >= 1 && v <= 3) || (v >= 5 && v <= 7);
+}
+
+[[nodiscard]] constexpr auto is_skinned_pipeline(PipelineId id) -> bool {
+  return static_cast<std::uint8_t>(id) >= 5;
 }
 
 [[nodiscard]] constexpr auto casts_shadow(PipelineId id) -> bool {
@@ -95,6 +93,7 @@ struct PipelineBuildProfile {
   ShadowFilterMode shadow_filter{ShadowFilterMode::Pcf3x3};
   ShadowCascadeMode cascade_mode{ShadowCascadeMode::Dual};
   std::array<bool, 3> textured_alpha_modes{{true, false, false}};
+  bool build_skinned{false};
 };
 
 } // namespace engine

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine_config.hpp"
+#include "renderer/bone_buffer.hpp"
 #include "renderer/frame_overlay.hpp"
 #include "renderer/render_host.hpp"
 #include "renderer/depth_image.hpp"
@@ -20,6 +21,7 @@
 #include "renderer/uniform_buffer.hpp"
 #include "renderer/mesh_gpu.hpp"
 #include "renderer/vulkan_device.hpp"
+#include "scene/animation_utils.hpp"
 #include "scene/scene.hpp"
 #include "scene/shadow_utils.hpp"
 
@@ -28,6 +30,7 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_timer.h>
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -90,7 +93,8 @@ public:
         texture_array_);
     create_descriptor_set_layout();
     create_uniform_buffers();
-    create_descriptor_pool_and_sets();
+    create_bone_buffers(scene);
+    create_descriptor_pool_and_sets(scene);
     create_pipelines(scene);
     create_command_buffers();
     create_sync_objects();
@@ -195,6 +199,8 @@ public:
       mesh_gpus_.push_back(std::move(gpu));
     }
 
+    bool descriptors_changed = false;
+
     if (scene.texture_paths().size() > texture_table_.count()) {
       for (std::size_t texture_index = texture_table_.count(); texture_index < scene.texture_paths().size();
            ++texture_index) {
@@ -205,9 +211,16 @@ public:
             device_.graphics_queue(),
             scene.texture_paths()[texture_index]);
       }
-
-      recreate_descriptor_sets();
+      descriptors_changed = true;
     }
+
+    if (count_skinned_instances(scene.instances()) != static_cast<std::uint32_t>(bone_buffers_.size())) {
+      create_bone_buffers(scene);
+      descriptors_changed = true;
+    }
+
+    if (descriptors_changed)
+      recreate_descriptor_sets();
   }
 
   void draw_frame(Scene &scene) {
@@ -291,6 +304,72 @@ public:
                 0.0F),
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
+
+    if (!bone_buffers_.empty()) {
+      const std::uint64_t now_ticks = SDL_GetTicks();
+      const float delta_seconds = last_frame_ticks_ > 0
+          ? static_cast<float>(now_ticks - last_frame_ticks_) / 1000.0F
+          : 0.0F;
+      last_frame_ticks_ = now_ticks;
+
+      std::uint32_t bone_buffer_index = 0;
+      for (MeshInstance &instance : scene.instances()) {
+        if (instance.skin_index == k_invalid_skin_index || instance.animation_index == k_invalid_skin_index)
+          continue;
+        if (instance.skin_index >= scene.skeletons().size())
+          continue;
+        if (instance.animation_index >= scene.animations().size())
+          continue;
+        if (bone_buffer_index >= bone_buffers_.size())
+          break;
+
+        const AnimationClip &clip = scene.animations()[instance.animation_index];
+        instance.animation_time += delta_seconds * instance.animation_speed;
+        if (instance.animation_loop && clip.duration > 0.0F && instance.animation_time > clip.duration)
+          instance.animation_time = std::fmod(instance.animation_time, clip.duration);
+
+        std::vector<glm::mat4> joint_matrices;
+
+        if (instance.next_animation_index < scene.animations().size()) {
+          const AnimationClip &next_clip = scene.animations()[instance.next_animation_index];
+          instance.next_animation_time += delta_seconds * instance.animation_speed;
+          if (instance.animation_loop && next_clip.duration > 0.0F &&
+              instance.next_animation_time > next_clip.duration)
+            instance.next_animation_time = std::fmod(instance.next_animation_time, next_clip.duration);
+
+          instance.blend_factor += delta_seconds / instance.blend_duration;
+          if (instance.blend_factor >= 1.0F) {
+            instance.animation_index = instance.next_animation_index;
+            instance.animation_time = instance.next_animation_time;
+            instance.next_animation_index = std::numeric_limits<std::uint32_t>::max();
+            instance.blend_factor = 1.0F;
+          }
+
+          if (instance.blend_factor < 1.0F) {
+            compute_joint_matrices_blended(
+                scene.skeletons()[instance.skin_index],
+                clip, instance.animation_time,
+                next_clip, instance.next_animation_time,
+                instance.blend_factor,
+                joint_matrices);
+          } else {
+            compute_joint_matrices(
+                scene.skeletons()[instance.skin_index],
+                scene.animations()[instance.animation_index],
+                instance.animation_time,
+                joint_matrices);
+          }
+        } else {
+          compute_joint_matrices(
+              scene.skeletons()[instance.skin_index],
+              clip, instance.animation_time,
+              joint_matrices);
+        }
+
+        bone_buffers_[bone_buffer_index].write(frame_index_, joint_matrices);
+        ++bone_buffer_index;
+      }
+    }
 
     build_draw_list(scene, draw_list_);
 
@@ -435,11 +514,16 @@ private:
     uniform_buffers_.create(device_.physical_device(), device_.device(), detail::max_frames_in_flight);
   }
 
-  void create_descriptor_pool_and_sets() {
+  void create_descriptor_pool_and_sets(const Scene &scene) {
+    rebuild_descriptor_sets(count_skinned_instances(scene.instances()));
+  }
+
+  void rebuild_descriptor_sets(std::uint32_t skinned_count) {
     descriptor_resources_.create_pool(
         device_.device(),
         detail::max_frames_in_flight,
-        texture_table_.count());
+        texture_table_.count(),
+        skinned_count);
 
     std::array<vk::Buffer, detail::max_frames_in_flight> buffers{};
     for (std::uint32_t i = 0; i < detail::max_frames_in_flight; ++i)
@@ -454,27 +538,13 @@ private:
         texture_array_.view(),
         shadow_map_.sampler_for_settings(startup_point_shadow_filter_),
         shadow_map_.view());
+
+    allocate_skinned_descriptor_sets(texture_table_, skinned_count);
   }
 
   void recreate_descriptor_sets() {
-    descriptor_resources_.create_pool(
-        device_.device(),
-        detail::max_frames_in_flight,
-        texture_table_.count());
-
-    std::array<vk::Buffer, detail::max_frames_in_flight> buffers{};
-    for (std::uint32_t i = 0; i < detail::max_frames_in_flight; ++i)
-      buffers[i] = uniform_buffers_.buffer(i);
-
-    const auto texture_pointers = texture_table_.texture_pointers();
-    descriptor_resources_.allocate_sets(
-        device_.device(),
-        buffers,
-        texture_pointers,
-        texture_array_.sampler(),
-        texture_array_.view(),
-        shadow_map_.sampler_for_settings(startup_point_shadow_filter_),
-        shadow_map_.view());
+    rebuild_descriptor_sets(bone_buffers_.empty() ? 0U
+        : static_cast<std::uint32_t>(bone_buffers_.size()));
   }
 
   void create_pipelines(const Scene &scene) {
@@ -482,6 +552,7 @@ private:
         .shadow_filter = startup_shadow_filter_mode_,
         .cascade_mode = startup_cascade_mode_,
         .textured_alpha_modes = collect_used_alpha_modes(scene.instances()),
+        .build_skinned = has_skinned_instances(scene.instances()),
     };
 
     std::size_t textured_pipeline_count = 0;
@@ -489,8 +560,11 @@ private:
       if (used)
         ++textured_pipeline_count;
     }
-    std::cout << "Graphics pipelines: " << (2 + textured_pipeline_count)
-              << " (background + shadow depth + " << textured_pipeline_count << " textured)\n";
+    const std::size_t skinned_count = profile.build_skinned ? textured_pipeline_count + 1 : 0;
+    std::cout << "Graphics pipelines: " << (2 + textured_pipeline_count + skinned_count)
+              << " (background + shadow depth + " << textured_pipeline_count << " textured"
+              << (profile.build_skinned ? " + " + std::to_string(skinned_count) + " skinned" : "")
+              << ")\n";
 
     pipelines_.create(
         device_.device(),
@@ -500,8 +574,11 @@ private:
         ENGINE_SHADER_SPIRV,
         ENGINE_SKY_SHADER_SPIRV,
         ENGINE_SHADOW_DEPTH_SPIRV,
+        ENGINE_SKINNED_SHADER_SPIRV,
+        ENGINE_SKINNED_SHADOW_DEPTH_SPIRV,
         descriptor_resources_.frame_layout(),
         descriptor_resources_.material_layout(),
+        descriptor_resources_.material_skinned_layout(),
         device_.msaa_samples(),
         pipeline_cache_,
         profile);
@@ -579,6 +656,63 @@ private:
     frame_index_ = 0;
   }
 
+  [[nodiscard]] static auto count_skinned_instances(const std::vector<MeshInstance> &instances) -> std::uint32_t {
+    std::uint32_t count = 0;
+    for (const MeshInstance &instance : instances) {
+      if (instance.skin_index != k_invalid_skin_index)
+        ++count;
+    }
+    return count;
+  }
+
+  [[nodiscard]] static auto has_skinned_instances(const std::vector<MeshInstance> &instances) -> bool {
+    return count_skinned_instances(instances) > 0;
+  }
+
+  void create_bone_buffers(const Scene &scene) {
+    bone_buffers_.clear();
+    skinned_texture_indices_.clear();
+    for (const MeshInstance &instance : scene.instances()) {
+      if (instance.skin_index == k_invalid_skin_index)
+        continue;
+
+      if (instance.skin_index >= scene.skeletons().size())
+        continue;
+
+      const std::uint32_t bone_count =
+          static_cast<std::uint32_t>(scene.skeletons()[instance.skin_index].joint_nodes.size());
+      if (bone_count == 0)
+        continue;
+
+      BoneStorageBufferSet bone_set;
+      bone_set.create(
+          device_.physical_device(),
+          device_.device(),
+          bone_count,
+          detail::max_frames_in_flight);
+      bone_buffers_.push_back(std::move(bone_set));
+      skinned_texture_indices_.push_back(instance.texture_index);
+    }
+  }
+
+  void allocate_skinned_descriptor_sets(const TextureTable &texture_table, std::uint32_t skinned_count) {
+    if (skinned_count == 0 || bone_buffers_.empty())
+      return;
+
+    std::vector<vk::Buffer> buffers;
+    buffers.reserve(bone_buffers_.size() * detail::max_frames_in_flight);
+    for (const BoneStorageBufferSet &bone_set : bone_buffers_) {
+      for (std::uint32_t frame = 0; frame < detail::max_frames_in_flight; ++frame)
+        buffers.push_back(bone_set.buffer(frame));
+    }
+
+    descriptor_resources_.allocate_skinned_sets(
+        device_.device(),
+        buffers,
+        texture_table.texture_pointers(),
+        skinned_texture_indices_);
+  }
+
   SDL_Window *window_{};
   MsaaSettings msaa_config_{};
   bool msaa_boosted_for_a2c_{false};
@@ -608,12 +742,15 @@ private:
   PipelineRegistry pipelines_;
   std::vector<DrawCommand> draw_list_;
   PassLayoutState pass_layouts_{};
+  std::vector<BoneStorageBufferSet> bone_buffers_;
+  std::vector<std::uint32_t> skinned_texture_indices_;
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};
   bool logged_shadow_filter_mode_{false};
   bool gpu_shutdown_complete_{false};
   FrameOverlayCallback frame_overlay_;
   std::uint64_t last_resize_ticks_{};
+  std::uint64_t last_frame_ticks_{};
 };
 
 } // namespace engine
