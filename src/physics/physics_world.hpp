@@ -220,18 +220,18 @@ public:
                        world_.temp_allocator());
   }
 
-  void set_velocity(const glm::vec3 &velocity) {
-    character_->SetLinearVelocity(
-        JPH::Vec3(velocity.x, velocity.y, velocity.z));
-  }
-
   [[nodiscard]] auto position() const -> glm::vec3 {
     const JPH::RVec3 pos = character_->GetPosition();
     return {pos.GetX(), pos.GetY(), pos.GetZ()};
   }
 
-  [[nodiscard]] auto y_velocity() const -> float {
-    return character_->GetLinearVelocity().GetY();
+  [[nodiscard]] auto linear_velocity() const -> glm::vec3 {
+    const JPH::Vec3 v = character_->GetLinearVelocity();
+    return {v.GetX(), v.GetY(), v.GetZ()};
+  }
+
+  void set_velocity(const glm::vec3 &velocity) {
+    character_->SetLinearVelocity(JPH::Vec3(velocity.x, velocity.y, velocity.z));
   }
 
 private:
