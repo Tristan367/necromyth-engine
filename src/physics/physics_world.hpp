@@ -10,19 +10,18 @@
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyID.h>
-#include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
-#define GLM_FORCE_RADIANS
-#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
+#include <mutex>
 #include <vector>
 
 namespace engine {
@@ -45,9 +44,12 @@ static constexpr std::uint32_t kNumLayers = 2;
 class PhysicsWorld {
 public:
   PhysicsWorld(std::uint32_t max_bodies = 1024) {
-    JPH::RegisterDefaultAllocator();
-    JPH::Factory::sInstance = new JPH::Factory();
-    JPH::RegisterTypes();
+    static std::once_flag s_jolt_init;
+    std::call_once(s_jolt_init, [] {
+      JPH::RegisterDefaultAllocator();
+      JPH::Factory::sInstance = new JPH::Factory();
+      JPH::RegisterTypes();
+    });
 
     temp_allocator_ = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
     job_system_ = std::make_unique<JPH::JobSystemThreadPool>(
@@ -64,25 +66,22 @@ public:
   }
 
   ~PhysicsWorld() {
-    // Remove all bodies before destroying
     for (const JPH::BodyID id : body_ids_)
       body_interface_->RemoveBody(id);
     for (const JPH::BodyID id : body_ids_)
       body_interface_->DestroyBody(id);
-
-    JPH::UnregisterTypes();
-    delete JPH::Factory::sInstance;
-    JPH::Factory::sInstance = nullptr;
   }
 
   void step(float delta_time) {
     physics_system_.Update(delta_time, 1, temp_allocator_.get(), job_system_.get());
   }
 
-  [[nodiscard]] auto create_static_box(const glm::vec3 &half_extent, const glm::vec3 &position,
-                                        const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F))
+  [[nodiscard]] auto create_box(const glm::vec3 &half_extent, const glm::vec3 &position,
+                                 JPH::EMotionType motion_type, JPH::ObjectLayer layer,
+                                 const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F))
       -> JPH::BodyID {
-    JPH::BoxShapeSettings shape_settings(JPH::Vec3(half_extent.x, half_extent.y, half_extent.z));
+    JPH::BoxShapeSettings shape_settings(
+        JPH::Vec3(half_extent.x, half_extent.y, half_extent.z));
     shape_settings.SetEmbedded();
     JPH::ShapeRefC shape = shape_settings.Create().Get();
 
@@ -90,29 +89,12 @@ public:
         shape,
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w),
-        JPH::EMotionType::Static,
-        Layers::kNonMoving);
+        motion_type, layer);
 
-    JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::DontActivate);
-    body_ids_.push_back(id);
-    return id;
-  }
-
-  [[nodiscard]] auto create_dynamic_box(const glm::vec3 &half_extent, const glm::vec3 &position,
-                                         const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F))
-      -> JPH::BodyID {
-    JPH::BoxShapeSettings shape_settings(JPH::Vec3(half_extent.x, half_extent.y, half_extent.z));
-    shape_settings.SetEmbedded();
-    JPH::ShapeRefC shape = shape_settings.Create().Get();
-
-    const JPH::BodyCreationSettings settings(
-        shape,
-        JPH::RVec3(position.x, position.y, position.z),
-        JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w),
-        JPH::EMotionType::Dynamic,
-        Layers::kMoving);
-
-    JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::Activate);
+    JPH::BodyID id = body_interface_->CreateAndAddBody(
+        settings,
+        motion_type == JPH::EMotionType::Dynamic ? JPH::EActivation::Activate
+                                                   : JPH::EActivation::DontActivate);
     body_ids_.push_back(id);
     return id;
   }
@@ -136,7 +118,6 @@ private:
   std::unique_ptr<JPH::JobSystemThreadPool> job_system_;
   std::vector<JPH::BodyID> body_ids_;
 
-  // Layer interfaces
   class BPLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface {
   public:
     BPLayerInterfaceImpl() {
