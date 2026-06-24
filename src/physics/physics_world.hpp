@@ -230,6 +230,10 @@ public:
     return {pos.GetX(), pos.GetY(), pos.GetZ()};
   }
 
+  [[nodiscard]] auto y_velocity() const -> float {
+    return character_->GetLinearVelocity().GetY();
+  }
+
 private:
   PhysicsWorld &world_;
   JPH::CharacterVirtual *character_{nullptr};
