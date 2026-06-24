@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scene/mesh_instance.hpp"
-#include "scene/scene.hpp"
+#include "scene/mesh_source.hpp"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Factory.h>
@@ -11,8 +11,11 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
@@ -99,6 +102,35 @@ public:
     return id;
   }
 
+  [[nodiscard]] auto create_static_mesh(const MeshSource &mesh, const glm::vec3 &position,
+                                        const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F))
+      -> JPH::BodyID {
+    JPH::VertexList vertex_list;
+    vertex_list.reserve(mesh.vertices.size());
+    for (const MeshVertex &v : mesh.vertices)
+      vertex_list.emplace_back(v.pos[0], v.pos[1], v.pos[2]);
+
+    JPH::IndexedTriangleList tri_list;
+    tri_list.reserve(mesh.indices.size() / 3);
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3)
+      tri_list.emplace_back(mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]);
+
+    JPH::MeshShapeSettings shape_settings(vertex_list, tri_list);
+    shape_settings.SetEmbedded();
+    JPH::ShapeRefC shape = shape_settings.Create().Get();
+
+    const JPH::BodyCreationSettings settings(
+        shape,
+        JPH::RVec3(position.x, position.y, position.z),
+        JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w),
+        JPH::EMotionType::Static,
+        Layers::kNonMoving);
+
+    JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+    body_ids_.push_back(id);
+    return id;
+  }
+
   void sync_body_to_instance(JPH::BodyID body_id, engine::MeshInstance &instance) const {
     const JPH::Vec3 pos = body_interface_->GetPosition(body_id);
     const JPH::Quat rot = body_interface_->GetRotation(body_id);
@@ -110,6 +142,8 @@ public:
   }
 
   [[nodiscard]] auto body_interface() -> JPH::BodyInterface & { return *body_interface_; }
+  [[nodiscard]] auto physics_system() -> JPH::PhysicsSystem & { return physics_system_; }
+  [[nodiscard]] auto temp_allocator() -> JPH::TempAllocator & { return *temp_allocator_; }
 
 private:
   JPH::PhysicsSystem physics_system_;
@@ -148,6 +182,51 @@ private:
   BPLayerInterfaceImpl broad_phase_layer_interface_{};
   ObjectVsBroadPhaseLayerFilterImpl object_vs_broadphase_layer_filter_{};
   ObjectLayerPairFilterImpl object_vs_object_layer_filter_{};
+};
+
+class Character {
+public:
+  Character(PhysicsWorld &world, const glm::vec3 &position,
+            float radius = 0.5F, float height = 1.5F)
+      : world_{world} {
+    JPH::Ref<JPH::CapsuleShape> shape = new JPH::CapsuleShape(0.5F * height, radius);
+    JPH::CharacterVirtualSettings settings;
+    settings.mShape = shape;
+    settings.mInnerBodyLayer = Layers::kMoving;
+    character_ = new JPH::CharacterVirtual(
+        &settings,
+        JPH::RVec3(position.x, position.y, position.z),
+        JPH::Quat::sIdentity(),
+        &world_.physics_system());
+  }
+
+  ~Character() { delete character_; }
+
+  void update(float delta) {
+    character_->Update(delta,
+                       JPH::Vec3(0.0F, -9.81F, 0.0F),
+                       JPH::DefaultBroadPhaseLayerFilter(
+                           world_.physics_system().GetDefaultBroadPhaseLayerFilter(Layers::kMoving)),
+                       JPH::DefaultObjectLayerFilter(
+                           world_.physics_system().GetDefaultLayerFilter(Layers::kMoving)),
+                       {},
+                       {},
+                       world_.temp_allocator());
+  }
+
+  void set_velocity(const glm::vec3 &velocity) {
+    character_->SetLinearVelocity(
+        JPH::Vec3(velocity.x, velocity.y, velocity.z));
+  }
+
+  [[nodiscard]] auto position() const -> glm::vec3 {
+    const JPH::RVec3 pos = character_->GetPosition();
+    return {pos.GetX(), pos.GetY(), pos.GetZ()};
+  }
+
+private:
+  PhysicsWorld &world_;
+  JPH::CharacterVirtual *character_{nullptr};
 };
 
 } // namespace physics
