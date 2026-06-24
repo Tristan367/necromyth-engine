@@ -192,6 +192,13 @@ add_library(vce_stb STATIC src/renderer/texture_image_stb.cpp)
 target_include_directories(vce_stb SYSTEM PRIVATE "${STB_INCLUDE_DIR}")
 target_compile_features(vce_stb PRIVATE cxx_std_23)
 
+# Jolt Physics (third-party, built as static library)
+set(JOLT_DIR "$ENV{HOME}/opt/JoltPhysics")
+if(NOT EXISTS "${JOLT_DIR}")
+    message(FATAL_ERROR "Jolt Physics not found at ${JOLT_DIR}. Clone it: git clone https://github.com/jrouwe/JoltPhysics.git ${JOLT_DIR}")
+endif()
+add_subdirectory("${JOLT_DIR}/Build" "${CMAKE_BINARY_DIR}/jolt" EXCLUDE_FROM_ALL)
+
 add_library(vce_core INTERFACE)
 add_library(VCE::Core ALIAS vce_core)
 
@@ -205,6 +212,7 @@ target_include_directories(vce_core SYSTEM INTERFACE
 
 target_link_libraries(vce_core INTERFACE
     glm::glm
+    Jolt::Jolt
     vce_gltf_impl
     vce_stb
 )
