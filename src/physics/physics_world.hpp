@@ -219,15 +219,13 @@ public:
                        world_.temp_allocator());
   }
 
-  void update_gravity(float delta) {
-    character_->Update(delta,
-                       JPH::Vec3(0.0F, 0.0F, 0.0F),
-                       JPH::DefaultBroadPhaseLayerFilter(
-                           world_.physics_system().GetDefaultBroadPhaseLayerFilter(Layers::kMoving)),
-                       JPH::DefaultObjectLayerFilter(
-                           world_.physics_system().GetDefaultLayerFilter(Layers::kMoving)),
-                       {}, {},
-                       world_.temp_allocator());
+  void update_ground_velocity() {
+    character_->UpdateGroundVelocity();
+  }
+
+  [[nodiscard]] auto ground_velocity() const -> glm::vec3 {
+    const JPH::Vec3 v = character_->GetGroundVelocity();
+    return {v.GetX(), v.GetY(), v.GetZ()};
   }
 
   [[nodiscard]] auto position() const -> glm::vec3 {
