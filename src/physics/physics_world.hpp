@@ -215,8 +215,18 @@ public:
                            world_.physics_system().GetDefaultBroadPhaseLayerFilter(Layers::kMoving)),
                        JPH::DefaultObjectLayerFilter(
                            world_.physics_system().GetDefaultLayerFilter(Layers::kMoving)),
-                       {},
-                       {},
+                       {}, {},
+                       world_.temp_allocator());
+  }
+
+  void update_gravity(float delta) {
+    character_->Update(delta,
+                       JPH::Vec3(0.0F, 0.0F, 0.0F),
+                       JPH::DefaultBroadPhaseLayerFilter(
+                           world_.physics_system().GetDefaultBroadPhaseLayerFilter(Layers::kMoving)),
+                       JPH::DefaultObjectLayerFilter(
+                           world_.physics_system().GetDefaultLayerFilter(Layers::kMoving)),
+                       {}, {},
                        world_.temp_allocator());
   }
 
