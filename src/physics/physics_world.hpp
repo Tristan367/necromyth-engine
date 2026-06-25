@@ -234,6 +234,10 @@ public:
     character_->SetLinearVelocity(JPH::Vec3(velocity.x, velocity.y, velocity.z));
   }
 
+  [[nodiscard]] auto is_on_ground() const -> bool {
+    return character_->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+  }
+
 private:
   PhysicsWorld &world_;
   JPH::CharacterVirtual *character_{nullptr};
