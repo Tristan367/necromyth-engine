@@ -256,13 +256,12 @@ public:
     // Phase 2: Shape cast along motion
     JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> cast_collector;
     JPH::ShapeCastSettings cast_settings;
-    cast_settings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideOnlyWithActive;
     nq.CastShape(JPH::RShapeCast(shape, JPH::Vec3::sReplicate(1.0F),
                                  JPH::RMat44::sTranslation(pos), motion),
                  cast_settings, JPH::RVec3::sZero(), cast_collector,
                  {}, {}, body_filter);
 
-    // Phase 3: Ground detection from sweep result
+    // Phase 3: Ground detection + target position
     JPH::RVec3 target_pos = pos + JPH::RVec3(motion);
     ground_state_ = false;
 
@@ -270,29 +269,27 @@ public:
       const JPH::ShapeCastResult &hit = cast_collector.mHit;
       const JPH::Vec3 hit_normal = hit.mPenetrationAxis.Normalized();
 
-      if (hit_normal.GetY() > 0.707F)
+      // Floor check: cos(60°) = 0.5 (steep slope tolerant)
+      if (hit_normal.GetY() > 0.5F)
         ground_state_ = true;
 
-      float stop_fraction = hit.mIsBackFaceHit
-          ? hit.mFraction
-          : std::max(0.0F, hit.mFraction - 0.005F);
-      target_pos = pos + JPH::RVec3(motion * stop_fraction);
+      target_pos = pos + JPH::RVec3(motion * std::max(0.0F, hit.mFraction - 0.001F));
     }
 
     // Phase 4: Move kinematic — pushes dynamic bodies
     bi.MoveKinematic(body_id_, target_pos, JPH::Quat::sIdentity(), delta);
 
-    // If no ground from sweep, check below for floor contact
+    // Fallback: if no ground from sweep, check below for floor contact
     if (!ground_state_) {
       JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> floor_collector;
       JPH::CollideShapeSettings floor_settings;
-      floor_settings.mMaxSeparationDistance = 0.1F;
+      floor_settings.mMaxSeparationDistance = 0.2F;
       nq.CollideShape(shape, JPH::Vec3::sReplicate(1.0F),
                       JPH::RMat44::sTranslation(target_pos), floor_settings,
                       JPH::RVec3::sZero(), floor_collector, {}, {}, body_filter);
       if (floor_collector.HadHit()) {
         const JPH::Vec3 floor_normal = floor_collector.mHit.mPenetrationAxis.Normalized();
-        ground_state_ = floor_normal.GetY() > 0.707F;
+        ground_state_ = floor_normal.GetY() > 0.5F;
       }
     }
   }
