@@ -210,6 +210,7 @@ public:
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat::sIdentity(),
         &world_.physics_system());
+    character_->SetListener(&contact_listener_);
   }
 
   ~Character() { delete character_; }
@@ -258,7 +259,18 @@ public:
 private:
   PhysicsWorld &world_;
   JPH::CharacterVirtual *character_{nullptr};
-};
+
+  class ContactBlocker : public JPH::CharacterContactListener {
+  public:
+    void OnContactAdded(const JPH::CharacterVirtual *, const JPH::CharacterContact &inContact,
+                        JPH::CharacterContactSettings &ioSettings) override {
+      ioSettings.mCanReceiveImpulses = inContact.mMotionTypeB == JPH::EMotionType::Static ? true : false;
+    }
+    void OnContactPersisted(const JPH::CharacterVirtual *, const JPH::CharacterContact &inContact,
+                            JPH::CharacterContactSettings &ioSettings) override {
+      ioSettings.mCanReceiveImpulses = inContact.mMotionTypeB == JPH::EMotionType::Static ? true : false;
+    }
+  } contact_listener_;};
 
 } // namespace physics
 } // namespace engine
