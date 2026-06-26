@@ -222,16 +222,43 @@ public:
     JPH::BodyInterface &bi = world_.body_interface();
     JPH::RVec3 pos = bi.GetPosition(body_id_);
     const JPH::Vec3 motion = velocity_ * delta;
-
-    // Godot-style: CastShape sweep to find safe fraction
-    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
-    JPH::ShapeCastSettings settings;
     const JPH::Shape *shape = bi.GetShape(body_id_);
+    JPH::IgnoreSingleBodyFilter body_filter(body_id_);
+
+    // Godot-style: recovery (4 iterations, 40% per iter, margin 0.001)
+    for (int iter = 0; iter < 4; ++iter) {
+      JPH::CollideShapeSettings rec_settings;
+      rec_settings.mMaxSeparationDistance = 0.001F;
+      JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> rec_collector;
+      world_.physics_system().GetNarrowPhaseQuery().CollideShapeWithInternalEdgeRemoval(
+          shape, JPH::Vec3::sReplicate(1.0F),
+          JPH::RMat44::sTranslation(pos), rec_settings,
+          JPH::RVec3::sZero(), rec_collector, {}, {}, body_filter);
+
+      if (!rec_collector.HadHit())
+        break;
+
+      JPH::Vec3 push(0, 0, 0);
+      bool had_penetration = false;
+      for (const JPH::CollideShapeResult &hit : rec_collector.mHits) {
+        if (hit.mPenetrationDepth > 0) {
+          push -= hit.mPenetrationAxis.Normalized() * hit.mPenetrationDepth * 0.4F;
+          had_penetration = true;
+        }
+      }
+      if (!had_penetration)
+        break;
+      pos += JPH::RVec3(push);
+    }
+
+    // Godot-style: CastShape sweep
+    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+    JPH::ShapeCastSettings cast_settings;
     world_.physics_system().GetNarrowPhaseQuery().CastShape(
         JPH::RShapeCast(shape, JPH::Vec3::sReplicate(1.0F),
                         JPH::RMat44::sTranslation(pos), motion),
-        settings, JPH::RVec3::sZero(), collector,
-        {}, {}, JPH::IgnoreSingleBodyFilter(body_id_));
+        cast_settings, JPH::RVec3::sZero(), collector,
+        {}, {}, body_filter);
 
     JPH::RVec3 target = pos + JPH::RVec3(motion);
     ground_state_ = false;
@@ -243,8 +270,7 @@ public:
       target = pos + JPH::RVec3(motion * std::max(0.0F, hit.mFraction - 0.001F));
     }
 
-    // Godot-style: MoveKinematic — pushes dynamic bodies during physics step
-    bi.MoveKinematic(body_id_, target, JPH::Quat::sIdentity(), delta);
+    bi.SetPosition(body_id_, target, JPH::EActivation::Activate);
   }
 
   void update_ground_velocity() {}
