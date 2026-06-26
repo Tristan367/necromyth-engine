@@ -199,6 +199,10 @@ public:
     JPH::CharacterVirtualSettings settings;
     settings.mShape = shape;
     settings.mInnerBodyLayer = Layers::kMoving;
+    settings.mMaxSlopeAngle = JPH::DegreesToRadians(60.0F);
+    settings.mPenetrationRecoverySpeed = 2.0F;
+    settings.mCharacterPadding = 0.05F;
+    settings.mPredictiveContactDistance = 0.2F;
     character_ = new JPH::CharacterVirtual(
         &settings,
         JPH::RVec3(position.x, position.y, position.z),
