@@ -204,8 +204,9 @@ public:
     settings.mShape = shape;
     settings.mInnerBodyLayer = Layers::kMoving;
     settings.mMaxSlopeAngle = JPH::DegreesToRadians(60.0F);
-    settings.mPenetrationRecoverySpeed = 2.0F;
-    settings.mCharacterPadding = 0.05F;
+    settings.mPenetrationRecoverySpeed = 4.0F;
+    settings.mCharacterPadding = 0.01F;
+    settings.mCollisionTolerance = 0.01F;
     settings.mPredictiveContactDistance = 0.2F;
     settings.mEnhancedInternalEdgeRemoval = true;
     character_ = new JPH::CharacterVirtual(
@@ -219,7 +220,7 @@ public:
 
   void update(float delta) {
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
-    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -0.5F, 0.0F);
+    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -1.0F, 0.0F);
     settings.mWalkStairsStepUp = JPH::Vec3(0.0F, 0.4F, 0.0F);
 
     character_->ExtendedUpdate(delta,
