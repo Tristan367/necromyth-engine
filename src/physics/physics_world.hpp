@@ -209,12 +209,13 @@ public:
         JPH::Quat::sIdentity(),
         JPH::EMotionType::Dynamic,
         Layers::kMoving);
-    settings.mGravityFactor = 1.0F;
+    settings.mGravityFactor = 0.0F;
     settings.mLinearDamping = 0.0F;
     settings.mAngularDamping = 1.0F;
     settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY |
                            JPH::EAllowedDOFs::TranslationZ;
     body_id_ = world_.body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
+    initial_y_ = position.y;
   }
 
   ~Character() {
@@ -244,27 +245,11 @@ public:
     velocity_ = JPH::Vec3(v.x, v.y, v.z);
   }
 
-  [[nodiscard]] auto is_on_ground() -> bool {
-    JPH::BodyInterface &bi = world_.body_interface();
-    const JPH::Shape *shape = bi.GetShape(body_id_);
-    const JPH::NarrowPhaseQuery &nq = world_.physics_system().GetNarrowPhaseQuery();
-    JPH::RVec3 pos = bi.GetPosition(body_id_);
-
-    JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
-    JPH::CollideShapeSettings settings;
-    settings.mMaxSeparationDistance = 0.15F;
-
-    // Probe at current position + slightly below
-    for (float d = 0.0F; d <= 0.3F; d += 0.05F) {
-      JPH::RVec3 probe_pos(pos + JPH::Vec3(0, -d, 0));
-      nq.CollideShape(shape, JPH::Vec3::sReplicate(1.0F),
-                      JPH::RMat44::sTranslation(probe_pos),
-                      settings, JPH::RVec3::sZero(), collector, {}, {},
-                      JPH::IgnoreSingleBodyFilter(body_id_));
-      if (collector.HadHit() && collector.mHit.mPenetrationAxis.GetY() > 0.01F)
-        return true;
-    }
-    return false;
+  [[nodiscard]] auto is_on_ground() const -> bool {
+    const JPH::Vec3 v = world_.body_interface().GetLinearVelocity(body_id_);
+    if (v.GetY() > 0.01F) return false;
+    const JPH::Vec3 pos = world_.body_interface().GetPosition(body_id_);
+    return pos.GetY() < initial_y_ - 1.0F && std::abs(v.GetY()) < 0.2F;
   }
 
   void set_max_strength(float) {}
@@ -273,6 +258,7 @@ private:
   PhysicsWorld &world_;
   JPH::BodyID body_id_;
   JPH::Vec3 velocity_{0, 0, 0};
+  float initial_y_{};
 };
 
 } // namespace physics
