@@ -207,6 +207,7 @@ public:
     settings.mPenetrationRecoverySpeed = 2.0F;
     settings.mCharacterPadding = 0.05F;
     settings.mPredictiveContactDistance = 0.2F;
+    settings.mEnhancedInternalEdgeRemoval = true;
     character_ = new JPH::CharacterVirtual(
         &settings,
         JPH::RVec3(position.x, position.y, position.z),
