@@ -82,7 +82,7 @@ public:
   [[nodiscard]] auto create_box(const glm::vec3 &half_extent, const glm::vec3 &position,
                                  JPH::EMotionType motion_type, JPH::ObjectLayer layer,
                                  const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F),
-                                 float mass_override_kg = 0.0F)
+                                 float mass_override_kg = 0.0F, float friction = 0.5F)
       -> JPH::BodyID {
     JPH::BoxShapeSettings shape_settings(
         JPH::Vec3(half_extent.x, half_extent.y, half_extent.z));
@@ -94,6 +94,8 @@ public:
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w),
         motion_type, layer);
+
+    settings.mFriction = friction;
 
     if (mass_override_kg > 0.0F) {
       settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
@@ -125,12 +127,14 @@ public:
     shape_settings.SetEmbedded();
     JPH::ShapeRefC shape = shape_settings.Create().Get();
 
-    const JPH::BodyCreationSettings settings(
+    JPH::BodyCreationSettings settings(
         shape,
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w),
         JPH::EMotionType::Static,
         Layers::kNonMoving);
+
+    settings.mFriction = 0.8F;
 
     JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::DontActivate);
     body_ids_.push_back(id);
