@@ -227,15 +227,15 @@ public:
     JPH::RVec3 pos = bi.GetPosition(body_id_);
     const JPH::Vec3 motion = velocity_ * delta;
 
-    // Phase 1: Penetration recovery (4 iterations, 40% per iter)
-    for (int iter = 0; iter < 4; ++iter) {
+    // Phase 1: Penetration recovery (6 iterations, 50% per iter)
+    for (int iter = 0; iter < 6; ++iter) {
       JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
       JPH::CollideShapeSettings collide_settings;
-      collide_settings.mMaxSeparationDistance = 0.1F;
-      collide_settings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideOnlyWithActive;
-      nq.CollideShape(shape, JPH::Vec3::sReplicate(1.0F),
-                      JPH::RMat44::sTranslation(pos), collide_settings,
-                      JPH::RVec3::sZero(), collector, {}, {}, body_filter);
+      collide_settings.mMaxSeparationDistance = 0.5F;
+      nq.CollideShapeWithInternalEdgeRemoval(
+          shape, JPH::Vec3::sReplicate(1.0F),
+          JPH::RMat44::sTranslation(pos), collide_settings,
+          JPH::RVec3::sZero(), collector, {}, {}, body_filter);
 
       if (!collector.HadHit())
         break;
@@ -244,7 +244,7 @@ public:
       bool had_penetration = false;
       for (const JPH::CollideShapeResult &hit : collector.mHits) {
         if (hit.mPenetrationDepth > 0) {
-          push -= hit.mPenetrationAxis.Normalized() * hit.mPenetrationDepth * 0.4F;
+          push -= hit.mPenetrationAxis.Normalized() * hit.mPenetrationDepth * 0.5F;
           had_penetration = true;
         }
       }
