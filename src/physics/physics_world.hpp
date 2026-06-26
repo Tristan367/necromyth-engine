@@ -207,15 +207,10 @@ public:
         shape,
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat::sIdentity(),
-        JPH::EMotionType::Dynamic,
+        JPH::EMotionType::Kinematic,
         Layers::kMoving);
-    settings.mGravityFactor = 0.0F;
-    settings.mLinearDamping = 0.0F;
-    settings.mAngularDamping = 1.0F;
-    settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY |
-                           JPH::EAllowedDOFs::TranslationZ;
+    settings.mFriction = 0.0F;
     body_id_ = world_.body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
-    initial_y_ = position.y;
   }
 
   ~Character() {
@@ -223,9 +218,33 @@ public:
     world_.body_interface().DestroyBody(body_id_);
   }
 
-  void update(float) {
+  void update(float delta) {
     JPH::BodyInterface &bi = world_.body_interface();
-    bi.SetLinearVelocity(body_id_, velocity_);
+    JPH::RVec3 pos = bi.GetPosition(body_id_);
+    const JPH::Vec3 motion = velocity_ * delta;
+
+    // Godot-style: CastShape sweep to find safe fraction
+    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+    JPH::ShapeCastSettings settings;
+    const JPH::Shape *shape = bi.GetShape(body_id_);
+    world_.physics_system().GetNarrowPhaseQuery().CastShape(
+        JPH::RShapeCast(shape, JPH::Vec3::sReplicate(1.0F),
+                        JPH::RMat44::sTranslation(pos), motion),
+        settings, JPH::RVec3::sZero(), collector,
+        {}, {}, JPH::IgnoreSingleBodyFilter(body_id_));
+
+    JPH::RVec3 target = pos + JPH::RVec3(motion);
+    ground_state_ = false;
+
+    if (collector.HadHit()) {
+      const JPH::ShapeCastResult &hit = collector.mHit;
+      const JPH::Vec3 n = hit.mPenetrationAxis.Normalized();
+      ground_state_ = n.GetY() > 0.5F;
+      target = pos + JPH::RVec3(motion * std::max(0.0F, hit.mFraction - 0.001F));
+    }
+
+    // Godot-style: MoveKinematic — pushes dynamic bodies during physics step
+    bi.MoveKinematic(body_id_, target, JPH::Quat::sIdentity(), delta);
   }
 
   void update_ground_velocity() {}
@@ -237,8 +256,7 @@ public:
   }
 
   [[nodiscard]] auto linear_velocity() const -> glm::vec3 {
-    const JPH::Vec3 v = world_.body_interface().GetLinearVelocity(body_id_);
-    return {v.GetX(), v.GetY(), v.GetZ()};
+    return {velocity_.GetX(), velocity_.GetY(), velocity_.GetZ()};
   }
 
   void set_velocity(const glm::vec3 &v) {
@@ -246,10 +264,7 @@ public:
   }
 
   [[nodiscard]] auto is_on_ground() const -> bool {
-    const JPH::Vec3 v = world_.body_interface().GetLinearVelocity(body_id_);
-    if (v.GetY() > 0.01F) return false;
-    const JPH::Vec3 pos = world_.body_interface().GetPosition(body_id_);
-    return pos.GetY() < initial_y_ - 1.0F && std::abs(v.GetY()) < 0.2F;
+    return ground_state_;
   }
 
   void set_max_strength(float) {}
@@ -258,7 +273,7 @@ private:
   PhysicsWorld &world_;
   JPH::BodyID body_id_;
   JPH::Vec3 velocity_{0, 0, 0};
-  float initial_y_{};
+  bool ground_state_{false};
 };
 
 } // namespace physics
