@@ -260,6 +260,10 @@ public:
     return character_->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
   }
 
+  void set_max_strength(float strength) {
+    character_->SetMaxStrength(strength);
+  }
+
 private:
   PhysicsWorld &world_;
   JPH::CharacterVirtual *character_{nullptr};
