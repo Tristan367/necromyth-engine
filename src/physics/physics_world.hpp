@@ -251,24 +251,39 @@ public:
       pos += JPH::RVec3(push);
     }
 
-    // Godot-style: CastShape sweep
-    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
-    JPH::ShapeCastSettings cast_settings;
-    world_.physics_system().GetNarrowPhaseQuery().CastShape(
-        JPH::RShapeCast(shape, JPH::Vec3::sReplicate(1.0F),
-                        JPH::RMat44::sTranslation(pos), motion),
-        cast_settings, JPH::RVec3::sZero(), collector,
-        {}, {}, body_filter);
+    // Godot-style: binary search sweep with CollideShape (works with meshes)
+    float safe_fraction = 1.0f;
+    {
+      const int steps = std::clamp(static_cast<int>(std::log2(1000.0f * motion.Length())), 4, 16);
+      float lo = 0.0f, hi = 1.0f, coeff = 0.5f;
+      JPH::CollideShapeSettings sweep_settings;
+      sweep_settings.mMaxSeparationDistance = 0.001F;
+      bool collided = false;
 
-    JPH::RVec3 target = pos + JPH::RVec3(motion);
-    ground_state_ = false;
+      for (int j = 0; j < steps; ++j) {
+        float fraction = lo + (hi - lo) * coeff;
+        JPH::RVec3 probe = pos + JPH::RVec3(motion * fraction);
+        JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> step_collector;
+        world_.physics_system().GetNarrowPhaseQuery().CollideShape(
+            shape, JPH::Vec3::sReplicate(1.0F),
+            JPH::RMat44::sTranslation(probe), sweep_settings,
+            JPH::RVec3::sZero(), step_collector, {}, {}, body_filter);
 
-    if (collector.HadHit()) {
-      const JPH::ShapeCastResult &hit = collector.mHit;
-      const JPH::Vec3 n = hit.mPenetrationAxis.Normalized();
-      ground_state_ = n.GetY() > 0.5F;
-      target = pos + JPH::RVec3(motion * std::max(0.0F, hit.mFraction - 0.001F));
+        if (step_collector.HadHit()) {
+          collided = true;
+          if (step_collector.mHit.mPenetrationAxis.GetY() > 0.5F)
+            ground_state_ = true;
+          hi = fraction;
+          coeff = (j == 0 || lo > 0.0f) ? 0.5f : 0.25f;
+        } else {
+          lo = fraction;
+          coeff = (j == 0 || hi < 1.0f) ? 0.5f : 0.75f;
+        }
+      }
+      safe_fraction = std::max(0.0f, lo - 0.001f);
     }
+
+    JPH::RVec3 target = pos + JPH::RVec3(motion * safe_fraction);
 
     bi.SetPosition(body_id_, target, JPH::EActivation::Activate);
   }
