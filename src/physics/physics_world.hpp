@@ -209,14 +209,19 @@ public:
   ~Character() { delete character_; }
 
   void update(float delta) {
-    character_->Update(delta,
-                       JPH::Vec3(0.0F, -9.81F, 0.0F),
-                       JPH::DefaultBroadPhaseLayerFilter(
-                           world_.physics_system().GetDefaultBroadPhaseLayerFilter(Layers::kMoving)),
-                       JPH::DefaultObjectLayerFilter(
-                           world_.physics_system().GetDefaultLayerFilter(Layers::kMoving)),
-                       {}, {},
-                       world_.temp_allocator());
+    JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -0.5F, 0.0F);
+    settings.mWalkStairsStepUp = JPH::Vec3(0.0F, 0.4F, 0.0F);
+
+    character_->ExtendedUpdate(delta,
+                               JPH::Vec3(0.0F, -9.81F, 0.0F),
+                               settings,
+                               JPH::DefaultBroadPhaseLayerFilter(
+                                   world_.physics_system().GetDefaultBroadPhaseLayerFilter(Layers::kMoving)),
+                               JPH::DefaultObjectLayerFilter(
+                                   world_.physics_system().GetDefaultLayerFilter(Layers::kMoving)),
+                               {}, {},
+                               world_.temp_allocator());
   }
 
   void update_ground_velocity() {
