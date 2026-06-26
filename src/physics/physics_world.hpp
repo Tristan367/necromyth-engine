@@ -9,13 +9,10 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
-#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
-#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
-#include <Jolt/Physics/Collision/RayCast.h>
-#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
@@ -203,118 +200,64 @@ public:
             float radius = 0.5F, float height = 1.5F)
       : world_{world} {
     JPH::Ref<JPH::CapsuleShape> shape = new JPH::CapsuleShape(0.5F * height, radius);
-    JPH::BodyCreationSettings settings(
-        shape,
+    JPH::CharacterVirtualSettings settings;
+    settings.mShape = shape;
+    settings.mMaxSlopeAngle = JPH::DegreesToRadians(60.0F);
+    settings.mEnhancedInternalEdgeRemoval = true;
+    settings.mInnerBodyLayer = Layers::kMoving;
+    character_ = new JPH::CharacterVirtual(
+        &settings,
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat::sIdentity(),
-        JPH::EMotionType::Kinematic,
-        Layers::kMoving);
-    settings.mFriction = 0.0F;
-    body_id_ = world_.body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
+        &world_.physics_system());
   }
 
-  ~Character() {
-    world_.body_interface().RemoveBody(body_id_);
-    world_.body_interface().DestroyBody(body_id_);
-  }
+  ~Character() { delete character_; }
 
   void update(float delta) {
-    JPH::BodyInterface &bi = world_.body_interface();
-    JPH::RVec3 pos = bi.GetPosition(body_id_);
-    const JPH::Vec3 motion = velocity_ * delta;
-    const JPH::Shape *shape = bi.GetShape(body_id_);
-    JPH::IgnoreSingleBodyFilter body_filter(body_id_);
+    JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -0.5F, 0.0F);
+    settings.mWalkStairsStepUp = JPH::Vec3(0.0F, 0.4F, 0.0F);
 
-    // Godot-style: recovery (4 iterations, 40% per iter, margin 0.001)
-    for (int iter = 0; iter < 4; ++iter) {
-      JPH::CollideShapeSettings rec_settings;
-      rec_settings.mMaxSeparationDistance = 0.001F;
-      JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> rec_collector;
-      world_.physics_system().GetNarrowPhaseQuery().CollideShapeWithInternalEdgeRemoval(
-          shape, JPH::Vec3::sReplicate(1.0F),
-          JPH::RMat44::sTranslation(pos), rec_settings,
-          JPH::RVec3::sZero(), rec_collector, {}, {}, body_filter);
-
-      if (!rec_collector.HadHit())
-        break;
-
-      JPH::Vec3 push(0, 0, 0);
-      bool had_penetration = false;
-      for (const JPH::CollideShapeResult &hit : rec_collector.mHits) {
-        if (hit.mPenetrationDepth > 0) {
-          push -= hit.mPenetrationAxis.Normalized() * hit.mPenetrationDepth * 0.4F;
-          had_penetration = true;
-        }
-      }
-      if (!had_penetration)
-        break;
-      pos += JPH::RVec3(push);
-    }
-
-    // Godot-style: binary search sweep with CollideShape (works with meshes)
-    float safe_fraction = 1.0f;
-    {
-      const int steps = std::clamp(static_cast<int>(std::log2(1000.0f * motion.Length())), 4, 16);
-      float lo = 0.0f, hi = 1.0f, coeff = 0.5f;
-      JPH::CollideShapeSettings sweep_settings;
-      sweep_settings.mMaxSeparationDistance = 0.001F;
-      bool collided = false;
-
-      for (int j = 0; j < steps; ++j) {
-        float fraction = lo + (hi - lo) * coeff;
-        JPH::RVec3 probe = pos + JPH::RVec3(motion * fraction);
-        JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> step_collector;
-        world_.physics_system().GetNarrowPhaseQuery().CollideShape(
-            shape, JPH::Vec3::sReplicate(1.0F),
-            JPH::RMat44::sTranslation(probe), sweep_settings,
-            JPH::RVec3::sZero(), step_collector, {}, {}, body_filter);
-
-        if (step_collector.HadHit()) {
-          collided = true;
-          if (step_collector.mHit.mPenetrationAxis.GetY() > 0.5F)
-            ground_state_ = true;
-          hi = fraction;
-          coeff = (j == 0 || lo > 0.0f) ? 0.5f : 0.25f;
-        } else {
-          lo = fraction;
-          coeff = (j == 0 || hi < 1.0f) ? 0.5f : 0.75f;
-        }
-      }
-      safe_fraction = std::max(0.0f, lo - 0.001f);
-    }
-
-    JPH::RVec3 target = pos + JPH::RVec3(motion * safe_fraction);
-
-    bi.SetPosition(body_id_, target, JPH::EActivation::Activate);
+    character_->ExtendedUpdate(delta,
+                               JPH::Vec3(0.0F, -9.81F, 0.0F),
+                               settings,
+                               world_.physics_system().GetDefaultBroadPhaseLayerFilter(Layers::kMoving),
+                               world_.physics_system().GetDefaultLayerFilter(Layers::kMoving),
+                               {}, {},
+                               world_.temp_allocator());
   }
 
-  void update_ground_velocity() {}
-  [[nodiscard]] auto ground_velocity() const -> glm::vec3 { return {0, 0, 0}; }
+  void update_ground_velocity() { character_->UpdateGroundVelocity(); }
+
+  [[nodiscard]] auto ground_velocity() const -> glm::vec3 {
+    const JPH::Vec3 v = character_->GetGroundVelocity();
+    return {v.GetX(), v.GetY(), v.GetZ()};
+  }
 
   [[nodiscard]] auto position() const -> glm::vec3 {
-    const JPH::RVec3 pos = world_.body_interface().GetPosition(body_id_);
+    const JPH::RVec3 pos = character_->GetPosition();
     return {pos.GetX(), pos.GetY(), pos.GetZ()};
   }
 
   [[nodiscard]] auto linear_velocity() const -> glm::vec3 {
-    return {velocity_.GetX(), velocity_.GetY(), velocity_.GetZ()};
+    const JPH::Vec3 v = character_->GetLinearVelocity();
+    return {v.GetX(), v.GetY(), v.GetZ()};
   }
 
   void set_velocity(const glm::vec3 &v) {
-    velocity_ = JPH::Vec3(v.x, v.y, v.z);
+    character_->SetLinearVelocity(JPH::Vec3(v.x, v.y, v.z));
   }
 
   [[nodiscard]] auto is_on_ground() const -> bool {
-    return ground_state_;
+    return character_->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
   }
 
-  void set_max_strength(float) {}
+  void set_max_strength(float s) { character_->SetMaxStrength(s); }
 
 private:
   PhysicsWorld &world_;
-  JPH::BodyID body_id_;
-  JPH::Vec3 velocity_{0, 0, 0};
-  bool ground_state_{false};
+  JPH::CharacterVirtual *character_{nullptr};
 };
 
 } // namespace physics
