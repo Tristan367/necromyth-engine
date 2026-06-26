@@ -204,7 +204,7 @@ public:
     settings.mShape = shape;
     settings.mMaxSlopeAngle = JPH::DegreesToRadians(60.0F);
     settings.mEnhancedInternalEdgeRemoval = true;
-    settings.mInnerBodyLayer = Layers::kMoving;
+    settings.mInnerBodyShape = nullptr;  // no inner body = no mass forces on contacts
     character_ = new JPH::CharacterVirtual(
         &settings,
         JPH::RVec3(position.x, position.y, position.z),
