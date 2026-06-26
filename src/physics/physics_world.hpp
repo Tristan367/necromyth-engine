@@ -207,9 +207,13 @@ public:
         shape,
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat::sIdentity(),
-        JPH::EMotionType::Kinematic,
+        JPH::EMotionType::Dynamic,
         Layers::kMoving);
-    settings.mFriction = 0.0F;
+    settings.mGravityFactor = 0.0F;
+    settings.mLinearDamping = 0.0F;
+    settings.mAngularDamping = 1.0F;
+    settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY |
+                           JPH::EAllowedDOFs::TranslationZ;
     body_id_ = world_.body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
   }
 
@@ -218,80 +222,9 @@ public:
     world_.body_interface().DestroyBody(body_id_);
   }
 
-  void update(float delta) {
+  void update(float) {
     JPH::BodyInterface &bi = world_.body_interface();
-    const JPH::NarrowPhaseQuery &nq = world_.physics_system().GetNarrowPhaseQuery();
-    const JPH::Shape *shape = bi.GetShape(body_id_);
-    JPH::IgnoreSingleBodyFilter body_filter(body_id_);
-
-    JPH::RVec3 pos = bi.GetPosition(body_id_);
-    const JPH::Vec3 motion = velocity_ * delta;
-
-    // Phase 1: Penetration recovery (6 iterations, 50% per iter)
-    for (int iter = 0; iter < 6; ++iter) {
-      JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
-      JPH::CollideShapeSettings collide_settings;
-      collide_settings.mMaxSeparationDistance = 0.5F;
-      nq.CollideShapeWithInternalEdgeRemoval(
-          shape, JPH::Vec3::sReplicate(1.0F),
-          JPH::RMat44::sTranslation(pos), collide_settings,
-          JPH::RVec3::sZero(), collector, {}, {}, body_filter);
-
-      if (!collector.HadHit())
-        break;
-
-      JPH::Vec3 push(0, 0, 0);
-      bool had_penetration = false;
-      for (const JPH::CollideShapeResult &hit : collector.mHits) {
-        if (hit.mPenetrationDepth > 0) {
-          push -= hit.mPenetrationAxis.Normalized() * hit.mPenetrationDepth * 0.5F;
-          had_penetration = true;
-        }
-      }
-      if (!had_penetration)
-        break;
-      pos += JPH::RVec3(push);
-    }
-
-    // Phase 2: Shape cast along motion
-    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> cast_collector;
-    JPH::ShapeCastSettings cast_settings;
-    nq.CastShape(JPH::RShapeCast(shape, JPH::Vec3::sReplicate(1.0F),
-                                 JPH::RMat44::sTranslation(pos), motion),
-                 cast_settings, JPH::RVec3::sZero(), cast_collector,
-                 {}, {}, body_filter);
-
-    // Phase 3: Ground detection + target position
-    JPH::RVec3 target_pos = pos + JPH::RVec3(motion);
-    ground_state_ = false;
-
-    if (cast_collector.HadHit()) {
-      const JPH::ShapeCastResult &hit = cast_collector.mHit;
-      const JPH::Vec3 hit_normal = hit.mPenetrationAxis.Normalized();
-
-      // Floor check: cos(60°) = 0.5 (steep slope tolerant)
-      if (hit_normal.GetY() > 0.5F)
-        ground_state_ = true;
-
-      target_pos = pos + JPH::RVec3(motion * std::max(0.0F, hit.mFraction - 0.001F));
-    }
-
-    // Phase 4: Move kinematic — pushes dynamic bodies
-    bi.MoveKinematic(body_id_, target_pos, JPH::Quat::sIdentity(), delta);
-
-    // Fallback: if no ground from sweep, check below for floor contact
-    if (!ground_state_) {
-      JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> floor_collector;
-      JPH::CollideShapeSettings floor_settings;
-      floor_settings.mMaxSeparationDistance = 0.2F;
-      nq.CollideShape(shape, JPH::Vec3::sReplicate(1.0F),
-                      JPH::RMat44::sTranslation(target_pos), floor_settings,
-                      JPH::RVec3::sZero(), floor_collector, {}, {}, body_filter);
-      if (floor_collector.HadHit()) {
-        const JPH::Vec3 floor_normal = floor_collector.mHit.mPenetrationAxis.Normalized();
-        ground_state_ = floor_normal.GetY() > 0.5F;
-      }
-    }
+    bi.SetLinearVelocity(body_id_, velocity_);
   }
 
   void update_ground_velocity() {}
@@ -303,7 +236,8 @@ public:
   }
 
   [[nodiscard]] auto linear_velocity() const -> glm::vec3 {
-    return {velocity_.GetX(), velocity_.GetY(), velocity_.GetZ()};
+    const JPH::Vec3 v = world_.body_interface().GetLinearVelocity(body_id_);
+    return {v.GetX(), v.GetY(), v.GetZ()};
   }
 
   void set_velocity(const glm::vec3 &v) {
@@ -311,7 +245,8 @@ public:
   }
 
   [[nodiscard]] auto is_on_ground() const -> bool {
-    return ground_state_;
+    const JPH::Vec3 v = world_.body_interface().GetLinearVelocity(body_id_);
+    return std::abs(v.GetY()) < 0.05F && velocity_.GetY() <= 0.0F;
   }
 
   void set_max_strength(float) {}
@@ -320,7 +255,6 @@ private:
   PhysicsWorld &world_;
   JPH::BodyID body_id_;
   JPH::Vec3 velocity_{0, 0, 0};
-  bool ground_state_{false};
 };
 
 } // namespace physics
