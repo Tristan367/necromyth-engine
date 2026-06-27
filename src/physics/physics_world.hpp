@@ -18,6 +18,8 @@
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/TaperedCapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/TaperedCylinderShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
@@ -169,6 +171,19 @@ public:
 
   [[nodiscard]] auto add_cylinder(float half_height, float radius, const glm::vec3 &position) -> JPH::BodyID {
     JPH::CylinderShapeSettings s(half_height, radius); s.SetEmbedded();
+    return add_dynamic_body(s, position);
+  }
+
+  [[nodiscard]] auto add_tapered_capsule(float half_height, float top_radius, float bottom_radius,
+                                          const glm::vec3 &position) -> JPH::BodyID {
+    JPH::TaperedCapsuleShapeSettings s(half_height, top_radius, bottom_radius); s.SetEmbedded();
+    return add_dynamic_body(s, position);
+  }
+
+  [[nodiscard]] auto add_tapered_cylinder(float half_height, float top_radius, float bottom_radius,
+                                           const glm::vec3 &position) -> JPH::BodyID {
+    float convex = std::min(0.05F, std::min(top_radius, bottom_radius) * 0.5F);
+    JPH::TaperedCylinderShapeSettings s(half_height, top_radius, bottom_radius, convex); s.SetEmbedded();
     return add_dynamic_body(s, position);
   }
 
