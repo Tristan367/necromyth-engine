@@ -22,9 +22,11 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -112,16 +114,42 @@ public:
 
   [[nodiscard]] auto create_static_mesh(const MeshSource &mesh, const glm::vec3 &position,
                                         const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F))
-      -> JPH::BodyID {
-    JPH::VertexList vertex_list;
-    vertex_list.reserve(mesh.vertices.size());
-    for (const MeshVertex &v : mesh.vertices)
-      vertex_list.emplace_back(v.pos[0], v.pos[1], v.pos[2]);
+       -> JPH::BodyID {
+    // Weld coincident vertices (0.1 mm grid) so internal mesh edges are
+    // properly detected by Jolt's enhanced internal edge removal.
+    auto key = [](const float *p) -> std::uint64_t {
+      auto q = [](float v) { return static_cast<std::int64_t>(std::llround(v * 10000.0)); };
+      return (static_cast<std::uint64_t>(static_cast<std::uint16_t>(q(p[0])))) |
+             (static_cast<std::uint64_t>(static_cast<std::uint16_t>(q(p[1]))) << 16) |
+             (static_cast<std::uint64_t>(static_cast<std::uint16_t>(q(p[2]))) << 32);
+    };
 
+    JPH::VertexList vertex_list;
     JPH::IndexedTriangleList tri_list;
-    tri_list.reserve(mesh.indices.size() / 3);
-    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3)
-      tri_list.emplace_back(mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]);
+    std::unordered_map<std::uint64_t, std::uint32_t> welded;
+    std::vector<std::uint32_t> remap(mesh.vertices.size());
+
+    for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
+      const float *p = mesh.vertices[i].pos;
+      std::uint64_t k = key(p);
+      auto it = welded.find(k);
+      if (it == welded.end()) {
+        std::uint32_t ni = static_cast<std::uint32_t>(vertex_list.size());
+        welded[k] = ni;
+        remap[i] = ni;
+        vertex_list.emplace_back(p[0], p[1], p[2]);
+      } else {
+        remap[i] = it->second;
+      }
+    }
+
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+      std::uint32_t a = remap[mesh.indices[i]];
+      std::uint32_t b = remap[mesh.indices[i + 1]];
+      std::uint32_t c = remap[mesh.indices[i + 2]];
+      if (a != b && b != c && a != c)
+        tri_list.emplace_back(a, b, c);
+    }
 
     JPH::MeshShapeSettings shape_settings(vertex_list, tri_list);
     shape_settings.SetEmbedded();
@@ -205,8 +233,8 @@ public:
     settings.mMaxSlopeAngle = JPH::DegreesToRadians(60.0F);
     settings.mEnhancedInternalEdgeRemoval = true;
     settings.mInnerBodyShape = nullptr;
-    settings.mMass = 10.0F;               // light enough not to rocket cubes, heavy enough to push
-    settings.mPenetrationRecoverySpeed = 0.5F;  // smoother edge transitions on trimesh
+    settings.mMass = 0.0F;                    // disables gravity push-down onto bodies underfoot
+    settings.mPenetrationRecoverySpeed = 0.5F;
     character_ = new JPH::CharacterVirtual(
         &settings,
         JPH::RVec3(position.x, position.y, position.z),
