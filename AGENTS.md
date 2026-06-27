@@ -82,6 +82,54 @@ Read this and `README.md` before large renderer changes.
 4. Per-skin bone buffers instead of per-instance (shared skeletons).
 5. Cubic spline interpolation for glTF animations (rare in practice).
 
+## Jolt CharacterVirtual — Critical Properties
+
+**These are easy to confuse. Read this before touching the character controller.**
+
+### `mMass` vs `mMaxStrength` — completely separate paths
+
+| Property | What it controls | Jolt source |
+|----------|-----------------|-------------|
+| `mMass` | **Downward gravity crush** on the body underfoot (`mGroundBodyID`). Applies `mMass * g * dt` as a downward impulse at the off-center contact point. Only fires when standing ON something. | `CharacterVirtual.cpp:1474` |
+| `mMaxStrength` | **Horizontal pushing** when walking into dynamic bodies. Clamps the impulse per tick: `max_impulse = mMaxStrength * dt`. | `CharacterVirtual.cpp:799` |
+
+**`mMass` does NOT affect pushing. `mMaxStrength` does NOT affect standing weight.** They are orthogonal code paths. Do not use `mMass` to tune pushing, and do not use `mMaxStrength` to stop cubes from tumbling when you stand on them.
+
+- To stop cubes from tumbling underfoot: **`mMass = 0`**
+- To control how hard the character pushes props: **tune `mMaxStrength`** (default 100 N)
+
+### `mCanReceiveImpulses` vs `mCanPushCharacter`
+
+| Property | Direction |
+|----------|-----------|
+| `mCanReceiveImpulses` | Character → Body (character pushes the body) |
+| `mCanPushCharacter` | Body → Character (body pushes the character) |
+
+Both default to `true`. Set via `CharacterContactSettings` in a `CharacterContactListener::OnContactAdded/OnContactPersisted` callback.
+
+### `mInnerBodyShape`
+
+An optional inner kinematic body for sensor/raycast presence. Set to `nullptr` to disable (no force transfer). Separate from the main collision shape.
+
+### Mesh collision edge jitter
+
+`mEnhancedInternalEdgeRemoval=true` is required but NOT sufficient. Jolt detects internal edges **topologically** — two triangles must share the same vertex indices. glTF models export split vertices (same position, different index per face). Vertex welding (collapsing coincident positions to shared indices) is required to make enhanced edge removal work. `create_static_mesh` in `physics_world.hpp` does this at 0.1mm grid resolution.
+
+### Frame interpolation
+
+Dynamic body transforms must be interpolated (`prev/curr + lerp at accumulator alpha`), not written directly in `tick()`. Otherwise bodies snap at the physics tick rate while the camera glides. Same alpha for camera and all bodies. Character position uses `render_state_.prev/curr` with the same interpolation.
+
+### Accumulator overflow
+
+When capping ticks per frame (max 2), drain the overflow: `accumulator = fmod(accumulator, k_fixed_dt)`. Otherwise leftover carries forward and creates permanent latency.
+
+### Reference
+
+- Jolt sample: `/home/tristan/opt/JoltPhysics/Samples/Tests/Character/CharacterVirtualTest.cpp`
+- `HandleInput()` lines 112-187 — canonical velocity formula
+- `OnContactSolve()` lines 386-394 — anti-slide callback for idle-on-slope stability
+- Jolt docs: https://jrouwe.github.io/JoltPhysics/index.html#character-controllers
+
 ## Engine vs demo boundaries
 
 **Engine stock:** camera, directional light + shadows, sky cube mesh helper, loaders, renderer. **Not engine:** floor/quad procedural meshes, game assets, scene layout — those live in [necromyth-engine-demo](https://github.com/Tristan367/necromyth-engine-demo).

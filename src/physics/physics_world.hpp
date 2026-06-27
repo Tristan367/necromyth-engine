@@ -117,6 +117,7 @@ public:
        -> JPH::BodyID {
     // Weld coincident vertices (0.1 mm grid) so internal mesh edges are
     // properly detected by Jolt's enhanced internal edge removal.
+    #if 0
     auto key = [](const float *p) -> std::uint64_t {
       auto q = [](float v) { return static_cast<std::int64_t>(std::llround(v * 10000.0)); };
       return (static_cast<std::uint64_t>(static_cast<std::uint16_t>(q(p[0])))) |
@@ -152,6 +153,15 @@ public:
     }
 
     JPH::MeshShapeSettings shape_settings(vertex_list, tri_list);
+    #else
+    JPH::VertexList vertex_list;
+    for (const MeshVertex &v : mesh.vertices)
+      vertex_list.emplace_back(v.pos[0], v.pos[1], v.pos[2]);
+    JPH::IndexedTriangleList tri_list;
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3)
+      tri_list.emplace_back(mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]);
+    JPH::MeshShapeSettings shape_settings(vertex_list, tri_list);
+    #endif
     shape_settings.SetEmbedded();
     JPH::ShapeRefC shape = shape_settings.Create().Get();
 
