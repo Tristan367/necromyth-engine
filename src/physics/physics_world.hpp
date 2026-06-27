@@ -15,7 +15,9 @@
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
@@ -136,6 +138,38 @@ public:
     JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::DontActivate);
     body_ids_.push_back(id);
     return id;
+  }
+
+  [[nodiscard]] auto add_dynamic_body(const JPH::ShapeSettings &shape_settings,
+                                       const glm::vec3 &position) -> JPH::BodyID {
+    JPH::ShapeRefC shape = shape_settings.Create().Get();
+    JPH::BodyCreationSettings settings(
+        shape,
+        JPH::RVec3(position.x, position.y, position.z),
+        JPH::Quat::sIdentity(),
+        JPH::EMotionType::Dynamic,
+        Layers::kMoving);
+    settings.mFriction = 0.7F;
+    settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+    settings.mMassPropertiesOverride.mMass = 1.0F;
+    JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::Activate);
+    body_ids_.push_back(id);
+    return id;
+  }
+
+  [[nodiscard]] auto add_sphere(float radius, const glm::vec3 &position) -> JPH::BodyID {
+    JPH::SphereShapeSettings s(radius); s.SetEmbedded();
+    return add_dynamic_body(s, position);
+  }
+
+  [[nodiscard]] auto add_capsule(float half_height, float radius, const glm::vec3 &position) -> JPH::BodyID {
+    JPH::CapsuleShapeSettings s(half_height, radius); s.SetEmbedded();
+    return add_dynamic_body(s, position);
+  }
+
+  [[nodiscard]] auto add_cylinder(float half_height, float radius, const glm::vec3 &position) -> JPH::BodyID {
+    JPH::CylinderShapeSettings s(half_height, radius); s.SetEmbedded();
+    return add_dynamic_body(s, position);
   }
 
   void sync_body_to_instance(JPH::BodyID body_id, engine::MeshInstance &instance) const {
