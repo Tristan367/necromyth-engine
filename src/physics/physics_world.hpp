@@ -205,6 +205,7 @@ public:
     settings.mMaxSlopeAngle = JPH::DegreesToRadians(60.0F);
     settings.mEnhancedInternalEdgeRemoval = true;
     settings.mInnerBodyShape = nullptr;  // no inner body = no mass forces on contacts
+    settings.mMass = 0.0F;                // disable gravity push-down on ground bodies
     character_ = new JPH::CharacterVirtual(
         &settings,
         JPH::RVec3(position.x, position.y, position.z),
@@ -255,6 +256,7 @@ public:
   }
 
   void set_max_strength(float s) { character_->SetMaxStrength(s); }
+  void set_allow_sliding(bool allow) { contact_listener_.allow_sliding_ = allow; }
 
 private:
   PhysicsWorld &world_;
@@ -264,12 +266,23 @@ private:
   public:
     void OnContactAdded(const JPH::CharacterVirtual *, const JPH::CharacterContact &inContact,
                         JPH::CharacterContactSettings &ioSettings) override {
-      ioSettings.mCanReceiveImpulses = inContact.mMotionTypeB == JPH::EMotionType::Static ? true : false;
+      ioSettings.mCanReceiveImpulses = inContact.mMotionTypeB == JPH::EMotionType::Static;
+      ioSettings.mCanPushCharacter = false;
     }
     void OnContactPersisted(const JPH::CharacterVirtual *, const JPH::CharacterContact &inContact,
                             JPH::CharacterContactSettings &ioSettings) override {
-      ioSettings.mCanReceiveImpulses = inContact.mMotionTypeB == JPH::EMotionType::Static ? true : false;
+      ioSettings.mCanReceiveImpulses = inContact.mMotionTypeB == JPH::EMotionType::Static;
+      ioSettings.mCanPushCharacter = false;
     }
+    void OnContactSolve(const JPH::CharacterVirtual *inCharacter, const JPH::BodyID &,
+                        const JPH::SubShapeID &, JPH::RVec3Arg, JPH::Vec3Arg inContactNormal,
+                        JPH::Vec3Arg inContactVelocity, const JPH::PhysicsMaterial *,
+                        JPH::Vec3Arg, JPH::Vec3 &ioNewCharacterVelocity) override {
+      if (!allow_sliding_ && inContactVelocity.IsNearZero() &&
+          !inCharacter->IsSlopeTooSteep(inContactNormal))
+        ioNewCharacterVelocity = JPH::Vec3::sZero();
+    }
+    bool allow_sliding_{true};
   } contact_listener_;};
 
 } // namespace physics
