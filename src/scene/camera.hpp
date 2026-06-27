@@ -78,7 +78,7 @@ private:
   glm::vec3 position_{2.0F, 2.0F, 2.0F};
   glm::vec3 target_{};
   glm::vec3 up_{0.0F, 1.0F, 0.0F};
-  float fov_y_degrees_{45.0F};
+  float fov_y_degrees_{70.0F};
   float near_plane_{0.05F};
   float far_plane_{2000.0F};
   float aspect_{1.0F};
