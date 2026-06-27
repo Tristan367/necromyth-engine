@@ -95,7 +95,6 @@ public:
 
     frame_count_ = frame_count;
     texture_count_ = texture_count;
-    skinned_instance_count_ = skinned_instance_count;
 
     const std::array pool_sizes{
         vk::DescriptorPoolSize{
@@ -104,7 +103,7 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = frame_count * 2 + texture_count + skinned_instance_count * 2,
+            .descriptorCount = frame_count * 2 + texture_count + skinned_instance_count * 4,
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eStorageBuffer,
@@ -364,7 +363,6 @@ public:
 private:
   std::uint32_t frame_count_{};
   std::uint32_t texture_count_{};
-  std::uint32_t skinned_instance_count_{};
   vk::raii::DescriptorSetLayout frame_layout_{nullptr};
   vk::raii::DescriptorSetLayout material_layout_{nullptr};
   vk::raii::DescriptorSetLayout material_skinned_layout_{nullptr};

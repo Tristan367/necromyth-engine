@@ -10,6 +10,8 @@
 
 namespace engine {
 
+class Scene;
+
 enum class MeshAlphaMode : std::uint8_t {
   Opaque = 0,
   Cutout = 1,
@@ -37,5 +39,7 @@ struct MeshInstance {
 };
 
 constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();
+
+[[nodiscard]] inline auto is_skinned_instance(const MeshInstance &instance, const Scene &scene) -> bool;
 
 } // namespace engine
