@@ -156,6 +156,14 @@ public:
     return device_.gpu_name();
   }
 
+  [[nodiscard]] auto device_ref() -> vk::raii::Device & { return device_.device(); }
+  [[nodiscard]] auto color_fmt() const -> vk::Format { return swapchain_.image_format(); }
+  [[nodiscard]] auto depth_fmt() const -> vk::Format { return depth_image_.format(); }
+  [[nodiscard]] auto frame_layout_obj() const -> vk::DescriptorSetLayout { return descriptor_resources_.frame_layout(); }
+  [[nodiscard]] auto sample_count() const -> vk::SampleCountFlagBits { return device_.msaa_samples(); }
+  [[nodiscard]] auto frame_set_obj(std::uint32_t i) const -> vk::DescriptorSet { return descriptor_resources_.frame_set(i); }
+  [[nodiscard]] auto phys_dev() -> vk::raii::PhysicalDevice { return device_.physical_device(); }
+
   void mark_framebuffer_resized() {
     framebuffer_resized_ = true;
     last_resize_ticks_ = SDL_GetTicks();
