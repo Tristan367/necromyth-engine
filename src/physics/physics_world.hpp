@@ -204,8 +204,9 @@ public:
     settings.mShape = shape;
     settings.mMaxSlopeAngle = JPH::DegreesToRadians(60.0F);
     settings.mEnhancedInternalEdgeRemoval = true;
-    settings.mInnerBodyShape = nullptr;  // no inner body = no mass forces on contacts
-    settings.mMass = 0.0F;                // disable gravity push-down on ground bodies
+    settings.mInnerBodyShape = nullptr;
+    settings.mMass = 10.0F;               // light enough not to rocket cubes, heavy enough to push
+    settings.mPenetrationRecoverySpeed = 0.5F;  // smoother edge transitions on trimesh
     character_ = new JPH::CharacterVirtual(
         &settings,
         JPH::RVec3(position.x, position.y, position.z),
@@ -264,16 +265,10 @@ private:
 
   class ContactBlocker : public JPH::CharacterContactListener {
   public:
-    void OnContactAdded(const JPH::CharacterVirtual *, const JPH::CharacterContact &inContact,
-                        JPH::CharacterContactSettings &ioSettings) override {
-      ioSettings.mCanReceiveImpulses = inContact.mMotionTypeB == JPH::EMotionType::Static;
-      ioSettings.mCanPushCharacter = false;
-    }
-    void OnContactPersisted(const JPH::CharacterVirtual *, const JPH::CharacterContact &inContact,
-                            JPH::CharacterContactSettings &ioSettings) override {
-      ioSettings.mCanReceiveImpulses = inContact.mMotionTypeB == JPH::EMotionType::Static;
-      ioSettings.mCanPushCharacter = false;
-    }
+    void OnContactAdded(const JPH::CharacterVirtual *, const JPH::CharacterContact &,
+                        JPH::CharacterContactSettings &) override {}
+    void OnContactPersisted(const JPH::CharacterVirtual *, const JPH::CharacterContact &,
+                            JPH::CharacterContactSettings &) override {}
     void OnContactSolve(const JPH::CharacterVirtual *inCharacter, const JPH::BodyID &,
                         const JPH::SubShapeID &, JPH::RVec3Arg, JPH::Vec3Arg inContactNormal,
                         JPH::Vec3Arg inContactVelocity, const JPH::PhysicsMaterial *,
