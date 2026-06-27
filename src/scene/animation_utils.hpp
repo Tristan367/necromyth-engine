@@ -116,12 +116,6 @@ inline auto trs_to_mat4(const BoneTRS &trs) -> glm::mat4 {
          glm::scale(glm::mat4(1.0F), trs.scale);
 }
 
-inline auto sample_animation(const AnimationClip &clip, float time,
-                              std::uint32_t node_index) -> glm::mat4 {
-  const detail::ChannelNodeMap channel_map = detail::build_channel_map(clip);
-  return trs_to_mat4(detail::sample_animation_trs(clip, time, node_index, channel_map));
-}
-
 inline auto blend_bone_trs(const BoneTRS &a, const BoneTRS &b, float factor) -> BoneTRS {
   if (factor <= 0.0F)
     return a;

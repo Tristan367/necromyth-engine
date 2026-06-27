@@ -305,6 +305,7 @@ public:
         });
 
     if (!bone_buffers_.empty()) {
+      std::vector<glm::mat4> joint_matrices;
       std::uint32_t bone_buffer_index = 0;
       for (const MeshInstance &instance : scene.instances()) {
         if (instance.skin_index == k_invalid_skin_index || instance.animation_index == k_invalid_skin_index)
@@ -316,7 +317,7 @@ public:
         if (bone_buffer_index >= bone_buffers_.size())
           break;
 
-        std::vector<glm::mat4> joint_matrices;
+        joint_matrices.clear();
 
         if (instance.next_animation_index < scene.animations().size()) {
           const AnimationClip &clip = scene.animations()[instance.animation_index];
