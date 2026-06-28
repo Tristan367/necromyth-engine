@@ -11,7 +11,6 @@
 namespace engine {
 
 class Scene;
-struct AnimationMask;
 
 enum class MeshAlphaMode : std::uint8_t {
   Opaque = 0,
@@ -37,8 +36,6 @@ struct MeshInstance {
   float next_animation_time{0.0F};
   float blend_factor{1.0F};
   float blend_duration{0.3F};
-
-  struct AnimationMask *bone_mask{nullptr};  // optional per-bone control mask
 };
 
 constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();

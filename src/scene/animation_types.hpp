@@ -71,34 +71,6 @@ struct AnimationClip {
   float duration{0.0F};
 };
 
-struct BoneTRS {
-  glm::vec3 translation{0.0F};
-  glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
-  glm::vec3 scale{1.0F};
-};
-
-enum class BoneControlMode : std::uint8_t { Auto, Secondary, Manual };
-inline constexpr std::uint8_t k_invalid_joint = 0xFF;
-
-struct BoneControl {
-  BoneControlMode mode{BoneControlMode::Auto};
-  // Secondary: use clip_b instead of clip_a
-  // Manual: use manual_trs instead of any clip
-  BoneTRS manual_trs;
-};
-
-struct AnimationMask {
-  std::vector<BoneControl> entries;  // indexed by joint index, empty = auto for all
-  // Convenience helpers:
-  void auto_all(std::size_t joint_count) { entries.assign(joint_count, {}); }
-  void set_secondary(std::uint32_t joint) {
-    if (joint < entries.size()) entries[joint].mode = BoneControlMode::Secondary;
-  }
-  void set_manual(std::uint32_t joint, const BoneTRS &trs) {
-    if (joint < entries.size()) { entries[joint].mode = BoneControlMode::Manual; entries[joint].manual_trs = trs; }
-  }
-};
-
 inline constexpr std::uint32_t k_max_bones = 128;
 
 } // namespace engine
