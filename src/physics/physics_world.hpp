@@ -201,6 +201,13 @@ public:
   [[nodiscard]] auto physics_system() -> JPH::PhysicsSystem & { return physics_system_; }
   [[nodiscard]] auto temp_allocator() -> JPH::TempAllocator & { return *temp_allocator_; }
 
+  [[nodiscard]] auto shape_center_of_mass(JPH::BodyID body_id) const -> JPH::Vec3 {
+    JPH::BodyLockRead lock(physics_system_.GetBodyLockInterface(), body_id);
+    if (lock.Succeeded())
+      return lock.GetBody().GetShape()->GetCenterOfMass();
+    return JPH::Vec3::sZero();
+  }
+
 private:
   JPH::PhysicsSystem physics_system_;
   JPH::BodyInterface *body_interface_{nullptr};
