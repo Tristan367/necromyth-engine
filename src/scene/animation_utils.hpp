@@ -223,21 +223,15 @@ inline void compute_joint_matrices_masked(
   for (std::size_t i = 0; i < joint_count; ++i) {
     const std::uint32_t node_index = skeleton.joint_nodes[i];
 
-    BoneTRS base = detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a);
-
-    if (i < mask.entries.size() && mask.entries[i].mode == BoneControlMode::Secondary) {
-      base = detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b);
-    }
-
     if (i < mask.entries.size() && mask.entries[i].mode == BoneControlMode::Manual) {
-      const BoneTRS &m = mask.entries[i].manual_trs;
-      // Only override rotation (non-identity). Keep translation/scale from animation.
-      if (m.rotation != glm::quat{1,0,0,0}) base.rotation = m.rotation;
-      if (m.translation != glm::vec3{0}) base.translation = m.translation;
-      if (m.scale != glm::vec3{1}) base.scale = m.scale;
+      node_anim[node_index] = trs_to_mat4(mask.entries[i].manual_trs);
+    } else if (i < mask.entries.size() && mask.entries[i].mode == BoneControlMode::Secondary) {
+      node_anim[node_index] = trs_to_mat4(
+          detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b));
+    } else {
+      node_anim[node_index] = trs_to_mat4(
+          detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a));
     }
-
-    node_anim[node_index] = trs_to_mat4(base);
   }
 
   detail::build_world_matrices(skeleton, node_anim, out_joint_matrices, out_bone_worlds);
