@@ -441,8 +441,11 @@ inline void load_skeletons(
   for (const tinygltf::Skin &gltf_skin : model.skins) {
     SkeletonAsset skeleton{};
     skeleton.joint_nodes.reserve(gltf_skin.joints.size());
-    for (const int joint_index : gltf_skin.joints)
+    for (const int joint_index : gltf_skin.joints) {
       skeleton.joint_nodes.push_back(static_cast<std::uint32_t>(joint_index));
+      const std::size_t ni = static_cast<std::size_t>(joint_index);
+      skeleton.joint_names.push_back(ni < model.nodes.size() ? model.nodes[ni].name : "");
+    }
     skeleton.skeleton_root = gltf_skin.skeleton >= 0
         ? static_cast<std::uint32_t>(gltf_skin.skeleton)
         : std::numeric_limits<std::uint32_t>::max();

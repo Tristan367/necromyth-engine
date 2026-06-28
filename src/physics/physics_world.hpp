@@ -39,13 +39,15 @@ JPH_SUPPRESS_WARNINGS
 namespace Layers {
 static constexpr JPH::ObjectLayer kNonMoving = 0;
 static constexpr JPH::ObjectLayer kMoving = 1;
-static constexpr JPH::ObjectLayer kNumLayers = 2;
+static constexpr JPH::ObjectLayer kHitbox = 2;  // sensor-only hitbox bodies
+static constexpr JPH::ObjectLayer kNumLayers = 3;
 } // namespace Layers
 
 namespace BroadPhaseLayers {
 static constexpr JPH::BroadPhaseLayer kNonMoving(0);
 static constexpr JPH::BroadPhaseLayer kMoving(1);
-static constexpr std::uint32_t kNumLayers = 2;
+static constexpr JPH::BroadPhaseLayer kHitbox(2);
+static constexpr std::uint32_t kNumLayers = 3;
 } // namespace BroadPhaseLayers
 
 class PhysicsWorld {
@@ -208,6 +210,29 @@ public:
     return JPH::Vec3::sZero();
   }
 
+  [[nodiscard]] auto add_sensor_body(const JPH::ShapeSettings &shape_settings,
+                                      const glm::vec3 &position) -> JPH::BodyID {
+    JPH::ShapeRefC shape = shape_settings.Create().Get();
+    JPH::BodyCreationSettings settings(
+        shape,
+        JPH::RVec3(position.x, position.y, position.z),
+        JPH::Quat::sIdentity(),
+        JPH::EMotionType::Kinematic,
+        Layers::kHitbox);
+    settings.mIsSensor = true;
+    JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+    body_ids_.push_back(id);
+    return id;
+  }
+
+  void set_sensor_transform(JPH::BodyID body_id, const glm::vec3 &pos, const glm::quat &rot) {
+    body_interface_->SetPositionAndRotation(
+        body_id,
+        JPH::RVec3(pos.x, pos.y, pos.z),
+        JPH::Quat(rot.x, rot.y, rot.z, rot.w),
+        JPH::EActivation::DontActivate);
+  }
+
 private:
   JPH::PhysicsSystem physics_system_;
   JPH::BodyInterface *body_interface_{nullptr};
@@ -220,13 +245,19 @@ private:
     BPLayerInterfaceImpl() {
       mObjectToBroadPhase[Layers::kNonMoving] = BroadPhaseLayers::kNonMoving;
       mObjectToBroadPhase[Layers::kMoving] = BroadPhaseLayers::kMoving;
+      mObjectToBroadPhase[Layers::kHitbox] = BroadPhaseLayers::kHitbox;
     }
     std::uint32_t GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::kNumLayers; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override {
       return mObjectToBroadPhase[inLayer];
     }
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
-    const char *GetBroadPhaseLayerName(JPH::BroadPhaseLayer) const override { return ""; }
+    const char *GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override {
+      if (layer == BroadPhaseLayers::kNonMoving) return "NON_MOVING";
+      if (layer == BroadPhaseLayers::kMoving) return "MOVING";
+      if (layer == BroadPhaseLayers::kHitbox) return "HITBOX";
+      return "";
+    }
 #endif
   private:
     JPH::BroadPhaseLayer mObjectToBroadPhase[Layers::kNumLayers];
@@ -234,12 +265,18 @@ private:
 
   class ObjectVsBroadPhaseLayerFilterImpl final : public JPH::ObjectVsBroadPhaseLayerFilter {
   public:
-    bool ShouldCollide(JPH::ObjectLayer, JPH::BroadPhaseLayer) const override { return true; }
+    bool ShouldCollide(JPH::ObjectLayer inLayer, JPH::BroadPhaseLayer inBroadPhase) const override {
+      if (inLayer == Layers::kHitbox) return false;  // hitboxes never collide
+      return true;
+    }
   };
 
   class ObjectLayerPairFilterImpl final : public JPH::ObjectLayerPairFilter {
   public:
-    bool ShouldCollide(JPH::ObjectLayer, JPH::ObjectLayer) const override { return true; }
+    bool ShouldCollide(JPH::ObjectLayer inLayer1, JPH::ObjectLayer inLayer2) const override {
+      if (inLayer1 == Layers::kHitbox || inLayer2 == Layers::kHitbox) return false;
+      return true;
+    }
   };
 
   BPLayerInterfaceImpl broad_phase_layer_interface_{};

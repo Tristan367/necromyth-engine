@@ -133,10 +133,13 @@ namespace detail {
 inline void build_world_matrices(
     const SkeletonAsset &skeleton,
     const std::unordered_map<std::uint32_t, glm::mat4> &node_anim,
-    std::vector<glm::mat4> &out_joint_matrices) {
+    std::vector<glm::mat4> &out_joint_matrices,
+    std::vector<glm::mat4> *out_bone_worlds = nullptr) {
   static constexpr std::uint32_t k_invalid = std::numeric_limits<std::uint32_t>::max();
   const std::size_t joint_count = skeleton.joint_nodes.size();
   out_joint_matrices.resize(joint_count);
+  if (out_bone_worlds)
+    out_bone_worlds->resize(joint_count);
 
   thread_local std::vector<std::uint32_t> s_chain;
   s_chain.reserve(64);
@@ -163,6 +166,9 @@ inline void build_world_matrices(
 
     out_joint_matrices[i] =
         skeleton.inverse_skin_node_transform * world * skeleton.inverse_bind_matrices[i];
+
+    if (out_bone_worlds)
+      (*out_bone_worlds)[i] = skeleton.inverse_skin_node_transform * world;
   }
 }
 
@@ -175,7 +181,8 @@ inline void compute_joint_matrices_blended(
     const AnimationClip &clip_b,
     float time_b,
     float blend_factor,
-    std::vector<glm::mat4> &out_joint_matrices) {
+    std::vector<glm::mat4> &out_joint_matrices,
+    std::vector<glm::mat4> *out_bone_worlds = nullptr) {
   const std::size_t joint_count = skeleton.joint_nodes.size();
   const detail::ChannelNodeMap channel_map_a = detail::build_channel_map(clip_a);
   const detail::ChannelNodeMap channel_map_b = detail::build_channel_map(clip_b);
@@ -191,15 +198,17 @@ inline void compute_joint_matrices_blended(
     node_anim[node_index] = trs_to_mat4(blend_bone_trs(trs_a, trs_b, blend_factor));
   }
 
-  detail::build_world_matrices(skeleton, node_anim, out_joint_matrices);
+  detail::build_world_matrices(skeleton, node_anim, out_joint_matrices, out_bone_worlds);
 }
 
 inline void compute_joint_matrices(
     const SkeletonAsset &skeleton,
     const AnimationClip &clip,
     float time,
-    std::vector<glm::mat4> &out_joint_matrices) {
-  compute_joint_matrices_blended(skeleton, clip, time, clip, time, 1.0F, out_joint_matrices);
+    std::vector<glm::mat4> &out_joint_matrices,
+    std::vector<glm::mat4> *out_bone_worlds = nullptr) {
+  compute_joint_matrices_blended(skeleton, clip, time, clip, time, 1.0F,
+                                 out_joint_matrices, out_bone_worlds);
 }
 
 } // namespace engine
