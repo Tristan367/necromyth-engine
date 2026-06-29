@@ -55,13 +55,15 @@ Read this and `README.md` before large renderer changes.
 
 **Animation blending:** `compute_joint_matrices_blended()` blends at TRS level (lerp T/S, slerp R) before world matrix construction. Single-animation path delegates to blended with `blend_factor = 1.0F`. Crossfade auto-advances `blend_factor += delta / blend_duration`, promotes `next_animation_index` to `animation_index` on completion.
 
+**Animation split (per-bone binary):** `MeshInstance::secondary_joints` — pointer to a vector of joint indices that use `next_animation_index` clip instead of the primary. `compute_joint_matrices_split()` samples clip_a or clip_b per joint via unordered_set lookup. Zero overhead when null. Crossfade promotion is skipped when split is active. E key in demo swaps primary/secondary.
+
 ### key files
 
-- `animation_types.hpp`: `SkeletonAsset`, `AnimationClip`, `AnimationSampler`, `AnimationChannel`, `k_max_bones = 128`
-- `animation_utils.hpp`: `sample_animation_trs()`, `compute_joint_matrices()`, `compute_joint_matrices_blended()`, `BoneTRS`, `trs_to_mat4()`
+- `animation_types.hpp`: `SkeletonAsset`, `AnimationClip`, `AnimationSampler`, `AnimationChannel`, `k_max_bones = 128`, `BoneTRS`, `HitboxAttachment`, `HitboxShape`, `BodyColliderDef`
+- `animation_utils.hpp`: `sample_animation_trs()`, `compute_joint_matrices()`, `compute_joint_matrices_blended()`, `compute_joint_matrices_split()`, `BoneTRS`, `trs_to_mat4()`
 - `bone_buffer.hpp`: `BoneStorageBufferSet` (host-visible SSBO per instance)
-- `vulkan_context.hpp`: animation update loop in `draw_frame()`, `create_bone_buffers()`
-- `gltf_loader.hpp`: `read_joint_accessor()`, `load_skeletons()`, `load_animations()`, `node_parents` map
+- `vulkan_context.hpp`: animation update loop in `draw_frame()`, `create_bone_buffers()`, split check before blended/single path
+- `gltf_loader.hpp`: `read_joint_accessor()`, `load_skeletons()` (stores `joint_names` from glTF node names), `load_animations()`, `node_parents` map
 - `pass_recorder.hpp`: `bind_material()` handles skinned sets, `draw_shadow_mesh()` binds bone SSBO
 - `pipeline_id.hpp`: `textured_pipeline(alpha_mode, skinned)`, `is_skinned_pipeline()`
 - Shaders: `triangle_skinned.slang`, `shadow_depth_skinned.slang`, `lib/mesh_types_skinned.slang`
@@ -74,13 +76,57 @@ Read this and `README.md` before large renderer changes.
 - Export **.glb** for simplest path (mesh + rig + clips in one file).
 - Drop test asset in demo `assets/models/`; wire one instance in `demo_scene.cpp`.
 
-## Known follow-ups
+## Hitbox / bone-attached colliders (implemented)
 
-1. **Physics wrapper** (e.g. Jolt) — after skinning; sync root transform; collision rig on bones later.
-2. Alpha-threshold shadow discard (optional; opaque silhouettes are fine for now).
-3. Split `vulkan_context.hpp` further if it grows again.
-4. Per-skin bone buffers instead of per-instance (shared skeletons).
-5. Cubic spline interpolation for glTF animations (rare in practice).
+**Two collider types per model** (defined in `<model_name>.json` sidecar next to `.glb`):
+
+| | Body Collider | Hitboxes |
+|---|---|---|
+| Jolt body type | Dynamic/Kinematic, `IsSensor = false` | Kinematic, `IsSensor = true` |
+| Object layer | `kMoving` | `kHitbox` (new) |
+| Purpose | Physics: ground, rigidbodies, character push | Detection: raycasting, weapon sweeps, per-bone queries |
+| Raycast participation | Only when no hitboxes configured | Always |
+| Count per model | 1 | 0..N |
+| Transform source | Skeleton root (from scene instance model) | Per-bone world transform (from `build_world_matrices` bone_worlds) |
+
+**Layer design:** `kHitbox` = ObjectLayer 2, BroadPhaseLayer 2. Layer pair filter returns false for any pair involving kHitbox (sensor-only, no collision). BroadPhaseLayer still includes kHitbox for raycast/spatial queries.
+
+**Data model** (`animation_types.hpp`): `HitboxShape` enum (Box/Sphere/Capsule), `HitboxAttachment` (name, joint_index, shape, offset, rotation, half_extent, half_height), `BodyColliderDef` (shape, half_height, radius, half_extent, offset). `SkeletonAsset` gets `joint_names`, `hitboxes`, optional `body_collider`. `find_joint_index(name)` helper.
+
+**HitboxManager** (`physics/hitbox_manager.hpp`): Creates kinematic sensor bodies on `kHitbox` layer from `HitboxAttachment` definitions. `update()` syncs body transforms from bone world transforms each frame. Exposes `find_name(BodyID)` for hit-to-hitbox lookup.
+
+**Bone world transforms:** `build_world_matrices()` accepts optional `out_bone_worlds` parameter — stores `inverse_skin_node_transform * world` (before IBM multiplication) for hitbox placement. Functions: `compute_joint_matrices()`, `compute_joint_matrices_blended()`, `compute_joint_matrices_split()` all propagate `out_bone_worlds`.
+
+**JSON format** (`<model>.json`):
+```json
+{
+  "body": {"shape": "capsule", "half_height": 0.4, "radius": 0.5, "offset": [0,0.4,0]},
+  "hitboxes": [
+    {"name": "Head", "bone": 4, "shape": "sphere", "offset": [0,0,0], "radius": 0.25}
+  ]
+}
+```
+`"bone"` accepts string name or integer joint index.
+
+**Tapered shape CoM:** Jolt centers `TaperedCylinderShape` and `TaperedCapsuleShape` on center-of-mass (not geometric center). Use `Shape::GetCenterOfMass()` and rotate offset by body rotation for correct visual alignment. See `sync_body_to_instance` in demo.
+
+## Roadmap (planned features, in priority order)
+
+1. **Input action map** — named actions with keyboard/gamepad binding, edge detection (just_pressed/just_released), analog strength
+2. **Audio** — miniaudio integration, WAV loading, 3D positional playback with spatial attenuation
+3. **Per-bone manual override** — `set_joint_override(index, BoneTRS)` for head tracking, weapon aiming
+4. **Animation state machine** — state→transition→state graph with crossfade durations, blend spaces (1D locomotion)
+5. **Point + spot lights** — forward shading with attenuation, optional cube-map shadow atlas
+6. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
+7. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
+
+## Known knowns (deferred, not urgent)
+
+1. Alpha-threshold shadow discard (optional; opaque silhouettes are fine for now).
+2. Split `vulkan_context.hpp` further if it grows again.
+3. Per-skin bone buffers instead of per-instance (shared skeletons).
+4. Cubic spline interpolation for glTF animations (rare in practice).
+5. Shared skeleton hitbox bodies (currently per-instance).
 
 ## Jolt CharacterVirtual — Critical Properties
 
