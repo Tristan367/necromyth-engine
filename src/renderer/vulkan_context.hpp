@@ -332,7 +332,6 @@ public:
 
         if (instance.secondary_joints && !instance.secondary_joints->empty() &&
             instance.next_animation_index < scene.animations().size()) {
-          compute_joint_matrices_split(
               skel,
               scene.animations()[instance.animation_index], instance.animation_time,
               scene.animations()[instance.next_animation_index], instance.next_animation_time,
