@@ -12,6 +12,7 @@
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace engine {
@@ -209,6 +210,35 @@ inline void compute_joint_matrices(
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
   compute_joint_matrices_blended(skeleton, clip, time, clip, time, 1.0F,
                                  out_joint_matrices, out_bone_worlds);
+}
+
+inline void compute_joint_matrices_split(
+    const SkeletonAsset &skeleton,
+    const AnimationClip &clip_a,
+    float time_a,
+    const AnimationClip &clip_b,
+    float time_b,
+    const std::vector<std::uint32_t> &joints_using_b,
+    std::vector<glm::mat4> &out_joint_matrices,
+    std::vector<glm::mat4> *out_bone_worlds = nullptr) {
+  const std::size_t joint_count = skeleton.joint_nodes.size();
+  const detail::ChannelNodeMap channel_map_a = detail::build_channel_map(clip_a);
+  const detail::ChannelNodeMap channel_map_b = detail::build_channel_map(clip_b);
+
+  const std::unordered_set<std::uint32_t> b_set(
+      joints_using_b.begin(), joints_using_b.end());
+
+  std::unordered_map<std::uint32_t, glm::mat4> node_anim;
+  node_anim.reserve(joint_count);
+  for (std::size_t i = 0; i < joint_count; ++i) {
+    const std::uint32_t node_index = skeleton.joint_nodes[i];
+    const BoneTRS trs = b_set.count(static_cast<std::uint32_t>(i))
+        ? detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b)
+        : detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a);
+    node_anim[node_index] = trs_to_mat4(trs);
+  }
+
+  detail::build_world_matrices(skeleton, node_anim, out_joint_matrices, out_bone_worlds);
 }
 
 } // namespace engine

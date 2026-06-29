@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace engine {
 
@@ -36,6 +37,8 @@ struct MeshInstance {
   float next_animation_time{0.0F};
   float blend_factor{1.0F};
   float blend_duration{0.3F};
+
+  const std::vector<std::uint32_t> *secondary_joints{nullptr};
 };
 
 constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();
