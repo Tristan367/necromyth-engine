@@ -112,13 +112,12 @@ Read this and `README.md` before large renderer changes.
 
 ## Roadmap (planned features, in priority order)
 
-1. **Input action map** — named actions with keyboard/gamepad binding, edge detection (just_pressed/just_released), analog strength
-2. **Audio** — miniaudio integration, WAV loading, 3D positional playback with spatial attenuation
-3. **Per-bone manual override** — `set_joint_override(index, BoneTRS)` for head tracking, weapon aiming
-4. **Animation state machine** — state→transition→state graph with crossfade durations, blend spaces (1D locomotion)
-5. **Point + spot lights** — forward shading with attenuation, optional cube-map shadow atlas
-6. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
-7. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
+1. **Audio** — miniaudio integration, WAV loading, 3D positional playback with spatial attenuation
+2. **Per-bone manual override** — `set_joint_override(index, BoneTRS)` for head tracking, weapon aiming
+3. **Animation state machine** — state→transition→state graph with crossfade durations, blend spaces (1D locomotion)
+4. **Point + spot lights** — forward shading with attenuation, optional cube-map shadow atlas
+5. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
+6. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
 
 ## Known knowns (deferred, not urgent)
 
