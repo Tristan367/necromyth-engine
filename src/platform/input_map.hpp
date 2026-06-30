@@ -20,7 +20,7 @@ struct InputBinding {
   SDL_Scancode key{SDL_SCANCODE_UNKNOWN};
   int gamepad_button{-1};
   SDL_GamepadAxis gamepad_axis{};
-  int axis_direction{0}; // +1 positive half-axis, -1 negative half-axis
+  int axis_direction{0};
 
   static auto key_binding(SDL_Scancode sc) -> InputBinding {
     InputBinding b;
@@ -62,107 +62,36 @@ public:
       actions_[idx].bindings.push_back(binding);
   }
 
+  // Call at the START of each frame, before processing events
   void new_frame() { ++frame_; }
 
+  // Feed a raw SDL event — updates persistent key/button/axis state,
+  // then recomputes action states from the updated raw state.
   void process_event(const SDL_Event &event) {
-    float event_val = 0.0F;
-    bool is_down = false;
-    InputBindingType event_type;
-
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
-      is_down = true;
-      event_val = 1.0F;
-      event_type = InputBindingType::Key;
+      held_keys_[event.key.scancode] = true;
+      recompute_key_actions();
       break;
     case SDL_EVENT_KEY_UP:
-      is_down = false;
-      event_val = 0.0F;
-      event_type = InputBindingType::Key;
+      held_keys_[event.key.scancode] = false;
+      recompute_key_actions();
       break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-      is_down = true;
-      event_val = 1.0F;
-      event_type = InputBindingType::GamepadButton;
+      held_buttons_[event.gbutton.button] = true;
+      recompute_button_actions();
       break;
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
-      is_down = false;
-      event_val = 0.0F;
-      event_type = InputBindingType::GamepadButton;
+      held_buttons_[event.gbutton.button] = false;
+      recompute_button_actions();
       break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-      event_val = static_cast<float>(event.gaxis.value) / static_cast<float>(SDL_JOYSTICK_AXIS_MAX);
-      event_type = InputBindingType::GamepadAxis;
+      axis_values_[static_cast<int>(event.gaxis.axis)] =
+          static_cast<float>(event.gaxis.value) / static_cast<float>(SDL_JOYSTICK_AXIS_MAX);
+      recompute_axis_actions();
       break;
     default:
-      return;
-    }
-
-    for (Action &action : actions_) {
-      bool any_pressed = false;
-      float max_raw = 0.0F;
-      float max_strength = 0.0F;
-
-      for (const InputBinding &binding : action.bindings) {
-        if (binding.type != event_type)
-          continue;
-
-        bool bind_pressed = false;
-        float bind_raw = 0.0F;
-        float bind_strength = 0.0F;
-
-        switch (binding.type) {
-        case InputBindingType::Key:
-          if (event.key.scancode == binding.key) {
-            bind_pressed = is_down;
-            bind_raw = event_val;
-            bind_strength = event_val;
-          }
-          break;
-        case InputBindingType::GamepadButton:
-          if (event.gbutton.button == binding.gamepad_button) {
-            bind_pressed = is_down;
-            bind_raw = event_val;
-            bind_strength = event_val;
-          }
-          break;
-        case InputBindingType::GamepadAxis:
-          if (event.gaxis.axis == binding.gamepad_axis) {
-            const int dir = binding.axis_direction;
-            const bool same_dir = (dir < 0 && event.gaxis.value <= 0) ||
-                                  (dir > 0 && event.gaxis.value >= 0);
-            if (same_dir) {
-              const float raw = std::abs(event_val);
-              bind_raw = raw;
-              bind_pressed = raw >= action.deadzone;
-              bind_strength =
-                  bind_pressed
-                      ? std::clamp((raw - action.deadzone) / (1.0F - action.deadzone), 0.0F, 1.0F)
-                      : 0.0F;
-            }
-          }
-          break;
-        }
-
-        if (bind_raw > 0.0F || bind_pressed) {
-          max_raw = std::max(max_raw, bind_raw);
-          max_strength = std::max(max_strength, bind_strength);
-          any_pressed = any_pressed || bind_pressed;
-        }
-      }
-
-      const bool was_pressed = action.state.pressed;
-
-      if (any_pressed != was_pressed) {
-        if (any_pressed)
-          action.state.pressed_frame = frame_;
-        else
-          action.state.released_frame = frame_;
-      }
-
-      action.state.pressed = any_pressed;
-      action.state.strength = max_strength;
-      action.state.raw = max_raw;
+      break;
     }
   }
 
@@ -195,7 +124,6 @@ public:
     return idx != k_invalid ? actions_[idx].state.raw : 0.0F;
   }
 
-  // Composite: pos_action - neg_action (using deadzone-remapped strengths)
   [[nodiscard]] auto axis(std::string_view neg, std::string_view pos) const -> float {
     return strength(pos) - strength(neg);
   }
@@ -223,9 +151,83 @@ private:
     return it != name_map_.end() ? it->second : k_invalid;
   }
 
+  void update_action_state(Action &action, bool any_pressed, float max_strength, float max_raw) {
+    const bool was = action.state.pressed;
+    if (any_pressed != was) {
+      if (any_pressed)
+        action.state.pressed_frame = frame_;
+      else
+        action.state.released_frame = frame_;
+    }
+    action.state.pressed = any_pressed;
+    action.state.strength = max_strength;
+    action.state.raw = max_raw;
+  }
+
+  void recompute_key_actions() {
+    for (Action &action : actions_) {
+      bool any_pressed = false;
+      float max_strength = 0.0F;
+      for (const InputBinding &b : action.bindings) {
+        if (b.type != InputBindingType::Key) continue;
+        auto it = held_keys_.find(b.key);
+        if (it != held_keys_.end() && it->second) {
+          any_pressed = true;
+          max_strength = 1.0F;
+        }
+      }
+      update_action_state(action, any_pressed, max_strength, max_strength);
+    }
+  }
+
+  void recompute_button_actions() {
+    for (Action &action : actions_) {
+      bool any_pressed = false;
+      float max_strength = 0.0F;
+      for (const InputBinding &b : action.bindings) {
+        if (b.type != InputBindingType::GamepadButton) continue;
+        auto it = held_buttons_.find(b.gamepad_button);
+        if (it != held_buttons_.end() && it->second) {
+          any_pressed = true;
+          max_strength = 1.0F;
+        }
+      }
+      update_action_state(action, any_pressed, max_strength, max_strength);
+    }
+  }
+
+  void recompute_axis_actions() {
+    for (Action &action : actions_) {
+      bool any_pressed = false;
+      float max_strength = 0.0F;
+      float max_raw = 0.0F;
+      for (const InputBinding &b : action.bindings) {
+        if (b.type != InputBindingType::GamepadAxis) continue;
+        auto it = axis_values_.find(static_cast<int>(b.gamepad_axis));
+        if (it == axis_values_.end()) continue;
+        const float val = it->second;
+        const bool same_dir = (b.axis_direction < 0 && val <= 0.0F) ||
+                              (b.axis_direction > 0 && val >= 0.0F);
+        if (!same_dir) continue;
+        const float raw = std::abs(val);
+        const float s = raw >= action.deadzone
+            ? std::clamp((raw - action.deadzone) / (1.0F - action.deadzone), 0.0F, 1.0F)
+            : 0.0F;
+        max_raw = std::max(max_raw, raw);
+        max_strength = std::max(max_strength, s);
+        any_pressed = any_pressed || (raw >= action.deadzone);
+      }
+      update_action_state(action, any_pressed, max_strength, max_raw);
+    }
+  }
+
   std::vector<Action> actions_;
   std::unordered_map<std::string, std::size_t> name_map_;
   std::uint64_t frame_{0};
+
+  std::unordered_map<SDL_Scancode, bool> held_keys_;
+  std::unordered_map<int, bool> held_buttons_;
+  std::unordered_map<int, float> axis_values_;
 };
 
 } // namespace engine
