@@ -263,27 +263,15 @@ namespace detail {
 
 } // namespace detail
 
-// Sascha / Godot approach: center shadow at the camera frustum's depth midpoint.
-// This keeps shadows on whatever the camera is looking at (ground, wall, etc.)
-// instead of always centering at Y=0.
-[[nodiscard]] inline auto frustum_focus_center(
-    const Camera &camera,
-    float shadow_far) -> glm::vec3 {
-  const glm::vec3 pos = camera.position();
-  const glm::vec3 fwd = camera.look_direction();
-  // Center the shadow at ~half the shadow distance along the camera's view direction.
-  // When looking at the ground, this places the focus ON the ground (not above/below it).
-  const float depth = std::max(shadow_far * 0.5F, 1.0F);
-  return pos + fwd * depth;
-}
-
-// Camera footprint: ortho box following camera frustum center.
+// Camera footprint: ortho box centered on camera position.
+// The ortho half-extent (64m near, 127m far) covers the surrounding area.
+// Texel-snapping keeps the center stable when rotating.
 [[nodiscard]] inline auto directional_light_footprint_projection(
     const Camera &camera,
     const DirectionalLight &light,
     const DirectionalLightShadowSettings &settings,
     float ortho_half_extent) -> glm::mat4 {
-  const glm::vec3 focus_center = frustum_focus_center(camera, settings.max_distance);
+  const glm::vec3 focus_center = camera.position();
   const float radius = std::max(ortho_half_extent, 1.0F);
   return detail::directional_light_view_projection_from_bounds(light, settings, focus_center,
                                                                radius);
