@@ -72,8 +72,6 @@ struct DirectionalLightShadowSettings {
   // Dual mode only: view-depth range used to place the near/far cascade split.
   float max_distance{100.0F};
   std::uint32_t map_resolution{k_default_shadow_map_resolution};
-  // Footprint center Y when the ground is not at world Y=0.
-  float footprint_focus_y{0.0F};
   // Single-cascade footprint half-extent (meters); also scales the dual near cascade.
   float ortho_half_extent{64.0F};
   ShadowFilterMode filter_mode{ShadowFilterMode::Pcf3x3};
@@ -265,16 +263,30 @@ namespace detail {
 
 } // namespace detail
 
-// Camera footprint: ortho box centered on camera XZ, stable when rotating (no view-frustum fit).
+// Sascha / Godot approach: center shadow at the camera frustum's depth midpoint.
+// This keeps shadows on whatever the camera is looking at (ground, wall, etc.)
+// instead of always centering at Y=0.
+[[nodiscard]] inline auto frustum_focus_center(
+    const Camera &camera,
+    float shadow_far) -> glm::vec3 {
+  const glm::vec3 pos = camera.position();
+  const glm::vec3 fwd = camera.look_direction();
+  // Center the shadow at ~half the shadow distance along the camera's view direction.
+  // When looking at the ground, this places the focus ON the ground (not above/below it).
+  const float depth = std::max(shadow_far * 0.5F, 1.0F);
+  return pos + fwd * depth;
+}
+
+// Camera footprint: ortho box following camera frustum center.
 [[nodiscard]] inline auto directional_light_footprint_projection(
     const Camera &camera,
     const DirectionalLight &light,
     const DirectionalLightShadowSettings &settings,
     float ortho_half_extent) -> glm::mat4 {
-  const glm::vec3 position = camera.position();
-  const glm::vec3 focus_center{position.x, settings.footprint_focus_y, position.z};
+  const glm::vec3 focus_center = frustum_focus_center(camera, settings.max_distance);
   const float radius = std::max(ortho_half_extent, 1.0F);
-  return detail::directional_light_view_projection_from_bounds(light, settings, focus_center, radius);
+  return detail::directional_light_view_projection_from_bounds(light, settings, focus_center,
+                                                               radius);
 }
 
 [[nodiscard]] inline auto directional_light_view_projection(
