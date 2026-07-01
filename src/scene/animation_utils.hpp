@@ -252,4 +252,37 @@ inline void compute_joint_matrices_split(
   detail::build_world_matrices(skeleton, node_anim, out_joint_matrices, out_bone_worlds);
 }
 
+// Convenience: dispatch the correct compute_* function based on instance state.
+inline void compute_joint_matrices_for_instance(
+    const SkeletonAsset &skel,
+    const MeshInstance &instance,
+    const std::vector<AnimationClip> &clips,
+    std::vector<glm::mat4> &out_joint_matrices,
+    std::vector<glm::mat4> *out_bone_worlds = nullptr) {
+  const AnimationClip &clip_a = clips[instance.animation_index];
+
+  if (instance.secondary_joints && !instance.secondary_joints->empty() &&
+      instance.next_animation_index < clips.size()) {
+    compute_joint_matrices_split(skel, clip_a, instance.animation_time,
+                                  clips[instance.next_animation_index],
+                                  instance.next_animation_time,
+                                  *instance.secondary_joints,
+                                  instance.joint_overrides,
+                                  out_joint_matrices, out_bone_worlds);
+  } else if (instance.next_animation_index < clips.size()) {
+    const AnimationClip &clip_b = clips[instance.next_animation_index];
+    if (instance.blend_factor < 1.0F)
+      compute_joint_matrices_blended(skel, clip_a, instance.animation_time,
+                                      clip_b, instance.next_animation_time,
+                                      instance.blend_factor,
+                                      out_joint_matrices, out_bone_worlds);
+    else
+      compute_joint_matrices(skel, clip_a, instance.animation_time,
+                              out_joint_matrices, out_bone_worlds);
+  } else {
+    compute_joint_matrices(skel, clip_a, instance.animation_time,
+                            out_joint_matrices, out_bone_worlds);
+  }
+}
+
 } // namespace engine

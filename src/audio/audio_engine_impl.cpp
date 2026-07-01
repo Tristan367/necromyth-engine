@@ -3,9 +3,7 @@
 
 #include "audio/audio_engine.hpp"
 
-#include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>

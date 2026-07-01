@@ -328,40 +328,11 @@ public:
 
         joint_matrices.clear();
 
-        const auto &skel = scene.skeletons()[instance.skin_index];
-
-        if (instance.secondary_joints && !instance.secondary_joints->empty() &&
-            instance.next_animation_index < scene.animations().size()) {
-          compute_joint_matrices_split(
-              skel,
-              scene.animations()[instance.animation_index], instance.animation_time,
-              scene.animations()[instance.next_animation_index], instance.next_animation_time,
-              *instance.secondary_joints,
-              instance.joint_overrides,
-              joint_matrices);
-        } else if (instance.next_animation_index < scene.animations().size()) {
-          const AnimationClip &clip = scene.animations()[instance.animation_index];
-          const AnimationClip &next_clip = scene.animations()[instance.next_animation_index];
-
-          if (instance.blend_factor < 1.0F)
-            compute_joint_matrices_blended(
-                skel, clip, instance.animation_time,
-                next_clip, instance.next_animation_time,
-                instance.blend_factor,
-                joint_matrices);
-          else
-            compute_joint_matrices(
-                skel,
-                scene.animations()[instance.animation_index],
-                instance.animation_time,
-                joint_matrices);
-        } else {
-          compute_joint_matrices(
-              skel,
-              scene.animations()[instance.animation_index],
-              instance.animation_time,
-              joint_matrices);
-        }
+        compute_joint_matrices_for_instance(
+            scene.skeletons()[instance.skin_index],
+            instance,
+            scene.animations(),
+            joint_matrices);
 
         bone_buffers_[bone_buffer_index].write(frame_index_, joint_matrices);
         ++bone_buffer_index;
