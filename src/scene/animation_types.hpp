@@ -12,6 +12,12 @@
 
 namespace engine {
 
+struct BoneTRS {
+  glm::vec3 translation{0.0F};
+  glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
+  glm::vec3 scale{1.0F};
+};
+
 enum class HitboxShape : std::uint8_t { Box, Sphere, Capsule };
 
 struct HitboxAttachment {

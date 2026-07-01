@@ -1,12 +1,14 @@
 #pragma once
 
 #include "renderer/textured_push_constants.hpp"
+#include "scene/animation_types.hpp"
 #include "scene/render_layer.hpp"
 
 #include <glm/mat4x4.hpp>
 
 #include <cstdint>
 #include <limits>
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -39,6 +41,7 @@ struct MeshInstance {
   float blend_duration{0.3F};
 
   const std::vector<std::uint32_t> *secondary_joints{nullptr};
+  const std::unordered_map<std::uint32_t, BoneTRS> *joint_overrides{nullptr};
 };
 
 constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();

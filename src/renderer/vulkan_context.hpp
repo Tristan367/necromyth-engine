@@ -337,6 +337,7 @@ public:
               scene.animations()[instance.animation_index], instance.animation_time,
               scene.animations()[instance.next_animation_index], instance.next_animation_time,
               *instance.secondary_joints,
+              instance.joint_overrides,
               joint_matrices);
         } else if (instance.next_animation_index < scene.animations().size()) {
           const AnimationClip &clip = scene.animations()[instance.animation_index];

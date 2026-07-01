@@ -17,12 +17,6 @@
 
 namespace engine {
 
-struct BoneTRS {
-  glm::vec3 translation{0.0F};
-  glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
-  glm::vec3 scale{1.0F};
-};
-
 namespace detail {
 
 struct KeyframeIndex {
@@ -219,6 +213,7 @@ inline void compute_joint_matrices_split(
     const AnimationClip &clip_b,
     float time_b,
     const std::vector<std::uint32_t> &joints_using_b,
+    const std::unordered_map<std::uint32_t, BoneTRS> *joint_overrides,
     std::vector<glm::mat4> &out_joint_matrices,
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
   const std::size_t joint_count = skeleton.joint_nodes.size();
@@ -232,6 +227,15 @@ inline void compute_joint_matrices_split(
   node_anim.reserve(joint_count);
   for (std::size_t i = 0; i < joint_count; ++i) {
     const std::uint32_t node_index = skeleton.joint_nodes[i];
+
+    if (joint_overrides) {
+      const auto it = joint_overrides->find(static_cast<std::uint32_t>(i));
+      if (it != joint_overrides->end()) {
+        node_anim[node_index] = trs_to_mat4(it->second);
+        continue;
+      }
+    }
+
     const BoneTRS trs = b_set.count(static_cast<std::uint32_t>(i))
         ? detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b)
         : detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a);
