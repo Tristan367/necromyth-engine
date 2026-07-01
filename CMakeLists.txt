@@ -195,6 +195,15 @@ add_library(vce_stb STATIC src/renderer/texture_image_stb.cpp)
 target_include_directories(vce_stb SYSTEM PRIVATE "${STB_INCLUDE_DIR}")
 target_compile_features(vce_stb PRIVATE cxx_std_23)
 
+# miniaudio audio engine (compiled TU, single-header library)
+add_library(vce_audio STATIC src/audio/audio_engine_impl.cpp)
+target_include_directories(vce_audio SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio")
+target_include_directories(vce_audio PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(vce_audio PRIVATE cxx_std_23)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(vce_audio PRIVATE dl pthread m)
+endif()
+
 # Jolt Physics (third-party, built as static library)
 set(JOLT_DIR "$ENV{HOME}/opt/JoltPhysics")
 if(NOT EXISTS "${JOLT_DIR}")
@@ -218,6 +227,7 @@ target_link_libraries(vce_core INTERFACE
     Jolt::Jolt
     vce_gltf_impl
     vce_stb
+    vce_audio
 )
 
 if(MSVC)
