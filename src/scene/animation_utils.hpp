@@ -231,7 +231,14 @@ inline void compute_joint_matrices_split(
     if (joint_overrides) {
       const auto it = joint_overrides->find(static_cast<std::uint32_t>(i));
       if (it != joint_overrides->end()) {
-        node_anim[node_index] = trs_to_mat4(it->second);
+        // Start from the base animation, overrides only replace non-identity fields
+        BoneTRS base = b_set.count(static_cast<std::uint32_t>(i))
+            ? detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b)
+            : detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a);
+        if (it->second.rotation != glm::quat{1, 0, 0, 0}) base.rotation = it->second.rotation;
+        if (it->second.translation != glm::vec3{0}) base.translation = it->second.translation;
+        if (it->second.scale != glm::vec3{1}) base.scale = it->second.scale;
+        node_anim[node_index] = trs_to_mat4(base);
         continue;
       }
     }
