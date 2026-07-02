@@ -112,10 +112,9 @@ Read this and `README.md` before large renderer changes.
 
 ## Roadmap (planned features, in priority order)
 
-1. **Animation state machine** — state→transition→state graph with crossfade durations, blend spaces (1D locomotion)
-2. **Point + spot lights** — forward shading with attenuation, optional cube-map shadow atlas
-3. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
-4. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
+1. **Point + spot lights** — forward shading with attenuation, optional cube-map shadow atlas
+2. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
+3. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
 
 ## Known knowns (deferred, not urgent)
 
