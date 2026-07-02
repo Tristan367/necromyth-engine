@@ -96,6 +96,7 @@ public:
         instance.blend_factor = 1.0F;
         transitioning_ = false;
         current_index_ = next_index_;
+        grace_ticks_ = 1;  // prevent bounce-back after crossfade completes
       }
       return;
     }
@@ -110,9 +111,12 @@ public:
       return;
     }
 
-    // Check condition-based transitions
-    const AnimTransitionDef *firing = nullptr;
-    for (const AnimTransitionDef &t : transitions_) {
+    // Check condition-based transitions (skip for 1 tick after any switch)
+    if (grace_ticks_ > 0) {
+      --grace_ticks_;
+    } else {
+      const AnimTransitionDef *firing = nullptr;
+      for (const AnimTransitionDef &t : transitions_) {
       if (t.from_state != "*" && t.from_state != states_[current_index_].name) continue;
 
       bool met = false;
@@ -147,6 +151,7 @@ public:
       if (to_idx != k_invalid && to_idx != current_index_)
         force_transition(instance, to_idx, firing->blend_time, split_active);
     }
+    }
   }
 
   [[nodiscard]] auto current() const -> const std::string & {
@@ -167,6 +172,7 @@ private:
   std::size_t next_index_{0};
   bool transitioning_{false};
   float transition_duration_{0.0F};
+  int grace_ticks_{0};
 
   [[nodiscard]] auto find_state(const std::string &name) const -> std::size_t {
     auto it = state_map_.find(name);
@@ -179,6 +185,7 @@ private:
     next_index_ = to_idx;
     transition_duration_ = std::max(blend_time, 0.001F);
     transitioning_ = true;
+    grace_ticks_ = 1;  // prevent immediate bounce-back from auto conditions
 
     if (!split_active) {
       instance.next_animation_index = states_[to_idx].clip_index;
