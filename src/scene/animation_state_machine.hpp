@@ -54,7 +54,7 @@ public:
 
   // Switch to a state via the best-matching transition (with crossfade).
   // Falls back to instant switch if no transition defined.
-  void travel(const std::string &name) {
+  void travel(MeshInstance &instance, const std::string &name, bool split_active) {
     const std::size_t idx = find_state(name);
     if (idx == k_invalid || idx == current_index_) return;
 
@@ -64,7 +64,7 @@ public:
       if (t.from_state != "*" && t.from_state != states_[current_index_].name) continue;
       if (!best || t.priority < best->priority) best = &t;
     }
-    force_transition(idx, best ? best->blend_time : 0.0F);
+    force_transition(instance, idx, best ? best->blend_time : 0.0F, split_active);
   }
 
   // Advance animation time, check transitions, handle crossfade.
@@ -144,14 +144,8 @@ public:
 
     if (firing) {
       const std::size_t to_idx = find_state(firing->to_state);
-      if (to_idx != k_invalid && to_idx != current_index_) {
-        if (!split_active && firing->blend_time > 0.001F) {
-          instance.next_animation_index = states_[to_idx].clip_index;
-          instance.next_animation_time = 0.0F;
-          instance.blend_factor = 0.0F;
-        }
-        force_transition(to_idx, firing->blend_time);
-      }
+      if (to_idx != k_invalid && to_idx != current_index_)
+        force_transition(instance, to_idx, firing->blend_time, split_active);
     }
   }
 
@@ -177,10 +171,18 @@ private:
     return it != state_map_.end() ? it->second : k_invalid;
   }
 
-  void force_transition(std::size_t to_idx, float blend_time) {
+  void force_transition(MeshInstance &instance, std::size_t to_idx, float blend_time,
+                         bool split_active) {
+    if (to_idx == current_index_) return;
     next_index_ = to_idx;
     transition_duration_ = std::max(blend_time, 0.001F);
     transitioning_ = true;
+
+    if (!split_active) {
+      instance.next_animation_index = states_[to_idx].clip_index;
+      instance.next_animation_time = 0.0F;
+      instance.blend_factor = 0.0F;
+    }
   }
 };
 
