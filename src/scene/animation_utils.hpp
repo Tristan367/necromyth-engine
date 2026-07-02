@@ -279,10 +279,10 @@ inline void compute_joint_matrices_for_instance(
   const AnimationClip &clip_a = clips[instance.animation_index];
 
   if (instance.secondary_joints && !instance.secondary_joints->empty() &&
-      instance.next_animation_index < clips.size()) {
+      instance.secondary_animation_index < clips.size()) {
     compute_joint_matrices_split(skel, clip_a, instance.animation_time,
-                                  clips[instance.next_animation_index],
-                                  instance.next_animation_time,
+                                  clips[instance.secondary_animation_index],
+                                  instance.secondary_animation_time,
                                   *instance.secondary_joints,
                                   instance.joint_overrides,
                                   out_joint_matrices, out_bone_worlds);
