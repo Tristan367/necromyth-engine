@@ -54,9 +54,12 @@ public:
 
   // Switch to a state via the best-matching transition (with crossfade).
   // Falls back to instant switch if no transition defined.
+  // Sets a manual hold — auto conditions are suppressed until clear_hold() is called.
   void travel(MeshInstance &instance, const std::string &name, bool split_active) {
     const std::size_t idx = find_state(name);
     if (idx == k_invalid || idx == current_index_) return;
+
+    manual_hold_ = true;
 
     const AnimTransitionDef *best = nullptr;
     for (const AnimTransitionDef &t : transitions_) {
@@ -66,6 +69,9 @@ public:
     }
     force_transition(instance, idx, best ? best->blend_time : 0.0F, split_active);
   }
+
+  // Release a manual hold — auto condition checking resumes next tick.
+  void clear_hold() { manual_hold_ = false; }
 
   // Advance animation time, check transitions, handle crossfade.
   // clips is needed for AtEnd transitions to check animation completion.
@@ -96,7 +102,6 @@ public:
         instance.blend_factor = 1.0F;
         transitioning_ = false;
         current_index_ = next_index_;
-        grace_ticks_ = 1;  // prevent bounce-back after crossfade completes
       }
       return;
     }
@@ -111,46 +116,44 @@ public:
       return;
     }
 
-    // Check condition-based transitions (skip for 1 tick after any switch)
-    if (grace_ticks_ > 0) {
-      --grace_ticks_;
-    } else {
+    // Check condition-based transitions (suppressed when manual hold is active)
+    if (!manual_hold_) {
       const AnimTransitionDef *firing = nullptr;
       for (const AnimTransitionDef &t : transitions_) {
-      if (t.from_state != "*" && t.from_state != states_[current_index_].name) continue;
+        if (t.from_state != "*" && t.from_state != states_[current_index_].name) continue;
 
-      bool met = false;
-      switch (t.op) {
-      case AnimConditionOp::OnTrue: {
-        auto it = params_.find(t.condition_param);
-        met = (it != params_.end() && it->second > 0.5F);
-        break;
-      }
-      case AnimConditionOp::Greater: {
-        auto it = params_.find(t.condition_param);
-        met = (it != params_.end() && it->second > t.value);
-        break;
-      }
-      case AnimConditionOp::Less: {
-        auto it = params_.find(t.condition_param);
-        met = (it != params_.end() && it->second < t.value);
-        break;
-      }
-      case AnimConditionOp::AtEnd:
-        met = !state.looping && !transitioning_ &&
-              instance.animation_time >= clips[state.clip_index].duration;
-        break;
+        bool met = false;
+        switch (t.op) {
+        case AnimConditionOp::OnTrue: {
+          auto it = params_.find(t.condition_param);
+          met = (it != params_.end() && it->second > 0.5F);
+          break;
+        }
+        case AnimConditionOp::Greater: {
+          auto it = params_.find(t.condition_param);
+          met = (it != params_.end() && it->second > t.value);
+          break;
+        }
+        case AnimConditionOp::Less: {
+          auto it = params_.find(t.condition_param);
+          met = (it != params_.end() && it->second < t.value);
+          break;
+        }
+        case AnimConditionOp::AtEnd:
+          met = !state.looping && !transitioning_ &&
+                instance.animation_time >= clips[state.clip_index].duration;
+          break;
+        }
+
+        if (met && (!firing || t.priority < firing->priority))
+          firing = &t;
       }
 
-      if (met && (!firing || t.priority < firing->priority))
-        firing = &t;
-    }
-
-    if (firing) {
-      const std::size_t to_idx = find_state(firing->to_state);
-      if (to_idx != k_invalid && to_idx != current_index_)
-        force_transition(instance, to_idx, firing->blend_time, split_active);
-    }
+      if (firing) {
+        const std::size_t to_idx = find_state(firing->to_state);
+        if (to_idx != k_invalid && to_idx != current_index_)
+          force_transition(instance, to_idx, firing->blend_time, split_active);
+      }
     }
   }
 
@@ -172,7 +175,7 @@ private:
   std::size_t next_index_{0};
   bool transitioning_{false};
   float transition_duration_{0.0F};
-  int grace_ticks_{0};
+  bool manual_hold_{false};
 
   [[nodiscard]] auto find_state(const std::string &name) const -> std::size_t {
     auto it = state_map_.find(name);
@@ -185,7 +188,6 @@ private:
     next_index_ = to_idx;
     transition_duration_ = std::max(blend_time, 0.001F);
     transitioning_ = true;
-    grace_ticks_ = 1;  // prevent immediate bounce-back from auto conditions
 
     if (!split_active) {
       instance.next_animation_index = states_[to_idx].clip_index;
