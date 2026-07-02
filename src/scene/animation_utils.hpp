@@ -176,6 +176,7 @@ inline void compute_joint_matrices_blended(
     const AnimationClip &clip_b,
     float time_b,
     float blend_factor,
+    const std::unordered_map<std::uint32_t, BoneTRS> *joint_overrides,
     std::vector<glm::mat4> &out_joint_matrices,
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
   const std::size_t joint_count = skeleton.joint_nodes.size();
@@ -186,6 +187,22 @@ inline void compute_joint_matrices_blended(
   node_anim.reserve(joint_count);
   for (std::size_t i = 0; i < joint_count; ++i) {
     const std::uint32_t node_index = skeleton.joint_nodes[i];
+
+    if (joint_overrides) {
+      const auto it = joint_overrides->find(static_cast<std::uint32_t>(i));
+      if (it != joint_overrides->end()) {
+        BoneTRS base = blend_bone_trs(
+            detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a),
+            detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b),
+            blend_factor);
+        if (it->second.rotation != glm::quat{1, 0, 0, 0}) base.rotation = it->second.rotation;
+        if (it->second.translation != glm::vec3{0}) base.translation = it->second.translation;
+        if (it->second.scale != glm::vec3{1}) base.scale = it->second.scale;
+        node_anim[node_index] = trs_to_mat4(base);
+        continue;
+      }
+    }
+
     const BoneTRS trs_a =
         detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a);
     const BoneTRS trs_b =
@@ -202,7 +219,7 @@ inline void compute_joint_matrices(
     float time,
     std::vector<glm::mat4> &out_joint_matrices,
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
-  compute_joint_matrices_blended(skeleton, clip, time, clip, time, 1.0F,
+  compute_joint_matrices_blended(skeleton, clip, time, clip, time, 1.0F, nullptr,
                                  out_joint_matrices, out_bone_worlds);
 }
 
@@ -275,13 +292,18 @@ inline void compute_joint_matrices_for_instance(
       compute_joint_matrices_blended(skel, clip_a, instance.animation_time,
                                       clip_b, instance.next_animation_time,
                                       instance.blend_factor,
+                                      instance.joint_overrides,
                                       out_joint_matrices, out_bone_worlds);
     else
-      compute_joint_matrices(skel, clip_a, instance.animation_time,
-                              out_joint_matrices, out_bone_worlds);
+      compute_joint_matrices_blended(skel, clip_a, instance.animation_time,
+                                      clip_a, instance.animation_time, 1.0F,
+                                      instance.joint_overrides,
+                                      out_joint_matrices, out_bone_worlds);
   } else {
-    compute_joint_matrices(skel, clip_a, instance.animation_time,
-                            out_joint_matrices, out_bone_worlds);
+    compute_joint_matrices_blended(skel, clip_a, instance.animation_time,
+                                    clip_a, instance.animation_time, 1.0F,
+                                    instance.joint_overrides,
+                                    out_joint_matrices, out_bone_worlds);
   }
 }
 
