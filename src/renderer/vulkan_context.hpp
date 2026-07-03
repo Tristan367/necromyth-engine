@@ -360,8 +360,8 @@ public:
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, draw_list_);
 
     // Spot shadow pass (Godot-style atlas)
-    pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, scene, draw_list_,
-                                              *spot_atlas_, *spot_atlas_view_);
+    pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
+                                              draw_list_, *spot_atlas_, *spot_atlas_view_);
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
     pass_recorder().record_main_pass(

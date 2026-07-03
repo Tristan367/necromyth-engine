@@ -28,6 +28,7 @@ namespace engine {
 
 struct PassLayoutState {
   mutable vk::ImageLayout shadow_image_layout{vk::ImageLayout::eUndefined};
+  mutable vk::ImageLayout spot_atlas_layout{vk::ImageLayout::eUndefined};
   mutable std::vector<vk::ImageLayout> swapchain_image_layouts;
   mutable vk::ImageLayout depth_image_layout{vk::ImageLayout::eUndefined};
   mutable vk::ImageLayout msaa_color_layout{vk::ImageLayout::eUndefined};
@@ -649,6 +650,7 @@ struct PassRecorder {
   void record_spot_shadow_pass(
       vk::raii::CommandBuffer &command_buffer,
       std::uint32_t frame_index,
+      PassLayoutState &layouts,
       const Scene &scene,
       const std::vector<DrawCommand> &draw_list,
       vk::Image atlas_image,
@@ -661,27 +663,28 @@ struct PassRecorder {
 
     const vk::Extent2D atlas_ext{2048, 2048};
 
-    // Barrier: shader read → depth attachment
+    // Barrier: previous layout → depth attachment
     transition_image_layout(command_buffer, atlas_image,
-        vk::ImageLayout::eDepthStencilReadOnlyOptimal, vk::ImageLayout::eDepthAttachmentOptimal,
-        vk::AccessFlagBits2::eShaderRead, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::PipelineStageFlagBits2::eFragmentShader,
+        layouts.spot_atlas_layout, vk::ImageLayout::eDepthAttachmentOptimal,
+        layouts.spot_atlas_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead,
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        layouts.spot_atlas_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe : vk::PipelineStageFlagBits2::eFragmentShader,
         vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
         vk::ImageAspectFlagBits::eDepth, 0, 1);
+    layouts.spot_atlas_layout = vk::ImageLayout::eDepthAttachmentOptimal;
 
     std::uint32_t light_idx = 0;
     for (std::uint32_t si = 0; si < scene.spot_lights().size(); ++si) {
       const SpotLight &sl = scene.spot_lights()[si];
       if (!sl.casts_shadow) continue;
 
-      const float h = static_cast<float>(atlas_ext.height) / 1.0F; // full atlas for now
       const vk::Rect2D region{{0, 0}, atlas_ext};
 
       const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
       vk::RenderingAttachmentInfo depth_attach{};
       depth_attach.imageView = atlas_view;
       depth_attach.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
-      depth_attach.loadOp = vk::AttachmentLoadOp::eClear;
+      depth_attach.loadOp = light_idx == 0 ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
       depth_attach.storeOp = vk::AttachmentStoreOp::eStore;
       depth_attach.clearValue = clear_depth;
 
@@ -711,6 +714,7 @@ struct PassRecorder {
         vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
         vk::PipelineStageFlagBits2::eFragmentShader,
         vk::ImageAspectFlagBits::eDepth, 0, 1);
+    layouts.spot_atlas_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
   }
 
   void finish_main_pass(
