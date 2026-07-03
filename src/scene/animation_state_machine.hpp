@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -92,6 +93,10 @@ public:
 
     // Process crossfade
     if (transitioning_ && !split_active) {
+      static int xdbg = 0;
+      if (++xdbg <= 5)
+        std::cout << "xfade " << xdbg << ": blend=" << instance.blend_factor
+                  << " dur=" << transition_duration_ << "\n";
       instance.next_animation_time += delta * instance.animation_speed;
       instance.blend_factor += delta / transition_duration_;
       if (instance.blend_factor >= 1.0F) {
