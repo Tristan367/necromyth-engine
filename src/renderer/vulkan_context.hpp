@@ -2,6 +2,7 @@
 
 #include "engine_config.hpp"
 #include "renderer/bone_buffer.hpp"
+#include "renderer/light_buffer.hpp"
 #include "renderer/frame_overlay.hpp"
 #include "renderer/render_host.hpp"
 #include "renderer/depth_image.hpp"
@@ -68,6 +69,7 @@ public:
     create_shadow_map(
         startup_shadow_map_resolution_,
         shadow_cascade_layer_count(scene.shadow_settings().cascade_mode));
+    light_buffer_.create(device_.physical_device(), device_.device(), 64);
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -313,6 +315,8 @@ public:
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
 
+    light_buffer_.write(scene.point_lights(), scene.spot_lights());
+
     if (!bone_buffers_.empty()) {
       std::vector<glm::mat4> joint_matrices;
       std::uint32_t bone_buffer_index = 0;
@@ -503,6 +507,7 @@ private:
         texture_array_.view(),
         shadow_map_.sampler_for_settings(startup_point_shadow_filter_),
         shadow_map_.view());
+    descriptor_resources_.update_light_buffers(device_.device(), light_buffer_.buffer_ptr());
 
     allocate_skinned_descriptor_sets(texture_table_, skinned_count);
   }
@@ -699,6 +704,7 @@ private:
   RenderColorImage render_color_image_;
   DepthImage depth_image_;
   ShadowMap shadow_map_;
+  LightStorageBuffer light_buffer_;
   TextureTable texture_table_;
   TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;

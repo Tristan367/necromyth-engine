@@ -6,6 +6,8 @@
 #include "scene/shadow_utils.hpp"
 #include "scene/mesh_instance.hpp"
 #include "scene/mesh_source.hpp"
+#include "scene/point_light.hpp"
+#include "scene/spot_light.hpp"
 
 #include <cstdint>
 #include <string>
@@ -63,6 +65,11 @@ public:
     return shadow_settings_;
   }
 
+  [[nodiscard]] auto point_lights() const -> const std::vector<PointLight> & { return point_lights_; }
+  [[nodiscard]] auto point_lights() -> std::vector<PointLight> & { return point_lights_; }
+  [[nodiscard]] auto spot_lights() const -> const std::vector<SpotLight> & { return spot_lights_; }
+  [[nodiscard]] auto spot_lights() -> std::vector<SpotLight> & { return spot_lights_; }
+
   [[nodiscard]] auto skeletons() const -> const std::vector<SkeletonAsset> & {
     return skeletons_;
   }
@@ -117,6 +124,8 @@ private:
   std::vector<MeshInstance> instances_;
   std::vector<SkeletonAsset> skeletons_;
   std::vector<AnimationClip> animations_;
+  std::vector<PointLight> point_lights_;
+  std::vector<SpotLight> spot_lights_;
 };
 
 [[nodiscard]] inline auto is_skinned_instance(const MeshInstance &instance, const Scene &scene) -> bool {

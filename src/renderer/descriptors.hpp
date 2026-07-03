@@ -37,6 +37,12 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 3,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
     };
 
     const std::array material_bindings{
@@ -107,7 +113,7 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eStorageBuffer,
-            .descriptorCount = skinned_instance_count * 4,
+            .descriptorCount = frame_count + skinned_instance_count * 4,
         },
     };
 
@@ -259,6 +265,25 @@ public:
 
   [[nodiscard]] auto shadow_bone_set(std::uint32_t instance, std::uint32_t frame) const -> vk::DescriptorSet {
     return shadow_bone_sets_.at(static_cast<std::size_t>(instance) * 2 + frame);
+  }
+
+  void update_light_buffers(vk::raii::Device &device, vk::Buffer light_buffer) {
+    const vk::DescriptorBufferInfo light_info{
+        .buffer = light_buffer,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    for (const vk::DescriptorSet &set : frame_sets_) {
+      const vk::WriteDescriptorSet write{
+          .dstSet = set,
+          .dstBinding = 3,
+          .dstArrayElement = 0,
+          .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eStorageBuffer,
+          .pBufferInfo = &light_info,
+      };
+      device.updateDescriptorSets(write, nullptr);
+    }
   }
 
   void allocate_skinned_sets(
