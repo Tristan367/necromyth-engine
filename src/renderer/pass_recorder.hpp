@@ -658,6 +658,10 @@ struct PassRecorder {
     std::vector<DrawCommand> shadow_draws;
     build_shadow_draw_list(draw_list, shadow_draws);
 
+    static int spot_dbg = 0;
+    if (++spot_dbg == 1)
+      std::cout << "spot shadow pass: " << shadow_draws.size() << " draws, " << scene.spot_lights().size() << " lights\n";
+
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
 
