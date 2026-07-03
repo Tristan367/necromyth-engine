@@ -101,9 +101,8 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     // Shadow (Godot-style: sample from atlas using sub-rect)
     float shadowVis = 1.0;
     if (l.shadowMatrix[0][0] != 0.0 || l.shadowMatrix[1][1] != 0.0) {
-        // Apply a small bias based on normal/lightDir angle
-        float bias = max(0.0005 * (1.0 - ndotl), 0.0001);
-        shadowVis = sampleSpotShadow(fragPos, l.shadowMatrix, l.atlasRect, lightDir, normal, bias);
+        shadowVis = 0.3; // DEBUG: force-dark to verify shadow path works
+        //shadowVis = sampleSpotShadow(fragPos, l.shadowMatrix, l.atlasRect, lightDir, normal, bias);
     }
 
     return (diffuse + specular) * atten * shadowVis;
