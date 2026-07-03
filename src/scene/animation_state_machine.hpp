@@ -123,6 +123,11 @@ public:
 
     // Check condition-based transitions (suppressed when manual hold is active)
     if (!manual_hold_) {
+      static int cd2 = 0;
+      if (++cd2 <= 3)
+        std::cout << "cond check: " << states_[current_index_].name
+                  << " speed=" << (params_.find("speed") != params_.end() ? params_["speed"] : -1.0f)
+                  << " hold=" << manual_hold_ << "\n";
       const AnimTransitionDef *firing = nullptr;
       for (const AnimTransitionDef &t : transitions_) {
         if (t.from_state != "*" && t.from_state != states_[current_index_].name) continue;
