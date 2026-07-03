@@ -646,6 +646,73 @@ struct PassRecorder {
     layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
   }
 
+  void record_spot_shadow_pass(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t frame_index,
+      const Scene &scene,
+      const std::vector<DrawCommand> &draw_list,
+      vk::Image atlas_image,
+      vk::ImageView atlas_view) const {
+    std::vector<DrawCommand> shadow_draws;
+    build_shadow_draw_list(draw_list, shadow_draws);
+
+    DrawBindState bind_state{};
+    bind_state.frame_index = frame_index;
+
+    const vk::Extent2D atlas_ext{2048, 2048};
+
+    // Barrier: shader read → depth attachment
+    transition_image_layout(command_buffer, atlas_image,
+        vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
+        {}, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        vk::ImageAspectFlagBits::eDepth, 0, 1);
+
+    std::uint32_t light_idx = 0;
+    for (std::uint32_t si = 0; si < scene.spot_lights().size(); ++si) {
+      const SpotLight &sl = scene.spot_lights()[si];
+      if (!sl.casts_shadow) continue;
+
+      const float h = static_cast<float>(atlas_ext.height) / 1.0F; // full atlas for now
+      const vk::Rect2D region{{0, 0}, atlas_ext};
+
+      const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
+      vk::RenderingAttachmentInfo depth_attach{};
+      depth_attach.imageView = atlas_view;
+      depth_attach.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
+      depth_attach.loadOp = vk::AttachmentLoadOp::eClear;
+      depth_attach.storeOp = vk::AttachmentStoreOp::eStore;
+      depth_attach.clearValue = clear_depth;
+
+      vk::RenderingInfo ri{};
+      ri.renderArea = region;
+      ri.layerCount = 1;
+      ri.pDepthAttachment = &depth_attach;
+
+      command_buffer.beginRendering(ri);
+      bind_pass_descriptors(command_buffer, frame_index);
+      command_buffer.setViewport(0, vk::Viewport{0.0F, 0.0F, (float)atlas_ext.width, (float)atlas_ext.height, 0.0F, 1.0F});
+      command_buffer.setScissor(0, region);
+      command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
+
+      const std::uint32_t cascade_idx = 2 + light_idx;
+      for (const DrawCommand &draw : shadow_draws)
+        draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, bind_state);
+
+      command_buffer.endRendering();
+      ++light_idx;
+    }
+
+    // Barrier: depth attachment → shader read
+    transition_image_layout(command_buffer, atlas_image,
+        vk::ImageLayout::eDepthAttachmentOptimal, vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite, vk::AccessFlagBits2::eShaderRead,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::ImageAspectFlagBits::eDepth, 0, 1);
+  }
+
   void finish_main_pass(
       vk::raii::CommandBuffer &command_buffer,
       std::uint32_t image_index,

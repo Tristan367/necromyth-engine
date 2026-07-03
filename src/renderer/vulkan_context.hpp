@@ -357,6 +357,12 @@ public:
     command_buffer.reset();
     command_buffer.begin({});
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, draw_list_);
+
+    // Spot shadow pass (Godot-style atlas)
+    ensure_spot_atlas();
+    pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, scene, draw_list_,
+                                              *spot_atlas_, *spot_atlas_view_);
+
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
     pass_recorder().record_main_pass(
         command_buffer,
@@ -476,6 +482,51 @@ private:
 
   void create_shadow_map(std::uint32_t resolution, std::uint32_t layer_count) {
     shadow_map_.create(device_.physical_device(), device_.device(), resolution, layer_count);
+  }
+
+  void ensure_spot_atlas() {
+    if (spot_atlas_created_) return;
+    const vk::Format fmt = shadow_map_.format();
+    const std::uint32_t sz = 2048;
+
+    vk::ImageCreateInfo img_info{};
+    img_info.imageType = vk::ImageType::e2D;
+    img_info.format = fmt;
+    img_info.extent = vk::Extent3D{sz, sz, 1};
+    img_info.mipLevels = 1;
+    img_info.arrayLayers = 1;
+    img_info.samples = vk::SampleCountFlagBits::e1;
+    img_info.tiling = vk::ImageTiling::eOptimal;
+    img_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
+    spot_atlas_ = vk::raii::Image(device_.device(), img_info);
+
+    auto reqs = spot_atlas_.getMemoryRequirements();
+    auto mt = detail::find_memory_type(device_.physical_device().getMemoryProperties(),
+                                        reqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    vk::MemoryAllocateInfo mem_info{};
+    mem_info.allocationSize = reqs.size;
+    mem_info.memoryTypeIndex = mt;
+    spot_atlas_mem_ = vk::raii::DeviceMemory(device_.device(), mem_info);
+    spot_atlas_.bindMemory(*spot_atlas_mem_, 0);
+
+    vk::ImageViewCreateInfo view_info{};
+    view_info.image = *spot_atlas_;
+    view_info.viewType = vk::ImageViewType::e2D;
+    view_info.format = fmt;
+    view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    spot_atlas_view_ = vk::raii::ImageView(device_.device(), view_info);
+
+    vk::SamplerCreateInfo samp_info{};
+    samp_info.magFilter = vk::Filter::eLinear;
+    samp_info.minFilter = vk::Filter::eLinear;
+    samp_info.compareOp = vk::CompareOp::eLessOrEqual;
+    spot_atlas_sampler_ = vk::raii::Sampler(device_.device(), samp_info);
+
+    descriptor_resources_.update_spot_shadow_sampler(device_.device(), *spot_atlas_sampler_,
+                                                      *spot_atlas_view_);
+    spot_atlas_created_ = true;
   }
 
   void create_depth_image() {
@@ -716,6 +767,11 @@ private:
   DepthImage depth_image_;
   ShadowMap shadow_map_;
   LightStorageBuffer light_buffer_;
+  vk::raii::Image spot_atlas_{nullptr};
+  vk::raii::DeviceMemory spot_atlas_mem_{nullptr};
+  vk::raii::ImageView spot_atlas_view_{nullptr};
+  vk::raii::Sampler spot_atlas_sampler_{nullptr};
+  bool spot_atlas_created_{false};
   TextureTable texture_table_;
   TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;
