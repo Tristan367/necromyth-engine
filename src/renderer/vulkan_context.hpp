@@ -231,7 +231,7 @@ public:
       recreate_descriptor_sets();
   }
 
-  void draw_frame(Scene &scene) {
+   void draw_frame(Scene &scene) {
     if (framebuffer_resized_) {
       if (SDL_GetTicks() - last_resize_ticks_ < detail::resize_debounce_ms)
         return;
