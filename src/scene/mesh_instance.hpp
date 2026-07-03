@@ -30,16 +30,8 @@ struct MeshInstance {
   MeshAlphaMode alpha_mode{MeshAlphaMode::Opaque};
 
   std::uint32_t skin_index{std::numeric_limits<std::uint32_t>::max()};
-  std::uint32_t animation_index{std::numeric_limits<std::uint32_t>::max()};
-  float animation_time{0.0F};
-  float animation_speed{1.0F};
-  bool animation_loop{true};
 
   const std::unordered_map<std::uint32_t, BoneTRS> *joint_overrides{nullptr};
-
-  // Pose-layer stack (Godot/Unity-style). When set and non-empty, the layer
-  // evaluator composites an ordered stack of clips with per-layer crossfades,
-  // weights, and bone masks. Owned by the caller (e.g. an AnimStateMachine).
   const std::vector<PoseLayer> *pose_layers{nullptr};
 };
 

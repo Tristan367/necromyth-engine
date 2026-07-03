@@ -317,12 +317,9 @@ public:
       std::vector<glm::mat4> joint_matrices;
       std::uint32_t bone_buffer_index = 0;
       for (const MeshInstance &instance : scene.instances()) {
-        if (instance.skin_index == k_invalid_skin_index || instance.animation_index == k_invalid_skin_index)
+        if (instance.skin_index == k_invalid_skin_index || !instance.pose_layers)
           continue;
         if (instance.skin_index >= scene.skeletons().size())
-          continue;
-        if (instance.animation_index >= scene.animations().size())
-          continue;
         if (bone_buffer_index >= bone_buffers_.size())
           break;
 

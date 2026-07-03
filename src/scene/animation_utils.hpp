@@ -247,43 +247,15 @@ inline void evaluate_pose_layers(
 }
 
 // Compute joint matrices from an instance's pose-layer stack.
-// Falls back to single-clip playback if no pose layers are assigned.
 inline void compute_joint_matrices_for_instance(
     const SkeletonAsset &skel,
     const MeshInstance &instance,
     const std::vector<AnimationClip> &clips,
     std::vector<glm::mat4> &out_joint_matrices,
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
-  if (instance.pose_layers && !instance.pose_layers->empty()) {
-    evaluate_pose_layers(skel, *instance.pose_layers, clips,
-                         instance.joint_overrides,
-                         out_joint_matrices, out_bone_worlds);
-    return;
-  }
-
-  // Fallback: single-clip playback (for non-layered skinned instances)
-  const AnimationClip &clip = clips[instance.animation_index];
-  const detail::ChannelNodeMap map = detail::build_channel_map(clip);
-
-  std::unordered_map<std::uint32_t, glm::mat4> node_anim;
-  const std::size_t joint_count = skel.joint_nodes.size();
-  node_anim.reserve(joint_count);
-  for (std::size_t i = 0; i < joint_count; ++i) {
-    const std::uint32_t node_index = skel.joint_nodes[i];
-    BoneTRS trs = detail::sample_animation_trs(clip, instance.animation_time, node_index, map);
-
-    if (instance.joint_overrides) {
-      const auto it = instance.joint_overrides->find(static_cast<std::uint32_t>(i));
-      if (it != instance.joint_overrides->end()) {
-        if (it->second.rotation != glm::quat{1, 0, 0, 0}) trs.rotation = it->second.rotation;
-        if (it->second.translation != glm::vec3{0}) trs.translation = it->second.translation;
-        if (it->second.scale != glm::vec3{1}) trs.scale = it->second.scale;
-      }
-    }
-    node_anim[node_index] = trs_to_mat4(trs);
-  }
-
-  detail::build_world_matrices(skel, node_anim, out_joint_matrices, out_bone_worlds);
+  evaluate_pose_layers(skel, *instance.pose_layers, clips,
+                       instance.joint_overrides,
+                       out_joint_matrices, out_bone_worlds);
 }
 
 } // namespace engine
