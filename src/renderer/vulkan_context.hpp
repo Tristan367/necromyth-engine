@@ -70,6 +70,7 @@ public:
         startup_shadow_map_resolution_,
         shadow_cascade_layer_count(scene.shadow_settings().cascade_mode));
     light_buffer_.create(device_.physical_device(), device_.device(), 64);
+    create_spot_atlas();
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -359,7 +360,6 @@ public:
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, draw_list_);
 
     // Spot shadow pass (Godot-style atlas)
-    ensure_spot_atlas();
     pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, scene, draw_list_,
                                               *spot_atlas_, *spot_atlas_view_);
 
@@ -484,8 +484,7 @@ private:
     shadow_map_.create(device_.physical_device(), device_.device(), resolution, layer_count);
   }
 
-  void ensure_spot_atlas() {
-    if (spot_atlas_created_) return;
+  void create_spot_atlas() {
     const vk::Format fmt = shadow_map_.format();
     const std::uint32_t sz = 2048;
 
@@ -523,10 +522,6 @@ private:
     samp_info.minFilter = vk::Filter::eLinear;
     samp_info.compareOp = vk::CompareOp::eLessOrEqual;
     spot_atlas_sampler_ = vk::raii::Sampler(device_.device(), samp_info);
-
-    descriptor_resources_.update_spot_shadow_sampler(device_.device(), *spot_atlas_sampler_,
-                                                      *spot_atlas_view_);
-    spot_atlas_created_ = true;
   }
 
   void create_depth_image() {
@@ -570,6 +565,8 @@ private:
         shadow_map_.sampler_for_settings(startup_point_shadow_filter_),
         shadow_map_.view());
     descriptor_resources_.update_light_buffers(device_.device(), light_buffer_.buffer_ptr());
+    descriptor_resources_.update_spot_shadow_sampler(device_.device(), *spot_atlas_sampler_,
+                                                      *spot_atlas_view_);
 
     allocate_skinned_descriptor_sets(texture_table_, skinned_count);
   }
@@ -771,7 +768,6 @@ private:
   vk::raii::DeviceMemory spot_atlas_mem_{nullptr};
   vk::raii::ImageView spot_atlas_view_{nullptr};
   vk::raii::Sampler spot_atlas_sampler_{nullptr};
-  bool spot_atlas_created_{false};
   TextureTable texture_table_;
   TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;

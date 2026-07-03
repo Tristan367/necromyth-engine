@@ -663,9 +663,9 @@ struct PassRecorder {
 
     // Barrier: shader read → depth attachment
     transition_image_layout(command_buffer, atlas_image,
-        vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
-        {}, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::ImageLayout::eDepthStencilReadOnlyOptimal, vk::ImageLayout::eDepthAttachmentOptimal,
+        vk::AccessFlagBits2::eShaderRead, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::PipelineStageFlagBits2::eFragmentShader,
         vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
         vk::ImageAspectFlagBits::eDepth, 0, 1);
 
