@@ -79,4 +79,28 @@ struct AnimationClip {
 
 inline constexpr std::uint32_t k_max_bones = 128;
 
+// One layer of a pose stack (Godot/Unity-style). Layers are composited in order:
+// each layer samples a clip (with its own internal A->B crossfade so transitions
+// are always smooth) and blends OVER the accumulated pose per masked joint by
+// `weight`. The bottom layer is typically a full-body locomotion state machine;
+// higher layers (e.g. an upper-body "aim/hold weapon" override) use a bone mask.
+struct PoseLayer {
+  // Current clip playing on this layer.
+  std::uint32_t clip_index{std::numeric_limits<std::uint32_t>::max()};
+  float time{0.0F};
+
+  // Internal crossfade target for THIS layer (a state transition inside the layer).
+  // xfade_index == max() => not transitioning; xfade_weight in [0,1].
+  std::uint32_t xfade_index{std::numeric_limits<std::uint32_t>::max()};
+  float xfade_time{0.0F};
+  float xfade_weight{1.0F};  // 0 = fully clip_index, 1 = fully xfade_index
+
+  // Compositing weight of the whole layer over the layers beneath it.
+  float weight{1.0F};
+
+  // Optional bone mask: joints (0..N-1 indices) this layer affects. Null/empty
+  // means full body. Layer contributes to a joint only if it's in the mask.
+  const std::vector<std::uint32_t> *mask{nullptr};
+};
+
 } // namespace engine

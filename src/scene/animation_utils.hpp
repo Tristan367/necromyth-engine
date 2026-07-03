@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/animation_types.hpp"
+#include "scene/mesh_instance.hpp"
 
 #define GLM_FORCE_RADIANS
 #include <glm/gtc/quaternion.hpp>
@@ -103,28 +104,6 @@ inline auto sample_animation_trs(const AnimationClip &clip, float time,
   return result;
 }
 
-} // namespace detail
-
-inline auto trs_to_mat4(const BoneTRS &trs) -> glm::mat4 {
-  return glm::translate(glm::mat4(1.0F), trs.translation) *
-         glm::mat4_cast(trs.rotation) *
-         glm::scale(glm::mat4(1.0F), trs.scale);
-}
-
-inline auto blend_bone_trs(const BoneTRS &a, const BoneTRS &b, float factor) -> BoneTRS {
-  if (factor <= 0.0F)
-    return a;
-  if (factor >= 1.0F)
-    return b;
-  return {
-      glm::mix(a.translation, b.translation, factor),
-      glm::normalize(glm::slerp(a.rotation, b.rotation, factor)),
-      glm::mix(a.scale, b.scale, factor),
-  };
-}
-
-namespace detail {
-
 inline void build_world_matrices(
     const SkeletonAsset &skeleton,
     const std::unordered_map<std::uint32_t, glm::mat4> &node_anim,
@@ -169,142 +148,142 @@ inline void build_world_matrices(
 
 } // namespace detail
 
-inline void compute_joint_matrices_blended(
+inline auto trs_to_mat4(const BoneTRS &trs) -> glm::mat4 {
+  return glm::translate(glm::mat4(1.0F), trs.translation) *
+         glm::mat4_cast(trs.rotation) *
+         glm::scale(glm::mat4(1.0F), trs.scale);
+}
+
+inline auto blend_bone_trs(const BoneTRS &a, const BoneTRS &b, float factor) -> BoneTRS {
+  if (factor <= 0.0F) return a;
+  if (factor >= 1.0F) return b;
+  return {
+      glm::mix(a.translation, b.translation, factor),
+      glm::normalize(glm::slerp(a.rotation, b.rotation, factor)),
+      glm::mix(a.scale, b.scale, factor),
+  };
+}
+
+// Evaluate an ordered stack of pose layers into joint matrices.
+//
+// Each layer samples its clip (with its own internal A->B crossfade) and is
+// composited OVER the accumulated pose per masked joint by its weight. Layer 0
+// is the full-body base; higher layers are masked overrides blended on top.
+// Transitions inside a layer always crossfade, and layers never fight over
+// shared fields.
+inline void evaluate_pose_layers(
     const SkeletonAsset &skeleton,
-    const AnimationClip &clip_a,
-    float time_a,
-    const AnimationClip &clip_b,
-    float time_b,
-    float blend_factor,
+    const std::vector<PoseLayer> &layers,
+    const std::vector<AnimationClip> &clips,
     const std::unordered_map<std::uint32_t, BoneTRS> *joint_overrides,
     std::vector<glm::mat4> &out_joint_matrices,
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
   const std::size_t joint_count = skeleton.joint_nodes.size();
-  const detail::ChannelNodeMap channel_map_a = detail::build_channel_map(clip_a);
-  const detail::ChannelNodeMap channel_map_b = detail::build_channel_map(clip_b);
+
+  std::unordered_map<std::uint32_t, detail::ChannelNodeMap> channel_maps;
+  auto clip_map = [&](std::uint32_t idx) -> const detail::ChannelNodeMap & {
+    auto it = channel_maps.find(idx);
+    if (it == channel_maps.end())
+      it = channel_maps.emplace(idx, detail::build_channel_map(clips[idx])).first;
+    return it->second;
+  };
+
+  auto sample_layer = [&](const PoseLayer &layer, std::uint32_t node_index) -> BoneTRS {
+    const BoneTRS a =
+        detail::sample_animation_trs(clips[layer.clip_index], layer.time, node_index,
+                                     clip_map(layer.clip_index));
+    if (layer.xfade_index >= clips.size() || layer.xfade_weight <= 0.0F)
+      return a;
+    const BoneTRS b =
+        detail::sample_animation_trs(clips[layer.xfade_index], layer.xfade_time, node_index,
+                                     clip_map(layer.xfade_index));
+    return blend_bone_trs(a, b, layer.xfade_weight);
+  };
+
+  std::vector<std::unordered_set<std::uint32_t>> mask_sets(layers.size());
+  for (std::size_t li = 0; li < layers.size(); ++li)
+    if (layers[li].mask && !layers[li].mask->empty())
+      mask_sets[li].insert(layers[li].mask->begin(), layers[li].mask->end());
 
   std::unordered_map<std::uint32_t, glm::mat4> node_anim;
   node_anim.reserve(joint_count);
+
   for (std::size_t i = 0; i < joint_count; ++i) {
     const std::uint32_t node_index = skeleton.joint_nodes[i];
+
+    bool has_pose = false;
+    BoneTRS accum;
+    for (std::size_t li = 0; li < layers.size(); ++li) {
+      const PoseLayer &layer = layers[li];
+      if (layer.clip_index >= clips.size() || layer.weight <= 0.0F) continue;
+      if (!mask_sets[li].empty() && !mask_sets[li].count(static_cast<std::uint32_t>(i)))
+        continue;
+
+      const BoneTRS sampled = sample_layer(layer, node_index);
+      if (!has_pose) {
+        accum = sampled;
+        has_pose = true;
+      } else {
+        accum = blend_bone_trs(accum, sampled, std::clamp(layer.weight, 0.0F, 1.0F));
+      }
+    }
+
+    if (!has_pose)
+      accum = BoneTRS{};
 
     if (joint_overrides) {
       const auto it = joint_overrides->find(static_cast<std::uint32_t>(i));
       if (it != joint_overrides->end()) {
-        BoneTRS base = blend_bone_trs(
-            detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a),
-            detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b),
-            blend_factor);
-        if (it->second.rotation != glm::quat{1, 0, 0, 0}) base.rotation = it->second.rotation;
-        if (it->second.translation != glm::vec3{0}) base.translation = it->second.translation;
-        if (it->second.scale != glm::vec3{1}) base.scale = it->second.scale;
-        node_anim[node_index] = trs_to_mat4(base);
-        continue;
+        if (it->second.rotation != glm::quat{1, 0, 0, 0}) accum.rotation = it->second.rotation;
+        if (it->second.translation != glm::vec3{0}) accum.translation = it->second.translation;
+        if (it->second.scale != glm::vec3{1}) accum.scale = it->second.scale;
       }
     }
 
-    const BoneTRS trs_a =
-        detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a);
-    const BoneTRS trs_b =
-        detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b);
-    node_anim[node_index] = trs_to_mat4(blend_bone_trs(trs_a, trs_b, blend_factor));
+    node_anim[node_index] = trs_to_mat4(accum);
   }
 
   detail::build_world_matrices(skeleton, node_anim, out_joint_matrices, out_bone_worlds);
 }
 
-inline void compute_joint_matrices(
-    const SkeletonAsset &skeleton,
-    const AnimationClip &clip,
-    float time,
-    std::vector<glm::mat4> &out_joint_matrices,
-    std::vector<glm::mat4> *out_bone_worlds = nullptr) {
-  compute_joint_matrices_blended(skeleton, clip, time, clip, time, 1.0F, nullptr,
-                                 out_joint_matrices, out_bone_worlds);
-}
-
-inline void compute_joint_matrices_split(
-    const SkeletonAsset &skeleton,
-    const AnimationClip &clip_a,
-    float time_a,
-    const AnimationClip &clip_b,
-    float time_b,
-    const std::vector<std::uint32_t> &joints_using_b,
-    const std::unordered_map<std::uint32_t, BoneTRS> *joint_overrides,
-    std::vector<glm::mat4> &out_joint_matrices,
-    std::vector<glm::mat4> *out_bone_worlds = nullptr) {
-  const std::size_t joint_count = skeleton.joint_nodes.size();
-  const detail::ChannelNodeMap channel_map_a = detail::build_channel_map(clip_a);
-  const detail::ChannelNodeMap channel_map_b = detail::build_channel_map(clip_b);
-
-  const std::unordered_set<std::uint32_t> b_set(
-      joints_using_b.begin(), joints_using_b.end());
-
-  std::unordered_map<std::uint32_t, glm::mat4> node_anim;
-  node_anim.reserve(joint_count);
-  for (std::size_t i = 0; i < joint_count; ++i) {
-    const std::uint32_t node_index = skeleton.joint_nodes[i];
-
-    if (joint_overrides) {
-      const auto it = joint_overrides->find(static_cast<std::uint32_t>(i));
-      if (it != joint_overrides->end()) {
-        // Start from the base animation, overrides only replace non-identity fields
-        BoneTRS base = b_set.count(static_cast<std::uint32_t>(i))
-            ? detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b)
-            : detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a);
-        if (it->second.rotation != glm::quat{1, 0, 0, 0}) base.rotation = it->second.rotation;
-        if (it->second.translation != glm::vec3{0}) base.translation = it->second.translation;
-        if (it->second.scale != glm::vec3{1}) base.scale = it->second.scale;
-        node_anim[node_index] = trs_to_mat4(base);
-        continue;
-      }
-    }
-
-    const BoneTRS trs = b_set.count(static_cast<std::uint32_t>(i))
-        ? detail::sample_animation_trs(clip_b, time_b, node_index, channel_map_b)
-        : detail::sample_animation_trs(clip_a, time_a, node_index, channel_map_a);
-    node_anim[node_index] = trs_to_mat4(trs);
-  }
-
-  detail::build_world_matrices(skeleton, node_anim, out_joint_matrices, out_bone_worlds);
-}
-
-// Convenience: dispatch the correct compute_* function based on instance state.
+// Compute joint matrices from an instance's pose-layer stack.
+// Falls back to single-clip playback if no pose layers are assigned.
 inline void compute_joint_matrices_for_instance(
     const SkeletonAsset &skel,
     const MeshInstance &instance,
     const std::vector<AnimationClip> &clips,
     std::vector<glm::mat4> &out_joint_matrices,
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
-  const AnimationClip &clip_a = clips[instance.animation_index];
-
-  if (instance.next_animation_index < clips.size()) {
-    const AnimationClip &clip_b = clips[instance.next_animation_index];
-    if (instance.blend_factor < 1.0F)
-      compute_joint_matrices_blended(skel, clip_a, instance.animation_time,
-                                      clip_b, instance.next_animation_time,
-                                      instance.blend_factor,
-                                      instance.joint_overrides,
-                                      out_joint_matrices, out_bone_worlds);
-    else
-      compute_joint_matrices_blended(skel, clip_a, instance.animation_time,
-                                      clip_a, instance.animation_time, 1.0F,
-                                      instance.joint_overrides,
-                                      out_joint_matrices, out_bone_worlds);
-  } else if (instance.secondary_joints && !instance.secondary_joints->empty() &&
-      instance.secondary_animation_index < clips.size()) {
-    compute_joint_matrices_split(skel, clip_a, instance.animation_time,
-                                  clips[instance.secondary_animation_index],
-                                  instance.secondary_animation_time,
-                                  *instance.secondary_joints,
-                                  instance.joint_overrides,
-                                  out_joint_matrices, out_bone_worlds);
-  } else {
-    compute_joint_matrices_blended(skel, clip_a, instance.animation_time,
-                                    clip_a, instance.animation_time, 1.0F,
-                                    instance.joint_overrides,
-                                    out_joint_matrices, out_bone_worlds);
+  if (instance.pose_layers && !instance.pose_layers->empty()) {
+    evaluate_pose_layers(skel, *instance.pose_layers, clips,
+                         instance.joint_overrides,
+                         out_joint_matrices, out_bone_worlds);
+    return;
   }
+
+  // Fallback: single-clip playback (for non-layered skinned instances)
+  const AnimationClip &clip = clips[instance.animation_index];
+  const detail::ChannelNodeMap map = detail::build_channel_map(clip);
+
+  std::unordered_map<std::uint32_t, glm::mat4> node_anim;
+  const std::size_t joint_count = skel.joint_nodes.size();
+  node_anim.reserve(joint_count);
+  for (std::size_t i = 0; i < joint_count; ++i) {
+    const std::uint32_t node_index = skel.joint_nodes[i];
+    BoneTRS trs = detail::sample_animation_trs(clip, instance.animation_time, node_index, map);
+
+    if (instance.joint_overrides) {
+      const auto it = instance.joint_overrides->find(static_cast<std::uint32_t>(i));
+      if (it != instance.joint_overrides->end()) {
+        if (it->second.rotation != glm::quat{1, 0, 0, 0}) trs.rotation = it->second.rotation;
+        if (it->second.translation != glm::vec3{0}) trs.translation = it->second.translation;
+        if (it->second.scale != glm::vec3{1}) trs.scale = it->second.scale;
+      }
+    }
+    node_anim[node_index] = trs_to_mat4(trs);
+  }
+
+  detail::build_world_matrices(skel, node_anim, out_joint_matrices, out_bone_worlds);
 }
 
 } // namespace engine

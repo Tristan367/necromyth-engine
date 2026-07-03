@@ -53,14 +53,17 @@ Read this and `README.md` before large renderer changes.
 
 **Descriptor layouts:** `material_skinned_layout_` (set 1: sampler b=0 + SSBO b=1) for main pass skinned; shadow skinned reuses same layout (dummy sampler at b=0, SSBO at b=1). Non-skinned uses `material_layout_` (set 1: sampler b=0 only). Zero overhead for non-skinned scenes — `build_skinned` flag gates skinned pipeline creation.
 
-**Animation blending:** `compute_joint_matrices_blended()` blends at TRS level (lerp T/S, slerp R) before world matrix construction. Single-animation path delegates to blended with `blend_factor = 1.0F`. Crossfade auto-advances `blend_factor += delta / blend_duration`, promotes `next_animation_index` to `animation_index` on completion.
+**Pose-layer stack (PREFERRED path):** `PoseLayer` (`animation_types.hpp`) = clip + internal A→B crossfade (`xfade_index/time/weight`) + compositing `weight` + optional bone `mask`. `evaluate_pose_layers()` composites an ordered stack per joint: layer 0 = full-body locomotion; higher layers = masked overrides (e.g. upper-body "hold weapon"), blended OVER via `blend_bone_trs(accum, sampled, weight)`. Set `MeshInstance::pose_layers` (non-null, non-empty) and `compute_joint_matrices_for_instance()` routes through the layer evaluator, ignoring all legacy blend/split fields. This is the Godot/Unity model: layers are additive-composite, never mutually-exclusive modes, and every layer crossfades its own transitions (no snapping). `AnimStateMachine` owns the stack (`layers()`), drives layer 0's crossfade, and exposes `add_override_layer()`, `set_override_clip()`, `set_override_weight()` (weight fades smoothly).
 
-**Animation split (per-bone binary):** `MeshInstance::secondary_joints` — pointer to a vector of joint indices that use `next_animation_index` clip instead of the primary. `compute_joint_matrices_split()` samples clip_a or clip_b per joint via unordered_set lookup. Zero overhead when null. Crossfade promotion is skipped when split is active. E key in demo swaps primary/secondary.
+**Legacy animation blending (fallback, no `pose_layers`):** `compute_joint_matrices_blended()` blends at TRS level (lerp T/S, slerp R). Crossfade auto-advances `blend_factor += delta / blend_duration`, promotes `next_animation_index` to `animation_index`. **Historical bug:** `next_animation_index`/`blend_factor` were overloaded for BOTH crossfade target AND per-bone split's clip_b — they collided and forced instant switches. Do not reintroduce that aliasing; use pose layers instead.
+
+**Legacy animation split (fallback):** `MeshInstance::secondary_joints` + `secondary_animation_index` — `compute_joint_matrices_split()` hard-picks clip_a or clip_b per joint (no blend). Still used by demo model2. Prefer a masked `PoseLayer` for new work.
 
 ### key files
 
 - `animation_types.hpp`: `SkeletonAsset`, `AnimationClip`, `AnimationSampler`, `AnimationChannel`, `k_max_bones = 128`, `BoneTRS`, `HitboxAttachment`, `HitboxShape`, `BodyColliderDef`
-- `animation_utils.hpp`: `sample_animation_trs()`, `compute_joint_matrices()`, `compute_joint_matrices_blended()`, `compute_joint_matrices_split()`, `BoneTRS`, `trs_to_mat4()`
+- `animation_utils.hpp`: `evaluate_pose_layers()` (preferred), `sample_animation_trs()`, `compute_joint_matrices()`, `compute_joint_matrices_blended()`, `compute_joint_matrices_split()`, `BoneTRS`, `trs_to_mat4()`
+- `animation_state_machine.hpp`: `AnimStateMachine` owns `layers()` (`PoseLayer` stack), base-layer crossfade + masked override layers
 - `bone_buffer.hpp`: `BoneStorageBufferSet` (host-visible SSBO per instance)
 - `vulkan_context.hpp`: animation update loop in `draw_frame()`, `create_bone_buffers()`, split check before blended/single path
 - `gltf_loader.hpp`: `read_joint_accessor()`, `load_skeletons()` (stores `joint_names` from glTF node names), `load_animations()`, `node_parents` map
