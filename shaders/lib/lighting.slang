@@ -11,9 +11,7 @@
 
 // Spot shadow atlas (set 0 binding 4, shared by all spot lights)
 [[vk::binding(4, 0)]]
-Texture2D spotShadowDepth;
-[[vk::binding(4, 0)]]
-SamplerComparisonState spotShadowSampler;
+Sampler2DShadow spotShadowAtlas;
 
 struct GpuPointLight {
     float4 posRange;
@@ -62,7 +60,7 @@ float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             float2 uv = atlasUV + float2(x, y) * texelSize;
-            shadow += spotShadowDepth.SampleCmpLevelZero(spotShadowSampler, uv, lightDepth - bias).r;
+            shadow += spotShadowAtlas.SampleCmpLevelZero(uv, lightDepth - bias);
         }
     }
     return shadow / 9.0;
@@ -101,8 +99,8 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     // Shadow (Godot-style: sample from atlas using sub-rect)
     float shadowVis = 1.0;
     if (l.shadowMatrix[0][0] != 0.0 || l.shadowMatrix[1][1] != 0.0) {
-        shadowVis = 0.3; // DEBUG: force-dark to verify shadow path works
-        //shadowVis = sampleSpotShadow(fragPos, l.shadowMatrix, l.atlasRect, lightDir, normal, bias);
+        float bias = max(0.0005 * (1.0 - ndotl), 0.0001);
+        shadowVis = sampleSpotShadow(fragPos, l.shadowMatrix, l.atlasRect, lightDir, normal, bias);
     }
 
     return (diffuse + specular) * atten * shadowVis;
