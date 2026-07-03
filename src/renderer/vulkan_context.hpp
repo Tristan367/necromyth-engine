@@ -293,6 +293,16 @@ public:
         scene.directional_light(),
         shadow_settings);
 
+    // Compute spot shadow VP matrices (up to 4) for the UBO
+    std::array<glm::mat4, 4> spot_vps{};
+    std::size_t spot_vp_count = 0;
+    for (const SpotLight &sl : scene.spot_lights()) {
+      if (sl.casts_shadow && spot_vp_count < 4) {
+        spot_vps[spot_vp_count] = LightStorageBuffer::compute_shadow_matrix(sl);
+        ++spot_vp_count;
+      }
+    }
+
     uniform_buffers_.write(
         frame_index_,
         FrameUniformBufferObject{
@@ -307,6 +317,7 @@ public:
                 scene.directional_light().color * scene.directional_light().intensity,
                 scene.directional_light().ambient),
             .light_view_proj = cascades.light_view_proj,
+            .spot_light_vp = spot_vps,
             .cascade_params = glm::vec4(
                 cascades.split_view_z,
                 shadow_settings.cascade_blend_range,
@@ -315,7 +326,7 @@ public:
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
 
-    light_buffer_.write(scene.point_lights(), scene.spot_lights());
+    light_buffer_.write(scene.point_lights(), scene.spot_lights(), 2048.0F);
 
     if (!bone_buffers_.empty()) {
       std::vector<glm::mat4> joint_matrices;

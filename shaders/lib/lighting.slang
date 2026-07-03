@@ -1,20 +1,32 @@
-// Point + spot light evaluation. Lights are stored in an SSBO (set 0, binding 3).
+// Point + spot light evaluation with shadow atlas support (Godot-style).
+// Lights stored in SSBO at set 0 binding 3.
+// Spot shadow depth atlas sampled at set 0 binding 4.
+//
 // GPU layout (16-byte aligned):
 //   PointLight: vec4(pos.xyz, range), vec4(color.rgb, intensity)
 //   SpotLight:  vec4(pos.xyz, range), vec4(color.rgb, intensity),
-//               vec4(dir.xyz, pad),   vec4(inner, outer, 0, 0)
-// Buffer: [uint numPoint, uint numSpot, uint pad0, uint pad1][PointLight...][SpotLight...]
+//               vec4(dir.xyz, pad),   vec4(inner, outer, 0, 0),
+//               mat4 shadowMatrix,    vec4(uv_offset.xy, uv_scale.xy)
+// Buffer: [uvec4(numPoint, numSpot, 0, 0)][PointLight...][SpotLight...]
+
+// Spot shadow atlas (set 0 binding 4, shared by all spot lights)
+[[vk::binding(4, 0)]]
+Texture2D spotShadowDepth;
+[[vk::binding(4, 0)]]
+SamplerComparisonState spotShadowSampler;
 
 struct GpuPointLight {
-    float4 posRange;      // xyz = position, w = range
-    float4 colorIntensity; // rgb = color, w = intensity
+    float4 posRange;
+    float4 colorIntensity;
 };
 
 struct GpuSpotLight {
     float4 posRange;
     float4 colorIntensity;
-    float4 dirPad;         // xyz = direction, w = unused
-    float4 angles;         // x = inner_angle, y = outer_angle, zw = unused
+    float4 dirPad;
+    float4 angles;
+    float4x4 shadowMatrix;
+    float4 atlasRect; // xy = UV offset in atlas, zw = UV scale
 };
 
 [[vk::binding(3, 0)]] ByteAddressBuffer lightBuffer : register(t3);
@@ -30,12 +42,34 @@ float3 calcPointLight(GpuPointLight l, float3 fragPos, float3 normal, float3 vie
     float ndotl = max(dot(normal, lightDir), 0.0);
     float3 diffuse = l.colorIntensity.rgb * l.colorIntensity.w * ndotl;
 
-    // Blinn-Phong specular
     float3 halfVec = normalize(lightDir + viewDir);
     float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
     float3 specular = l.colorIntensity.rgb * l.colorIntensity.w * spec * 0.3;
 
     return (diffuse + specular) * atten;
+}
+
+float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
+                        float3 lightDir, float3 normal, float bias) {
+    float4 pos = mul(shadowMatrix, float4(worldPos.xyz - normal * 0.001, 1.0));
+    float3 proj = pos.xyz / max(pos.w, 0.0001);
+    float2 atlasUV = proj.xy * atlasRect.zw + atlasRect.xy;
+    float lightDepth = proj.z;
+
+    // Simple PCF 3x3 on the spot shadow atlas (set 0 binding 4)
+    float shadow = 0.0;
+    float texelSize = atlasRect.z * 0.0005;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float2 uv = atlasUV + float2(x, y) * texelSize;
+            shadow += spotShadowDepth.SampleCmpLevelZero(spotShadowSampler, uv, lightDepth - bias).r;
+        }
+    }
+    return shadow / 9.0;
+}
+
+float3 calcSpotLightWithShadow(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewDir) {
+    return calcSpotLight(l, fragPos, normal, viewDir);
 }
 
 float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewDir) {
@@ -51,8 +85,8 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     float cosTheta = dot(-lightDir, spotDir);
     float cosInner = cos(l.angles.x);
     float cosOuter = cos(l.angles.y);
-    float spot = smoothstep(cosOuter, cosInner, cosTheta);
-    atten *= spot;
+    float spotAtten = smoothstep(cosOuter, cosInner, cosTheta);
+    atten *= spotAtten;
 
     float ndotl = max(dot(normal, lightDir), 0.0);
     float3 diffuse = l.colorIntensity.rgb * l.colorIntensity.w * ndotl;
@@ -61,7 +95,18 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
     float3 specular = l.colorIntensity.rgb * l.colorIntensity.w * spec * 0.3;
 
-    return (diffuse + specular) * atten;
+    float lightContrib = (diffuse.r + diffuse.g + diffuse.b + specular.r + specular.g + specular.b) * atten;
+    if (lightContrib <= 0.0001) return float3(0, 0, 0);
+
+    // Shadow (Godot-style: sample from atlas using sub-rect)
+    float shadowVis = 1.0;
+    if (l.shadowMatrix[0][0] != 0.0 || l.shadowMatrix[1][1] != 0.0) {
+        // Apply a small bias based on normal/lightDir angle
+        float bias = max(0.0005 * (1.0 - ndotl), 0.0001);
+        shadowVis = sampleSpotShadow(fragPos, l.shadowMatrix, l.atlasRect, lightDir, normal, bias);
+    }
+
+    return (diffuse + specular) * atten * shadowVis;
 }
 
 float3 evaluatePointLights(float3 fragPos, float3 normal, float3 viewDir) {
@@ -69,13 +114,11 @@ float3 evaluatePointLights(float3 fragPos, float3 normal, float3 viewDir) {
     if (numPoint == 0) return float3(0, 0, 0);
 
     float3 contrib = float3(0, 0, 0);
-    uint offset = 16; // skip header
+    uint offset = 16;
     for (uint i = 0; i < numPoint; ++i) {
         GpuPointLight l;
-        float4 a = asfloat(lightBuffer.Load4(offset));
-        float4 b = asfloat(lightBuffer.Load4(offset + 16));
-        l.posRange = a;
-        l.colorIntensity = b;
+        l.posRange = asfloat(lightBuffer.Load4(offset));
+        l.colorIntensity = asfloat(lightBuffer.Load4(offset + 16));
         contrib += calcPointLight(l, fragPos, normal, viewDir);
         offset += 32;
     }
@@ -88,19 +131,20 @@ float3 evaluateSpotLights(float3 fragPos, float3 normal, float3 viewDir) {
 
     float3 contrib = float3(0, 0, 0);
     uint numPoint = lightBuffer.Load<uint>(0);
-    uint offset = 16 + numPoint * 32; // skip header + point lights
+    uint offset = 16 + numPoint * 32;
     for (uint i = 0; i < numSpot; ++i) {
         GpuSpotLight l;
-        float4 a = asfloat(lightBuffer.Load4(offset));
-        float4 b = asfloat(lightBuffer.Load4(offset + 16));
-        float4 c = asfloat(lightBuffer.Load4(offset + 32));
-        float4 d = asfloat(lightBuffer.Load4(offset + 48));
-        l.posRange = a;
-        l.colorIntensity = b;
-        l.dirPad = c;
-        l.angles = d;
+        l.posRange = asfloat(lightBuffer.Load4(offset));
+        l.colorIntensity = asfloat(lightBuffer.Load4(offset + 16));
+        l.dirPad = asfloat(lightBuffer.Load4(offset + 32));
+        l.angles = asfloat(lightBuffer.Load4(offset + 48));
+        l.shadowMatrix[0] = asfloat(lightBuffer.Load4(offset + 64));
+        l.shadowMatrix[1] = asfloat(lightBuffer.Load4(offset + 80));
+        l.shadowMatrix[2] = asfloat(lightBuffer.Load4(offset + 96));
+        l.shadowMatrix[3] = asfloat(lightBuffer.Load4(offset + 112));
+        l.atlasRect = asfloat(lightBuffer.Load4(offset + 128));
         contrib += calcSpotLight(l, fragPos, normal, viewDir);
-        offset += 64;
+        offset += 144;
     }
     return contrib;
 }

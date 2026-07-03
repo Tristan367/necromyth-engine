@@ -12,6 +12,7 @@ struct SpotLight {
   float range{8.0F};
   float inner_angle{0.78F}; // radians (~45°)
   float outer_angle{0.90F}; // radians (~52°)
+  bool casts_shadow{false}; // renders to spot shadow atlas
 };
 
 } // namespace engine

@@ -43,6 +43,12 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 4,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
     };
 
     const std::array material_bindings{
@@ -109,7 +115,7 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = frame_count * 2 + texture_count + skinned_instance_count * 4,
+            .descriptorCount = frame_count * 3 + texture_count + skinned_instance_count * 4,
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eStorageBuffer,
@@ -382,6 +388,23 @@ public:
           device.updateDescriptorSets(writes, nullptr);
         }
       }
+    }
+  }
+
+  void update_spot_shadow_sampler(vk::raii::Device &device, vk::Sampler sampler, vk::ImageView view) {
+    const vk::DescriptorImageInfo info{
+        .sampler = sampler,
+        .imageView = view,
+        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+    };
+    for (const vk::DescriptorSet &set : frame_sets_) {
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = set, .dstBinding = 4, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &info,
+          },
+          nullptr);
     }
   }
 
