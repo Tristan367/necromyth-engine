@@ -89,9 +89,9 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     float spotAtten = smoothstep(cosOuter, cosInner, cosTheta);
     atten *= spotAtten;
 
-    // Range fade: smooth cutoff near max range (last 25%)
+    // Range fade: smooth cutoff near max range (last 50%)
     if (l.posRange.w > 0.0)
-        atten *= 1.0 - smoothstep(l.posRange.w * 0.75, l.posRange.w, dist);
+        atten *= 1.0 - smoothstep(l.posRange.w * 0.5, l.posRange.w, dist);
 
     float ndotl = max(dot(normal, lightDir), 0.0);
     float3 diffuse = l.colorIntensity.rgb * l.colorIntensity.w * ndotl;
