@@ -487,7 +487,7 @@ private:
 
   void create_spot_atlas() {
     const vk::Format fmt = shadow_map_.format();
-    const std::uint32_t sz = 512;
+    const std::uint32_t sz = 256;
 
     vk::ImageCreateInfo img_info{};
     img_info.imageType = vk::ImageType::e2D;

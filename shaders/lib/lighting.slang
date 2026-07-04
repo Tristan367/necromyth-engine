@@ -56,9 +56,15 @@ float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
     float2 atlasUV = proj.xy * atlasRect.zw + atlasRect.xy;
     float lightDepth = proj.z;
 
-    // Manual PCF 3x3 depth comparison (avoids Slang SPIR-V issues with Sampler2DShadow)
+    // Coverage fade: smooth shadow edges near atlas boundary (hides low-res jaggies)
+    float fade = 1.0;
+    fade *= smoothstep(0.0, 0.08, atlasUV.x);
+    fade *= smoothstep(0.0, 0.08, atlasUV.y);
+    fade *= smoothstep(0.0, 0.08, 1.0 - atlasUV.x);
+    fade *= smoothstep(0.0, 0.08, 1.0 - atlasUV.y);
+
     float shadow = 0.0;
-    float texelSize = 1.0 / 2048.0;
+    float texelSize = 1.0 / 256.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             float2 uv = atlasUV + float2(x, y) * texelSize;
@@ -66,7 +72,7 @@ float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
             shadow += (lightDepth - bias) <= depth ? 1.0 : 0.0;
         }
     }
-    return shadow / 9.0;
+    return lerp(1.0, shadow / 9.0, fade);
 }
 
 float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewDir) {
