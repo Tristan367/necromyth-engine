@@ -11,7 +11,9 @@
 
 // Spot shadow atlas (set 0 binding 4, shared by all spot lights)
 [[vk::binding(4, 0)]]
-Sampler2DShadow spotShadowAtlas;
+Texture2D spotShadowAtlas;
+[[vk::binding(4, 0)]]
+SamplerState spotShadowSampler;
 
 struct GpuPointLight {
     float4 posRange;
@@ -54,13 +56,14 @@ float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
     float2 atlasUV = proj.xy * atlasRect.zw + atlasRect.xy;
     float lightDepth = proj.z;
 
-    // Simple PCF 3x3 on the spot shadow atlas (set 0 binding 4)
+    // Manual PCF 3x3 depth comparison (avoids Slang SPIR-V issues with Sampler2DShadow)
     float shadow = 0.0;
-    float texelSize = atlasRect.z * 0.0005;
+    float texelSize = 1.0 / 2048.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             float2 uv = atlasUV + float2(x, y) * texelSize;
-            shadow += spotShadowAtlas.SampleCmpLevelZero(uv, lightDepth - bias);
+            float depth = spotShadowAtlas.SampleLevel(spotShadowSampler, uv, 0).r;
+            shadow += (lightDepth - bias) <= depth ? 1.0 : 0.0;
         }
     }
     return shadow / 9.0;

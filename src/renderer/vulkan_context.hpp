@@ -520,8 +520,14 @@ private:
     vk::SamplerCreateInfo samp_info{};
     samp_info.magFilter = vk::Filter::eLinear;
     samp_info.minFilter = vk::Filter::eLinear;
-    samp_info.compareOp = vk::CompareOp::eLessOrEqual;
     spot_atlas_sampler_ = vk::raii::Sampler(device_.device(), samp_info);
+
+    vk::SamplerCreateInfo pcf_info{};
+    pcf_info.magFilter = vk::Filter::eLinear;
+    pcf_info.minFilter = vk::Filter::eLinear;
+    pcf_info.compareEnable = VK_TRUE;
+    pcf_info.compareOp = vk::CompareOp::eLessOrEqual;
+    spot_atlas_pcf_sampler_ = vk::raii::Sampler(device_.device(), pcf_info);
   }
 
   void create_depth_image() {
@@ -768,6 +774,7 @@ private:
   vk::raii::DeviceMemory spot_atlas_mem_{nullptr};
   vk::raii::ImageView spot_atlas_view_{nullptr};
   vk::raii::Sampler spot_atlas_sampler_{nullptr};
+  vk::raii::Sampler spot_atlas_pcf_sampler_{nullptr};
   TextureTable texture_table_;
   TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;
