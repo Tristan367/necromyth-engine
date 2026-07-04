@@ -661,7 +661,7 @@ struct PassRecorder {
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
 
-    const vk::Extent2D atlas_ext{256, 256};
+    const vk::Extent2D atlas_ext{1024, 1024};
 
     // Barrier: previous layout → depth attachment
     transition_image_layout(command_buffer, atlas_image,
