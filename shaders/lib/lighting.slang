@@ -69,10 +69,6 @@ float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
     return shadow / 9.0;
 }
 
-float3 calcSpotLightWithShadow(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewDir) {
-    return calcSpotLight(l, fragPos, normal, viewDir);
-}
-
 float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewDir) {
     float3 toLight = l.posRange.xyz - fragPos;
     float dist = length(toLight);
