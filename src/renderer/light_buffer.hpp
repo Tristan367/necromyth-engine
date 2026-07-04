@@ -62,17 +62,27 @@ public:
     buffer_.bindMemory(*memory_, 0);
   }
 
-  static auto compute_shadow_matrix(const SpotLight &l) -> glm::mat4 {
+  // Clip-space VP (proj * view) used by the depth pass vertex shader.
+  // MUST NOT include the bias remap: SV_Position needs clip space [-1,1],
+  // not the [0,1] atlas-UV space. Applying the bias here squashes the whole
+  // scene into one atlas quadrant (the striping / scatter artifact).
+  static auto compute_shadow_view_proj(const SpotLight &l) -> glm::mat4 {
     const glm::vec3 dir = glm::normalize(l.direction);
     const glm::mat4 proj = glm::perspective(l.outer_angle * 2.0F, 1.0F, 0.1F, l.range);
     // Avoid degenerate lookAt when direction is near-vertical
     const glm::vec3 up = std::abs(dir.y) > 0.99F ? glm::vec3(0.0F, 0.0F, 1.0F) : glm::vec3(0.0F, 1.0F, 0.0F);
     const glm::mat4 view = glm::lookAt(l.position, l.position + dir, up);
+    return proj * view;
+  }
+
+  // Bias-remapped VP (bias * proj * view) used by the lighting fragment
+  // shader to map a world position directly to atlas UV + light-space depth.
+  static auto compute_shadow_matrix(const SpotLight &l) -> glm::mat4 {
     const glm::mat4 bias(glm::vec4(0.5, 0.0, 0.0, 0.0),
                          glm::vec4(0.0, 0.5, 0.0, 0.0),
                          glm::vec4(0.0, 0.0, 1.0, 0.0),
                          glm::vec4(0.5, 0.5, 0.0, 1.0));
-    return bias * proj * view;
+    return bias * compute_shadow_view_proj(l);
   }
 
   void write(const std::vector<PointLight> &point_lights,
@@ -117,7 +127,11 @@ public:
       sptr[i].angles[0] = spot_lights[i].inner_angle;
       sptr[i].angles[1] = spot_lights[i].outer_angle;
 
-      // Shadow data (Godot-style atlas sub-region)
+      // Shadow data (Godot-style atlas sub-region).
+      // glm::mat4 is column-major in memory. The shader loads 4 consecutive
+      // float4s into shadowMatrix[0..3] (Slang row indexing), so storing the
+      // transpose makes the shader's rows equal M's rows: mul(shadowMatrix, v)
+      // == M * v (correct).
       if (spot_lights[i].casts_shadow) {
         const glm::mat4 sm = glm::transpose(compute_shadow_matrix(spot_lights[i]));
         std::memcpy(sptr[i].shadow_matrix, &sm[0][0], sizeof(sm));

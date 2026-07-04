@@ -299,7 +299,8 @@ public:
     std::size_t spot_vp_count = 0;
     for (const SpotLight &sl : scene.spot_lights()) {
       if (sl.casts_shadow && spot_vp_count < 4) {
-        spot_vps[spot_vp_count] = LightStorageBuffer::compute_shadow_matrix(sl);
+        // Depth pass VS needs clip-space VP (NO bias remap) for SV_Position.
+        spot_vps[spot_vp_count] = LightStorageBuffer::compute_shadow_view_proj(sl);
         ++spot_vp_count;
       }
     }
