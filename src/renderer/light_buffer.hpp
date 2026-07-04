@@ -63,11 +63,11 @@ public:
   }
 
   static auto compute_shadow_matrix(const SpotLight &l) -> glm::mat4 {
+    const glm::vec3 dir = glm::normalize(l.direction);
     const glm::mat4 proj = glm::perspective(l.outer_angle * 2.0F, 1.0F, 0.1F, l.range);
-    const glm::mat4 view = glm::lookAt(
-        l.position, l.position + glm::normalize(l.direction),
-        glm::vec3(0.0F, 1.0F, 0.0F));
-    // Bias: NDC [-1,1] → UV [0,1]
+    // Avoid degenerate lookAt when direction is near-vertical
+    const glm::vec3 up = std::abs(dir.y) > 0.99F ? glm::vec3(0.0F, 0.0F, 1.0F) : glm::vec3(0.0F, 1.0F, 0.0F);
+    const glm::mat4 view = glm::lookAt(l.position, l.position + dir, up);
     const glm::mat4 bias(glm::vec4(0.5, 0.0, 0.0, 0.0),
                          glm::vec4(0.0, 0.5, 0.0, 0.0),
                          glm::vec4(0.0, 0.0, 1.0, 0.0),
@@ -119,7 +119,7 @@ public:
 
       // Shadow data (Godot-style atlas sub-region)
       if (spot_lights[i].casts_shadow) {
-        const glm::mat4 sm = compute_shadow_matrix(spot_lights[i]);
+        const glm::mat4 sm = glm::transpose(compute_shadow_matrix(spot_lights[i]));
         std::memcpy(sptr[i].shadow_matrix, &sm[0][0], sizeof(sm));
         // Simple row-based sub-allocation: each light gets full atlas width, split vertically
         const float region_h = atlas_size / static_cast<float>(num_spot);
