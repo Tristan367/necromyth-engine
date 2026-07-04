@@ -46,7 +46,7 @@ float3 calcPointLight(GpuPointLight l, float3 fragPos, float3 normal, float3 vie
     float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
     float3 specular = l.colorIntensity.rgb * l.colorIntensity.w * spec * 0.3;
 
-    return (diffuse + specular) * atten;
+    return min((diffuse + specular) * atten, l.colorIntensity.rgb * l.colorIntensity.w);
 }
 
 float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
@@ -110,7 +110,7 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
         shadowVis = sampleSpotShadow(fragPos, l.shadowMatrix, l.atlasRect, lightDir, normal, bias);
     }
 
-    return (diffuse + specular) * atten * shadowVis;
+    return min((diffuse + specular) * atten * shadowVis, l.colorIntensity.rgb * l.colorIntensity.w);
 }
 
 float3 evaluatePointLights(float3 fragPos, float3 normal, float3 viewDir) {
