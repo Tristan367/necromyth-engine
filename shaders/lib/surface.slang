@@ -20,7 +20,7 @@ float4 shadeOpaqueSingle(VSOutput vertIn, int filterMode) {
     float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
     float3 lit = shadeDirectional(vertIn.worldPos, normal, filterMode, -1)
                + evaluateAllLights(vertIn.worldPos, normal, viewDir);
-    return float4(baseColor * saturate(lit), texColor.a);
+    return float4(baseColor * lit, texColor.a);
 }
 
 float4 shadeOpaqueDual(VSOutput vertIn, int filterMode) {
@@ -30,7 +30,7 @@ float4 shadeOpaqueDual(VSOutput vertIn, int filterMode) {
     float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
     float3 lit = shadeDirectional(vertIn.worldPos, normal, -1, filterMode)
                + evaluateAllLights(vertIn.worldPos, normal, viewDir);
-    return float4(baseColor * saturate(lit), texColor.a);
+    return float4(baseColor * lit, texColor.a);
 }
 
 float4 shadeCutoutSingle(VSOutput vertIn, int filterMode) {
@@ -57,7 +57,7 @@ float4 shadeAlphaToCoverageSingle(VSOutput vertIn, int filterMode) {
     float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
     float3 lit = shadeDirectional(vertIn.worldPos, normal, filterMode, -1)
                + evaluateAllLights(vertIn.worldPos, normal, viewDir);
-    return float4(baseColor * saturate(lit), texColor.a);
+    return float4(baseColor * lit, texColor.a);
 }
 
 float4 shadeAlphaToCoverageDual(VSOutput vertIn, int filterMode) {
@@ -70,5 +70,5 @@ float4 shadeAlphaToCoverageDual(VSOutput vertIn, int filterMode) {
     float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
     float3 lit = shadeDirectional(vertIn.worldPos, normal, -1, filterMode)
                + evaluateAllLights(vertIn.worldPos, normal, viewDir);
-    return float4(baseColor * saturate(lit), texColor.a);
+    return float4(baseColor * lit, texColor.a);
 }
