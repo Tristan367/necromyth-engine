@@ -25,7 +25,7 @@ struct GpuSpotLight {
     float4 colorIntensity;
     float4 dirPad;
     float4 angles;
-    // shadowMatrix[16] not used — reads from UBO spotLightViewProj
+    float4x4 shadowMatrix;
     float4 atlasRect;
 };
 
@@ -70,10 +70,10 @@ float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
 }
 
 float3 calcSpotLightWithShadow(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewDir) {
-    return calcSpotLight(l, fragPos, normal, viewDir, 0);
+    return calcSpotLight(l, fragPos, normal, viewDir);
 }
 
-float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewDir, uint lightIdx) {
+float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewDir) {
     float3 toLight = l.posRange.xyz - fragPos;
     float dist = length(toLight);
     float3 lightDir = toLight / max(dist, 0.0001);
@@ -99,13 +99,11 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     float lightContrib = (diffuse.r + diffuse.g + diffuse.b + specular.r + specular.g + specular.b) * atten;
     if (lightContrib <= 0.0001) return float3(0, 0, 0);
 
-    // Shadow (read from UBO's spotLightViewProj, same as vertex shader uses)
+    // Shadow (Godot-style: sample from atlas using sub-rect)
     float shadowVis = 1.0;
-    if (lightIdx < 4) {
-        // Use UBO matrix directly (same source as vertex shader) + atlasRect from SSBO
+    if (l.shadowMatrix[0][0] != 0.0 || l.shadowMatrix[1][1] != 0.0) {
         float bias = max(0.001 * (1.0 - ndotl), 0.0002);
-        shadowVis = sampleSpotShadow(fragPos, ubo.spotLightViewProj[lightIdx],
-                                      l.atlasRect, lightDir, normal, bias);
+        shadowVis = sampleSpotShadow(fragPos, l.shadowMatrix, l.atlasRect, lightDir, normal, bias);
     }
 
     return (diffuse + specular) * atten * shadowVis;
@@ -140,8 +138,13 @@ float3 evaluateSpotLights(float3 fragPos, float3 normal, float3 viewDir) {
         l.colorIntensity = asfloat(lightBuffer.Load4(offset + 16));
         l.dirPad = asfloat(lightBuffer.Load4(offset + 32));
         l.angles = asfloat(lightBuffer.Load4(offset + 48));
-        // +64 bytes (shadow_matrix) skipped
-        l.atlasRect = asfloat(lightBuffer.Load4(offset + 112));
+        l.shadowMatrix[0] = asfloat(lightBuffer.Load4(offset + 64));
+        l.shadowMatrix[1] = asfloat(lightBuffer.Load4(offset + 80));
+        l.shadowMatrix[2] = asfloat(lightBuffer.Load4(offset + 96));
+        l.shadowMatrix[3] = asfloat(lightBuffer.Load4(offset + 112));
+        l.atlasRect = asfloat(lightBuffer.Load4(offset + 128));
+        contrib += calcSpotLight(l, fragPos, normal, viewDir);
+        offset += 144;
     }
     return contrib;
 }
