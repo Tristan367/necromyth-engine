@@ -80,33 +80,20 @@ public:
     return bias * compute_shadow_view_proj(l);
   }
 
-  static auto compute_cube_face_vps(const PointLight &l) -> std::array<glm::mat4, 6> {
-    // For UBO / vertex shader: proj * view (clip space), NO bias
-    const glm::mat4 proj = glm::perspective(glm::radians(90.0F), 1.0F, 0.1F, l.range);
-    const glm::vec3 pos(l.position.x, l.position.y, l.position.z);
-    const std::array<glm::vec3, 6> dirs{{
-        { 1, 0, 0}, {-1, 0, 0}, { 0, 1, 0}, { 0,-1, 0}, { 0, 0, 1}, { 0, 0,-1},
-    }};
-    const std::array<glm::vec3, 6> ups{{
-        {0,-1,0}, {0,-1,0}, {0, 0,1}, {0, 0,-1}, {0,-1,0}, {0,-1,0},
-    }};
-    std::array<glm::mat4, 6> vps;
-    for (int i = 0; i < 6; ++i)
-      vps[i] = proj * glm::lookAt(pos, pos + dirs[i], ups[i]);
-    return vps;
-  }
-
-  static auto compute_cube_face_shadow_matrices(const PointLight &l) -> std::array<glm::mat4, 6> {
-    // For SSBO / fragment shader: bias * proj * view (UV space)
-    const glm::mat4 bias(glm::vec4(0.5, 0.0, 0.0, 0.0),
-                         glm::vec4(0.0, 0.5, 0.0, 0.0),
-                         glm::vec4(0.0, 0.0, 1.0, 0.0),
-                         glm::vec4(0.5, 0.5, 0.0, 1.0));
-    const auto vps = compute_cube_face_vps(l);
-    std::array<glm::mat4, 6> mats;
-    for (int i = 0; i < 6; ++i)
-      mats[i] = glm::transpose(bias * vps[i]);
-    return mats;
+  // Dual-paraboloid point shadow (Godot omni model).
+  //
+  // Godot renders the omni shadow as TWO paraboloid hemispheres (+Z and -Z)
+  // into one atlas region, storing normalized RADIAL distance from the light
+  // (not perspective depth). Both the depth pass and the sampler compute the
+  // same radial-distance value, so there is no perspective-matrix round-trip
+  // to keep in sync — this is why it is robust.
+  //
+  // `pointLightView` is the world -> light-local rigid transform (Godot's
+  // `shadow_matrix = light_transform.inverse()`). No projection. The light
+  // has no meaningful orientation, so this is just a translation by -position;
+  // the paraboloid basis is the light-local axes.
+  static auto compute_point_light_view(const PointLight &l) -> glm::mat4 {
+    return glm::translate(glm::mat4(1.0F), -glm::vec3(l.position));
   }
 
   void write(std::uint32_t frame_index,

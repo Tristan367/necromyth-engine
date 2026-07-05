@@ -51,40 +51,113 @@ float3 calcPointLight(GpuPointLight l, float3 fragPos, float3 normal, float3 vie
     float lightContrib = (diffuse.r + diffuse.g + diffuse.b + specular.r + specular.g + specular.b) * atten;
     if (lightContrib <= 0.0001) return float3(0, 0, 0);
 
-    // Cube-face shadow: determine face from dominant axis, sample from atlas sub-region
+    // Dual-paraboloid shadow (Godot omni model). Enabled flag in params.w.
     float shadowVis = 1.0;
-    if (l.shadowMatrix[0][0] != 0.0 || l.shadowMatrix[1][1] != 0.0) {
-        float3 d = abs(-lightDir);
-        int face;
-        if (d.x >= d.y && d.x >= d.z) face = (-lightDir.x > 0) ? 0 : 1;
-        else if (d.y >= d.x && d.y >= d.z) face = (-lightDir.y > 0) ? 2 : 3;
-        else face = (-lightDir.z > 0) ? 4 : 5;
-
-        float4x4 vp = ubo.pointLightViewProj[face];
-        float4x4 shadowMtx = ubo.pointLightShadowMatrix[face];
-        // 3×2 grid sub-region in atlas (matching render pass layout)
-        float fw = 1.0 / 3.0, fh = 1.0 / 2.0;
-        float fx = (face % 3) * fw, fy = (face / 3) * fh;
-        float4 atlasRect = float4(fx, fy, fw, fh);
-        float bias = max(0.001 * (1.0 - ndotl), 0.0002);
-        shadowVis = sampleSpotShadow(fragPos, shadowMtx, atlasRect, lightDir, normal, bias);
+    if (ubo.pointLightParams.w > 0.5) {
+        shadowVis = samplePointShadowDP(fragPos, normal, ndotl);
     }
 
     return min((diffuse + specular) * atten * shadowVis, l.colorIntensity.rgb * l.colorIntensity.w);
 }
 
+// Godot light_process_omni hard-shadow path (scene_forward_lights_inc.glsl).
+// Transforms the world position into light-local space, picks the paraboloid
+// hemisphere by the sign of z, paraboloid-projects to atlas UV, and compares
+// against the stored NORMALIZED RADIAL DISTANCE. This is the key to stability:
+// both the depth pass and this sampler compute radial distance the same way.
+float samplePointShadowDP(float3 worldPos, float3 normal, float ndotl) {
+    float invRadius = ubo.pointLightParams.x;
+    float2 flipOffset = ubo.pointLightParams.yz;
+    float4 baseUvRect = ubo.pointLightAtlasRect;
+
+    // Inset the rect by one texel to avoid bleeding across the hemisphere seam.
+    uint atlasW, atlasH;
+    spotShadowAtlas.GetDimensions(atlasW, atlasH);
+    float2 texel = float2(1.0 / float(atlasW), 1.0 / float(atlasH));
+    baseUvRect.xy += texel;
+    baseUvRect.zw -= texel * 2.0;
+
+    // World -> light-local.
+    float3 localVert = mul(ubo.pointLightView, float4(worldPos, 1.0)).xyz;
+    float3 localNormal = normalize(mul((float3x3)ubo.pointLightView, normal));
+
+    float shadowLen = length(localVert);
+    float3 shadowDir = localVert / max(shadowLen, 1e-6);
+
+    // Normal-offset bias in light-local space (Godot shadow_normal_bias).
+    float normalBias = 2.0 * texel.x * (1.0 - abs(dot(localNormal, shadowDir)));
+    float3 shadowSample = normalize(shadowDir + localNormal * normalBias);
+
+    // Pick hemisphere: +Z half lives at base + flip_offset (bottom of atlas),
+    // -Z half at the base rect (top). Must match the render pass assignment.
+    float4 uvRect = baseUvRect;
+    if (shadowSample.z >= 0.0) {
+        uvRect.xy += flipOffset;
+    }
+
+    // Paraboloid: must match vertex shader's xy / (1 + n.z) with n.z >= 0.
+    // Vertex mirrors z to positive (dpSide), so n.z is always ≥ 0 and
+    // outputs xy / (1 + |z|). Godot uses this formulation because 1 + |z|
+    // avoids the pole singularity of 1 - |z|.
+    float denom = 1.0 + abs(shadowSample.z);
+    float2 pos = shadowSample.xy / max(denom, 1e-4);
+    pos = pos * 0.5 + 0.5;
+
+    // Depth to compare: normalized radial distance (matches depth pass).
+    // Subtract the bias so a fragment is only shadowed when it is meaningfully
+    // farther than the nearest recorded caster (prevents acne / self-shadow).
+    float depthBias = max(0.0015 * (1.0 - ndotl), 0.0004);
+    float refDepth = shadowLen * invRadius - depthBias;
+
+    // 3x3 PCF within the hemisphere sub-rect.
+    float2 pcfStep = texel;
+    float shadow = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float2 uv = pos + float2(x, y) * pcfStep;
+            uv = clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0));
+            uv = uvRect.xy + uv * uvRect.zw;
+            float stored = spotShadowAtlas.SampleLevel(spotShadowSampler, uv, 0).r;
+            shadow += refDepth <= stored ? 1.0 : 0.0;
+        }
+    }
+    return shadow / 9.0;
+}
+
 float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,
                         float3 lightDir, float3 normal, float bias) {
     float4 pos = mul(shadowMatrix, float4(worldPos.xyz - normal * 0.001, 1.0));
-    float3 proj = pos.xyz / max(pos.w, 0.0001);
-    float2 atlasUV = proj.xy * atlasRect.zw + atlasRect.xy;
+    // Reject fragments behind the light's projection plane (w <= 0) — otherwise
+    // the perspective divide flips coordinates and smears the wrong face across
+    // the surface ("paint splatter").
+    if (pos.w <= 0.0)
+        return 1.0;
+    float3 proj = pos.xyz / pos.w;
+
+    // Face-local UV must be inside [0,1]; a 90° frustum only covers its own
+    // face. Outside that (or outside the valid depth range) the fragment is
+    // not seen by this face -> treat as lit. Mirrors the directional path.
+    if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 ||
+        proj.z < 0.0 || proj.z > 1.0)
+        return 1.0;
+
     float lightDepth = proj.z;
 
+    uint atlasW, atlasH;
+    spotShadowAtlas.GetDimensions(atlasW, atlasH);
+    float texelSize = 1.0 / float(atlasW);
+
+    // Clamp the PCF footprint to the interior of this sub-rect so 3x3 taps
+    // near a face/light boundary do not bleed into a neighbouring atlas tile.
+    float2 rectMin = atlasRect.xy + texelSize;
+    float2 rectMax = atlasRect.xy + atlasRect.zw - texelSize;
+
+    float2 atlasUV = proj.xy * atlasRect.zw + atlasRect.xy;
+
     float shadow = 0.0;
-    float texelSize = 1.0 / 1024.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            float2 uv = atlasUV + float2(x, y) * texelSize;
+            float2 uv = clamp(atlasUV + float2(x, y) * texelSize, rectMin, rectMax);
             float depth = spotShadowAtlas.SampleLevel(spotShadowSampler, uv, 0).r;
             shadow += (lightDepth - bias) <= depth ? 1.0 : 0.0;
         }
@@ -142,7 +215,8 @@ float3 evaluatePointLights(float3 fragPos, float3 normal, float3 viewDir) {
         GpuPointLight l;
         l.posRange = asfloat(lightBuffer.Load4(offset));
         l.colorIntensity = asfloat(lightBuffer.Load4(offset + 16));
-        // +32 bytes (shadow_matrix + atlas_rect) skipped — reads from UBO pointLightViewProj
+        // +32 bytes (shadow_matrix + atlas_rect) skipped — point shadow uses the
+        // dual-paraboloid UBO fields (pointLightView / pointLightParams / rect).
         contrib += calcPointLight(l, fragPos, normal, viewDir);
         offset += 32 + 64;
     }

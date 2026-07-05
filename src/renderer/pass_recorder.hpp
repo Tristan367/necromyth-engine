@@ -170,37 +170,48 @@ struct PassRecorder {
       std::uint32_t cascade_index,
       std::uint32_t frame_index,
       const glm::mat4 &light_vp,
-      DrawBindState &state) const {
+      DrawBindState &state,
+      float dp_side = 1.0F,
+      float dp_z_far = 1.0F) const {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
 
-    // Frustum cull: world-space sphere test (Godot uses AABB-vs-plane SAT,
-    // but sphere with correct world-space radius is conservative and cheaper).
     const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
     const glm::mat4 &m = draw.model;
     const glm::vec3 center = glm::vec3(m * glm::vec4(bounds.center(), 1.0F));
-    // Scale radius to world space: max of the 3 scaled extent components
     const glm::vec3 half_extent = (bounds.max - bounds.min) * 0.5F;
-    // Bounding sphere radius: distance from center to any corner (true enclosing sphere)
     const float world_radius = glm::length(glm::vec3(
         glm::length(glm::vec3(m[0])) * half_extent.x,
         glm::length(glm::vec3(m[1])) * half_extent.y,
         glm::length(glm::vec3(m[2])) * half_extent.z));
 
-    // Gribb/Hartmann frustum planes from VP matrix (Godot: normalize normals)
-    const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
-    const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
-    const glm::vec4 r2(light_vp[0][2], light_vp[1][2], light_vp[2][2], light_vp[3][2]);
-    const glm::vec4 r3(light_vp[0][3], light_vp[1][3], light_vp[2][3], light_vp[3][3]);
+    // Frustum cull only for projective VPs (directional/spot cascades). For the
+    // dual-paraboloid point pass (cascade >= 6) `light_vp` is a rigid light-view
+    // matrix, not a projection, so Gribb/Hartmann plane extraction is invalid.
+    // Cull instead by range: skip meshes whose bounding sphere is fully outside
+    // the light radius.
+    if (cascade_index >= 6) {
+      // light_vp is world->light-local; its translation column gives -lightPos
+      // in world after inverse, but the light-local center distance == |center'|.
+      const glm::vec3 center_local = glm::vec3(light_vp * glm::vec4(center, 1.0F));
+      if (glm::length(center_local) - world_radius > dp_z_far)
+        return;
+    } else {
+      // Gribb/Hartmann frustum planes from VP matrix (Godot: normalize normals)
+      const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
+      const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
+      const glm::vec4 r2(light_vp[0][2], light_vp[1][2], light_vp[2][2], light_vp[3][2]);
+      const glm::vec4 r3(light_vp[0][3], light_vp[1][3], light_vp[2][3], light_vp[3][3]);
 
-    auto norm = [](glm::vec4 p) { return p / glm::length(glm::vec3(p)); };
-    const glm::vec4 planes[6] = {
-        norm(r3 + r0), norm(r3 - r0), norm(r3 + r1),
-        norm(r3 - r1), norm(r3 + r2), norm(r3 - r2)};
+      auto norm = [](glm::vec4 p) { return p / glm::length(glm::vec3(p)); };
+      const glm::vec4 planes[6] = {
+          norm(r3 + r0), norm(r3 - r0), norm(r3 + r1),
+          norm(r3 - r1), norm(r3 + r2), norm(r3 - r2)};
 
-    auto test = [&](const glm::vec4 &p) { return glm::dot(glm::vec3(p), center) + p.w > -world_radius; };
-    for (const glm::vec4 &p : planes)
-      if (!test(p)) return;
+      auto test = [&](const glm::vec4 &p) { return glm::dot(glm::vec3(p), center) + p.w > -world_radius; };
+      for (const glm::vec4 &p : planes)
+        if (!test(p)) return;
+    }
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
 
@@ -223,6 +234,8 @@ struct PassRecorder {
     const TexturedPushConstants push_constants{
         .model = draw.model,
         .shadow_cascade_index = cascade_index,
+        .dp_side = dp_side,
+        .dp_z_far = dp_z_far,
     };
     command_buffer.pushConstants(
         pipelines.layout_for(is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth),
@@ -743,25 +756,33 @@ struct PassRecorder {
       ++light_idx;
     }
 
-    // Point light shadows: 6 cube faces in a 3×2 grid on the atlas
-    const int grid_w = 3, grid_h = 2;
-    const float face_w = atlas_ext.width / grid_w;
-    const float face_h = atlas_ext.height / grid_h;
-
+    // Point light shadows: dual-paraboloid (Godot omni model).
+    // Two hemispheres rendered into the top/bottom halves of the atlas:
+    //   top half    (y in [0, H/2))  = -Z hemisphere (dp_side = -1)
+    //   bottom half (y in [H/2, H))  = +Z hemisphere (dp_side = +1)
+    // This matches the sampler: base atlas_rect = top half, flip_offset = (0,0.5)
+    // added when the light-local direction has z >= 0 (the +Z hemisphere).
+    const float half_h = atlas_ext.height / 2.0F;
     for (std::uint32_t si = 0; si < scene.point_lights().size(); ++si) {
-      if (!scene.point_lights()[si].casts_shadow) continue;
+      const PointLight &pl = scene.point_lights()[si];
+      if (!pl.casts_shadow) continue;
 
-      const auto face_vps = LightStorageBuffer::compute_cube_face_vps(scene.point_lights()[si]);
-      for (int face = 0; face < 6; ++face) {
-        const int col = face % grid_w;
-        const int row = face / grid_w;
-        const vk::Rect2D region{{int32_t(col * face_w), int32_t(row * face_h)},
-                                 {uint32_t(face_w), uint32_t(face_h)}};
+      const glm::mat4 point_view = LightStorageBuffer::compute_point_light_view(pl);
+      // dp_side, atlas row offset (in pixels)
+      const std::array<std::pair<float, int32_t>, 2> halves{{
+          {-1.0F, 0},                          // -Z -> top half
+          {+1.0F, int32_t(half_h)},            // +Z -> bottom half
+      }};
+
+      for (int h = 0; h < 2; ++h) {
+        const float dp_side = halves[h].first;
+        const vk::Rect2D region{{0, halves[h].second},
+                                {atlas_ext.width, uint32_t(half_h)}};
         const vk::ClearValue cd{vk::ClearDepthStencilValue{1.0F, 0}};
         vk::RenderingAttachmentInfo da{};
         da.imageView = atlas_view;
         da.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
-        da.loadOp = (face == 0) ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
+        da.loadOp = (h == 0) ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
         da.storeOp = vk::AttachmentStoreOp::eStore;
         da.clearValue = cd;
         vk::RenderingInfo ri{};
@@ -770,13 +791,15 @@ struct PassRecorder {
         ri.pDepthAttachment = &da;
         command_buffer.beginRendering(ri);
         bind_pass_descriptors(command_buffer, frame_index);
-        command_buffer.setViewport(0, vk::Viewport{0, 0, face_w, face_h, 0, 1});
+        command_buffer.setViewport(0, vk::Viewport{
+            0.0F, float(halves[h].second), float(atlas_ext.width), half_h, 0.0F, 1.0F});
         command_buffer.setScissor(0, region);
         command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0, k_shadow_depth_bias_slope);
 
-        const std::uint32_t ci = 6 + face;
+        // cascade index 6 flags the point (DP) path in the depth VS.
         for (const DrawCommand &draw : draw_list)
-          draw_shadow_mesh(command_buffer, draw, ci, frame_index, face_vps[face], bind_state);
+          draw_shadow_mesh(command_buffer, draw, 6, frame_index, point_view,
+                           bind_state, dp_side, pl.range);
         command_buffer.endRendering();
       }
     }

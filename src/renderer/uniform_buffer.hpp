@@ -23,8 +23,10 @@ struct FrameUniformBufferObject {
   alignas(16) glm::vec4 light_color{};
   alignas(16) std::array<glm::mat4, k_max_shadow_cascades> light_view_proj{}; // 0-1 = directional, 2-5 = spot
   alignas(16) std::array<glm::mat4, 4> spot_light_vp{}; // indices 2-5 of the GLSL array
-  alignas(16) std::array<glm::mat4, 6> point_light_vp{}; // indices 6-11, clip space (vertex shader)
-  alignas(16) std::array<glm::mat4, 6> point_light_shadow_mtx{}; // UV space (fragment shader)
+  // Point light dual-paraboloid shadow (Godot omni model).
+  alignas(16) glm::mat4 point_light_view{1.0F};  // world -> light-local (rigid)
+  alignas(16) glm::vec4 point_light_params{};    // x = inv_radius, yz = flip_offset, w = enabled
+  alignas(16) glm::vec4 point_light_atlas_rect{};// xy = uv offset, zw = uv scale
   alignas(16) glm::vec4 cascade_params{};
   alignas(16) glm::vec4 shadow_fade_width{};
 };
