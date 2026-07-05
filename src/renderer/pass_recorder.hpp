@@ -187,14 +187,20 @@ struct PassRecorder {
         glm::length(glm::vec3(m[1])) * half_extent.y,
         glm::length(glm::vec3(m[2])) * half_extent.z));
 
+    // Gribb/Hartmann frustum planes from VP matrix (Godot: normalize normals)
     const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
     const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
     const glm::vec4 r2(light_vp[0][2], light_vp[1][2], light_vp[2][2], light_vp[3][2]);
     const glm::vec4 r3(light_vp[0][3], light_vp[1][3], light_vp[2][3], light_vp[3][3]);
 
+    auto norm = [](glm::vec4 p) { return p / glm::length(glm::vec3(p)); };
+    const glm::vec4 planes[6] = {
+        norm(r3 + r0), norm(r3 - r0), norm(r3 + r1),
+        norm(r3 - r1), norm(r3 + r2), norm(r3 - r2)};
+
     auto test = [&](const glm::vec4 &p) { return glm::dot(glm::vec3(p), center) + p.w > -world_radius; };
-    if (!(test(r3 + r0) && test(r3 - r0) && test(r3 + r1) && test(r3 - r1) && test(r3 + r2) && test(r3 - r2)))
-      return;
+    for (const glm::vec4 &p : planes)
+      if (!test(p)) return;
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
 
