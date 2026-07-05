@@ -61,12 +61,13 @@ float3 calcPointLight(GpuPointLight l, float3 fragPos, float3 normal, float3 vie
         else face = (-lightDir.z > 0) ? 4 : 5;
 
         float4x4 vp = ubo.pointLightViewProj[face];
+        float4x4 shadowMtx = ubo.pointLightShadowMatrix[face];
         // 3×2 grid sub-region in atlas (matching render pass layout)
         float fw = 1.0 / 3.0, fh = 1.0 / 2.0;
         float fx = (face % 3) * fw, fy = (face / 3) * fh;
         float4 atlasRect = float4(fx, fy, fw, fh);
         float bias = max(0.001 * (1.0 - ndotl), 0.0002);
-        shadowVis = sampleSpotShadow(fragPos, vp, atlasRect, lightDir, normal, bias);
+        shadowVis = sampleSpotShadow(fragPos, shadowMtx, atlasRect, lightDir, normal, bias);
     }
 
     return min((diffuse + specular) * atten * shadowVis, l.colorIntensity.rgb * l.colorIntensity.w);

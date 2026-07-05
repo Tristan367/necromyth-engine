@@ -305,6 +305,17 @@ public:
       }
     }
 
+    // Compute point shadow VP + shadow matrices (6 cube faces for first shadow-casting light)
+    std::array<glm::mat4, 6> point_vps{};
+    std::array<glm::mat4, 6> point_mtx{};
+    for (const PointLight &pl : scene.point_lights()) {
+      if (pl.casts_shadow) {
+        point_vps = LightStorageBuffer::compute_cube_face_vps(pl);
+        point_mtx = LightStorageBuffer::compute_cube_face_shadow_matrices(pl);
+        break;
+      }
+    }
+
     uniform_buffers_.write(
         frame_index_,
         FrameUniformBufferObject{
@@ -320,6 +331,8 @@ public:
                 scene.directional_light().ambient),
             .light_view_proj = cascades.light_view_proj,
             .spot_light_vp = spot_vps,
+            .point_light_vp = point_vps,
+            .point_light_shadow_mtx = point_mtx,
             .cascade_params = glm::vec4(
                 cascades.split_view_z,
                 shadow_settings.cascade_blend_range,

@@ -81,29 +81,32 @@ public:
   }
 
   static auto compute_cube_face_vps(const PointLight &l) -> std::array<glm::mat4, 6> {
+    // For UBO / vertex shader: proj * view (clip space), NO bias
     const glm::mat4 proj = glm::perspective(glm::radians(90.0F), 1.0F, 0.1F, l.range);
     const glm::vec3 pos(l.position.x, l.position.y, l.position.z);
+    const std::array<glm::vec3, 6> dirs{{
+        { 1, 0, 0}, {-1, 0, 0}, { 0, 1, 0}, { 0,-1, 0}, { 0, 0, 1}, { 0, 0,-1},
+    }};
+    const std::array<glm::vec3, 6> ups{{
+        {0,-1,0}, {0,-1,0}, {0, 0,1}, {0, 0,-1}, {0,-1,0}, {0,-1,0},
+    }};
+    std::array<glm::mat4, 6> vps;
+    for (int i = 0; i < 6; ++i)
+      vps[i] = proj * glm::lookAt(pos, pos + dirs[i], ups[i]);
+    return vps;
+  }
+
+  static auto compute_cube_face_shadow_matrices(const PointLight &l) -> std::array<glm::mat4, 6> {
+    // For SSBO / fragment shader: bias * proj * view (UV space)
     const glm::mat4 bias(glm::vec4(0.5, 0.0, 0.0, 0.0),
                          glm::vec4(0.0, 0.5, 0.0, 0.0),
                          glm::vec4(0.0, 0.0, 1.0, 0.0),
                          glm::vec4(0.5, 0.5, 0.0, 1.0));
-    // Standard cube face directions (right-handed, Y-up)
-    const std::array<glm::vec3, 6> dirs{{
-        { 1, 0, 0}, {-1, 0, 0},  // +X, -X
-        { 0, 1, 0}, { 0,-1, 0},  // +Y, -Y
-        { 0, 0, 1}, { 0, 0,-1},  // +Z, -Z
-    }};
-    const std::array<glm::vec3, 6> ups{{
-        {0,-1,0}, {0,-1,0},       // +X,-X: Y-down
-        {0, 0,1}, {0, 0,-1},      // +Y,-Y: Z-front/back
-        {0,-1,0}, {0,-1,0},       // +Z,-Z: Y-down
-    }};
-    std::array<glm::mat4, 6> vps;
-    for (int i = 0; i < 6; ++i) {
-      const glm::mat4 view = glm::lookAt(pos, pos + dirs[i], ups[i]);
-      vps[i] = bias * proj * view;
-    }
-    return vps;
+    const auto vps = compute_cube_face_vps(l);
+    std::array<glm::mat4, 6> mats;
+    for (int i = 0; i < 6; ++i)
+      mats[i] = glm::transpose(bias * vps[i]);
+    return mats;
   }
 
   void write(std::uint32_t frame_index,
