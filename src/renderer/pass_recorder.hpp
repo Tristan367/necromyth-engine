@@ -587,6 +587,7 @@ struct PassRecorder {
           1,
           0,
           shadow_map.layer_count());
+      layouts.shadow_image_layout = vk::ImageLayout::eDepthAttachmentOptimal;
     }
 
     for (std::uint32_t cascade_index = 0; cascade_index < shadow_cascade_count; ++cascade_index) {
