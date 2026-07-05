@@ -180,7 +180,9 @@ inline void evaluate_pose_layers(
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
   const std::size_t joint_count = skeleton.joint_nodes.size();
 
-  std::unordered_map<std::uint32_t, detail::ChannelNodeMap> channel_maps;
+  thread_local std::unordered_map<std::uint32_t, detail::ChannelNodeMap> tls_channel_maps;
+  auto &channel_maps = tls_channel_maps;
+  channel_maps.clear();
   auto clip_map = [&](std::uint32_t idx) -> const detail::ChannelNodeMap & {
     auto it = channel_maps.find(idx);
     if (it == channel_maps.end())
@@ -201,11 +203,15 @@ inline void evaluate_pose_layers(
   };
 
   std::vector<std::unordered_set<std::uint32_t>> mask_sets(layers.size());
-  for (std::size_t li = 0; li < layers.size(); ++li)
+  for (std::size_t li = 0; li < layers.size(); ++li) {
+    mask_sets[li].clear();
     if (layers[li].mask && !layers[li].mask->empty())
       mask_sets[li].insert(layers[li].mask->begin(), layers[li].mask->end());
+  }
 
-  std::unordered_map<std::uint32_t, glm::mat4> node_anim;
+  thread_local std::unordered_map<std::uint32_t, glm::mat4> tls_node_anim;
+  auto &node_anim = tls_node_anim;
+  node_anim.clear();
   node_anim.reserve(joint_count);
 
   for (std::size_t i = 0; i < joint_count; ++i) {

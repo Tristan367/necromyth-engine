@@ -336,8 +336,8 @@ public:
       for (const MeshInstance &instance : scene.instances()) {
         if (instance.skin_index == k_invalid_skin_index || !instance.pose_layers)
           continue;
-        if (instance.skin_index >= scene.skeletons().size())
-        if (bone_buffer_index >= bone_buffers_.size())
+        if (instance.skin_index >= scene.skeletons().size() ||
+            bone_buffer_index >= bone_buffers_.size())
           break;
 
         joint_matrices.clear();
