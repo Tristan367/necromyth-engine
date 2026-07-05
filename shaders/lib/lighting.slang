@@ -41,6 +41,10 @@ float3 calcPointLight(GpuPointLight l, float3 fragPos, float3 normal, float3 vie
     float atten = 1.0 / (1.0 + dist * dist / max(l.posRange.w * l.posRange.w, 0.0001));
     if (l.posRange.w <= 0.0) atten = 1.0 / max(dist * dist, 0.0001);
 
+    // Range fade: smooth cutoff near max range (last 50%), matching spot lights.
+    if (l.posRange.w > 0.0)
+        atten *= 1.0 - smoothstep(l.posRange.w * 0.5, l.posRange.w, dist);
+
     float ndotl = max(dot(normal, lightDir), 0.0);
     float3 diffuse = l.colorIntensity.rgb * l.colorIntensity.w * ndotl;
 
@@ -51,9 +55,9 @@ float3 calcPointLight(GpuPointLight l, float3 fragPos, float3 normal, float3 vie
     float lightContrib = (diffuse.r + diffuse.g + diffuse.b + specular.r + specular.g + specular.b) * atten;
     if (lightContrib <= 0.0001) return float3(0, 0, 0);
 
-    // Dual-paraboloid shadow (Godot omni model). Enabled flag in params.w.
+    // Shadow (dual-paraboloid). For now always run if x=invRadius > 0.
     float shadowVis = 1.0;
-    if (ubo.pointLightParams.w > 0.5) {
+    if (ubo.pointLightParams.x > 0.0) {
         shadowVis = samplePointShadowDP(fragPos, normal, ndotl);
     }
 
@@ -103,9 +107,10 @@ float samplePointShadowDP(float3 worldPos, float3 normal, float ndotl) {
     float2 pos = shadowSample.xy / max(denom, 1e-4);
     pos = pos * 0.5 + 0.5;
 
-    // Depth to compare: normalized radial distance (matches depth pass).
-    // Subtract the bias so a fragment is only shadowed when it is meaningfully
-    // farther than the nearest recorded caster (prevents acne / self-shadow).
+    // Godot: depth = (shadow_len - bias) * inv_radius, then depth = 1.0 - depth
+    // because Godot's shadow atlas comparison expects inverted depth.
+    // Our atlas stores distance/range directly (not inverted), so we compare
+    // refDepth <= stored (closer fragments are lit, farther are shadowed).
     float depthBias = max(0.0015 * (1.0 - ndotl), 0.0004);
     float refDepth = shadowLen * invRadius - depthBias;
 
