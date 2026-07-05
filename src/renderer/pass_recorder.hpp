@@ -174,20 +174,34 @@ struct PassRecorder {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
 
-    // Inline frustum cull: world-space sphere vs VP matrix (Gribb/Hartmann)
+    // Frustum cull: test model-local AABB corners transformed to world space
     const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
-    const glm::vec3 center = glm::vec3(draw.model * glm::vec4(bounds.center(), 1.0F));
-    const float radius = bounds.radius();
+    const glm::mat4 &model = draw.model;
+    const glm::vec3 corners[8] = {
+        {bounds.min.x, bounds.min.y, bounds.min.z}, {bounds.min.x, bounds.min.y, bounds.max.z},
+        {bounds.min.x, bounds.max.y, bounds.min.z}, {bounds.min.x, bounds.max.y, bounds.max.z},
+        {bounds.max.x, bounds.min.y, bounds.min.z}, {bounds.max.x, bounds.min.y, bounds.max.z},
+        {bounds.max.x, bounds.max.y, bounds.min.z}, {bounds.max.x, bounds.max.y, bounds.max.z},
+    };
+    glm::vec3 world_corners[8];
+    for (int i = 0; i < 8; ++i)
+      world_corners[i] = glm::vec3(model * glm::vec4(corners[i], 1.0F));
+
+    // Gribb/Hartmann frustum planes from VP matrix
     const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
     const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
     const glm::vec4 r2(light_vp[0][2], light_vp[1][2], light_vp[2][2], light_vp[3][2]);
     const glm::vec4 r3(light_vp[0][3], light_vp[1][3], light_vp[2][3], light_vp[3][3]);
+    const glm::vec4 planes[6] = {r3 + r0, r3 - r0, r3 + r1, r3 - r1, r3 + r2, r3 - r2};
 
-    auto test_plane = [&](const glm::vec4 &p) { return glm::dot(glm::vec3(p), center) + p.w > -radius; };
-    if (!(test_plane(r3 + r0) && test_plane(r3 - r0) &&
-          test_plane(r3 + r1) && test_plane(r3 - r1) &&
-          test_plane(r3 + r2) && test_plane(r3 - r2)))
-      return;
+    // Cull if ALL 8 corners are outside ANY single plane
+    for (const glm::vec4 &p : planes) {
+      bool all_outside = true;
+      for (int i = 0; i < 8; ++i) {
+        if (glm::dot(glm::vec3(p), world_corners[i]) + p.w > 0.0F) { all_outside = false; break; }
+      }
+      if (all_outside) return;
+    }
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
 
