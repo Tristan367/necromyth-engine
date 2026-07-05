@@ -328,7 +328,7 @@ public:
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
 
-    light_buffer_.write(scene.point_lights(), scene.spot_lights(), 2048.0F);
+    light_buffer_.write(scene.point_lights(), scene.spot_lights(), 1024.0F);
 
     if (!bone_buffers_.empty()) {
       std::vector<glm::mat4> joint_matrices;
@@ -354,15 +354,20 @@ public:
     }
 
     build_draw_list(scene, draw_list_);
+    build_shadow_draw_list(draw_list_, shadow_draw_list_);
 
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
     command_buffer.begin({});
-    pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, draw_list_);
+    pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, shadow_draw_list_);
 
-    // Spot shadow pass (Godot-style atlas)
-    pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
-                                              draw_list_, *spot_atlas_, *spot_atlas_view_);
+    // Spot shadow pass (Godot-style atlas) — only when shadow-casting spot lights exist
+    bool has_spot_shadows = false;
+    for (const SpotLight &sl : scene.spot_lights())
+      if (sl.casts_shadow) { has_spot_shadows = true; break; }
+    if (has_spot_shadows)
+      pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
+                                                shadow_draw_list_, *spot_atlas_, *spot_atlas_view_);
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
     pass_recorder().record_main_pass(
@@ -775,6 +780,7 @@ private:
   DescriptorResources descriptor_resources_;
   PipelineRegistry pipelines_;
   std::vector<DrawCommand> draw_list_;
+  std::vector<DrawCommand> shadow_draw_list_;
   PassLayoutState pass_layouts_{};
   std::vector<BoneStorageBufferSet> bone_buffers_;
   std::vector<std::uint32_t> skinned_texture_indices_;

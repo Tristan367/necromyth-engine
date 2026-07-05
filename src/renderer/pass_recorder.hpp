@@ -560,11 +560,11 @@ struct PassRecorder {
     command_buffer.endRendering();
   }
 
-  void record_shadow_pass(
-      vk::raii::CommandBuffer &command_buffer,
-      std::uint32_t frame_index,
-      PassLayoutState &layouts,
-      const std::vector<DrawCommand> &draw_list) const {
+   void record_shadow_pass(
+       vk::raii::CommandBuffer &command_buffer,
+       std::uint32_t frame_index,
+       PassLayoutState &layouts,
+       const std::vector<DrawCommand> &shadow_draws) const {
     const vk::ImageLayout previous_layout = layouts.shadow_image_layout;
     const vk::AccessFlags2 previous_access =
         previous_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead;
@@ -585,10 +585,7 @@ struct PassRecorder {
         0,
         1,
         0,
-        shadow_map.layer_count());
-
-    std::vector<DrawCommand> shadow_draws;
-    build_shadow_draw_list(draw_list, shadow_draws);
+         shadow_map.layer_count());
 
     for (std::uint32_t cascade_index = 0; cascade_index < shadow_cascade_count; ++cascade_index) {
       const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
@@ -655,9 +652,6 @@ struct PassRecorder {
       const std::vector<DrawCommand> &draw_list,
       vk::Image atlas_image,
       vk::ImageView atlas_view) const {
-    std::vector<DrawCommand> shadow_draws;
-    build_shadow_draw_list(draw_list, shadow_draws);
-
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
 
@@ -700,7 +694,7 @@ struct PassRecorder {
       command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
       const std::uint32_t cascade_idx = 2 + light_idx;
-      for (const DrawCommand &draw : shadow_draws)
+      for (const DrawCommand &draw : draw_list)
         draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, bind_state);
 
       command_buffer.endRendering();
