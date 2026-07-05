@@ -174,10 +174,21 @@ struct PassRecorder {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
 
-    // Frustum cull: skip mesh if its AABB (transformed by model) is outside the light frustum
+    // Frustum cull: test world-space AABB against light view-projection
     const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
-    const AABB world_bounds = bounds; // TODO: transform by draw.model for non-identity scaled meshes
-    if (!world_bounds.intersects_frustum(light_vp * draw.model))
+    // Transform AABB to world space using instance model matrix
+    const glm::vec3 center = glm::vec3(draw.model * glm::vec4(bounds.center(), 1.0F));
+    float radius = bounds.radius(); // approximate, fine for shadow culling
+    // Quick sphere-frustum test
+    const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
+    const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
+    const glm::vec4 r2(light_vp[0][2], light_vp[1][2], light_vp[2][2], light_vp[3][2]);
+    const glm::vec4 r3(light_vp[0][3], light_vp[1][3], light_vp[2][3], light_vp[3][3]);
+
+    const auto test = [&](const glm::vec4 &plane) -> bool {
+      return glm::dot(glm::vec3(plane), center) + plane.w > -radius;
+    };
+    if (!(test(r3 + r0) && test(r3 - r0) && test(r3 + r1) && test(r3 - r1) && test(r3 + r2) && test(r3 - r2)))
       return;
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
