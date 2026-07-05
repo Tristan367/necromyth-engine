@@ -51,23 +51,20 @@ float3 calcPointLight(GpuPointLight l, float3 fragPos, float3 normal, float3 vie
     float lightContrib = (diffuse.r + diffuse.g + diffuse.b + specular.r + specular.g + specular.b) * atten;
     if (lightContrib <= 0.0001) return float3(0, 0, 0);
 
-    // Per-cube-face shadow (simple: check 6 VP matrices, test against each face)
+    // Cube-face shadow: determine face from dominant axis, sample from atlas sub-region
     float shadowVis = 1.0;
     if (l.shadowMatrix[0][0] != 0.0 || l.shadowMatrix[1][1] != 0.0) {
-        // Find dominant axis to pick cube face
         float3 d = abs(-lightDir);
         int face;
-        float4x4 vp;
-        float4 atlasRect;
-        if (d.x >= d.y && d.x >= d.z) {
-            face = (-lightDir.x > 0) ? 0 : 1;
-        } else if (d.y >= d.x && d.y >= d.z) {
-            face = (-lightDir.y > 0) ? 2 : 3;
-        } else {
-            face = (-lightDir.z > 0) ? 4 : 5;
-        }
-        vp = ubo.pointLightViewProj[face];
-        atlasRect = l.atlasRect;
+        if (d.x >= d.y && d.x >= d.z) face = (-lightDir.x > 0) ? 0 : 1;
+        else if (d.y >= d.x && d.y >= d.z) face = (-lightDir.y > 0) ? 2 : 3;
+        else face = (-lightDir.z > 0) ? 4 : 5;
+
+        float4x4 vp = ubo.pointLightViewProj[face];
+        // 3×2 grid sub-region in atlas (matching render pass layout)
+        float fw = 1.0 / 3.0, fh = 1.0 / 2.0;
+        float fx = (face % 3) * fw, fy = (face / 3) * fh;
+        float4 atlasRect = float4(fx, fy, fw, fh);
         float bias = max(0.001 * (1.0 - ndotl), 0.0002);
         shadowVis = sampleSpotShadow(fragPos, vp, atlasRect, lightDir, normal, bias);
     }

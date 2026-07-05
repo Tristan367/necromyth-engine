@@ -743,18 +743,25 @@ struct PassRecorder {
       ++light_idx;
     }
 
-    // Point light shadows: 6 cube faces per shadow-casting point light
+    // Point light shadows: 6 cube faces in a 3×2 grid on the atlas
+    const int grid_w = 3, grid_h = 2;
+    const float face_w = atlas_ext.width / grid_w;
+    const float face_h = atlas_ext.height / grid_h;
+
     for (std::uint32_t si = 0; si < scene.point_lights().size(); ++si) {
       if (!scene.point_lights()[si].casts_shadow) continue;
 
       const auto face_vps = LightStorageBuffer::compute_cube_face_vps(scene.point_lights()[si]);
       for (int face = 0; face < 6; ++face) {
-        const vk::Rect2D region{{0, 0}, atlas_ext};
+        const int col = face % grid_w;
+        const int row = face / grid_w;
+        const vk::Rect2D region{{int32_t(col * face_w), int32_t(row * face_h)},
+                                 {uint32_t(face_w), uint32_t(face_h)}};
         const vk::ClearValue cd{vk::ClearDepthStencilValue{1.0F, 0}};
         vk::RenderingAttachmentInfo da{};
         da.imageView = atlas_view;
         da.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
-        da.loadOp = vk::AttachmentLoadOp::eClear;
+        da.loadOp = (face == 0) ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
         da.storeOp = vk::AttachmentStoreOp::eStore;
         da.clearValue = cd;
         vk::RenderingInfo ri{};
@@ -763,7 +770,7 @@ struct PassRecorder {
         ri.pDepthAttachment = &da;
         command_buffer.beginRendering(ri);
         bind_pass_descriptors(command_buffer, frame_index);
-        command_buffer.setViewport(0, vk::Viewport{0, 0, (float)atlas_ext.width, (float)atlas_ext.height, 0, 1});
+        command_buffer.setViewport(0, vk::Viewport{0, 0, face_w, face_h, 0, 1});
         command_buffer.setScissor(0, region);
         command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0, k_shadow_depth_bias_slope);
 
