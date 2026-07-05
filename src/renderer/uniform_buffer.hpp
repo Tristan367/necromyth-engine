@@ -23,6 +23,7 @@ struct FrameUniformBufferObject {
   alignas(16) glm::vec4 light_color{};
   alignas(16) std::array<glm::mat4, k_max_shadow_cascades> light_view_proj{}; // 0-1 = directional, 2-5 = spot
   alignas(16) std::array<glm::mat4, 4> spot_light_vp{}; // indices 2-5 of the GLSL array
+  alignas(16) std::array<glm::mat4, 6> point_light_vp{}; // indices 6-11
   alignas(16) glm::vec4 cascade_params{};
   alignas(16) glm::vec4 shadow_fade_width{};
 };

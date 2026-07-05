@@ -743,6 +743,37 @@ struct PassRecorder {
       ++light_idx;
     }
 
+    // Point light shadows: 6 cube faces per shadow-casting point light
+    for (std::uint32_t si = 0; si < scene.point_lights().size(); ++si) {
+      if (!scene.point_lights()[si].casts_shadow) continue;
+
+      const auto face_vps = LightStorageBuffer::compute_cube_face_vps(scene.point_lights()[si]);
+      for (int face = 0; face < 6; ++face) {
+        const vk::Rect2D region{{0, 0}, atlas_ext};
+        const vk::ClearValue cd{vk::ClearDepthStencilValue{1.0F, 0}};
+        vk::RenderingAttachmentInfo da{};
+        da.imageView = atlas_view;
+        da.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
+        da.loadOp = vk::AttachmentLoadOp::eClear;
+        da.storeOp = vk::AttachmentStoreOp::eStore;
+        da.clearValue = cd;
+        vk::RenderingInfo ri{};
+        ri.renderArea = region;
+        ri.layerCount = 1;
+        ri.pDepthAttachment = &da;
+        command_buffer.beginRendering(ri);
+        bind_pass_descriptors(command_buffer, frame_index);
+        command_buffer.setViewport(0, vk::Viewport{0, 0, (float)atlas_ext.width, (float)atlas_ext.height, 0, 1});
+        command_buffer.setScissor(0, region);
+        command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0, k_shadow_depth_bias_slope);
+
+        const std::uint32_t ci = 6 + face;
+        for (const DrawCommand &draw : draw_list)
+          draw_shadow_mesh(command_buffer, draw, ci, frame_index, face_vps[face], bind_state);
+        command_buffer.endRendering();
+      }
+    }
+
     // Barrier: depth attachment → shader read (skip if already correct)
     if (layouts.spot_atlas_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
       transition_image_layout(command_buffer, atlas_image,

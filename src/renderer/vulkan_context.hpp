@@ -368,7 +368,10 @@ public:
     bool has_spot_shadows = false;
     for (const SpotLight &sl : scene.spot_lights())
       if (sl.casts_shadow) { has_spot_shadows = true; break; }
-    if (has_spot_shadows)
+    bool has_point_shadows = false;
+    for (const PointLight &pl : scene.point_lights())
+      if (pl.casts_shadow) { has_point_shadows = true; break; }
+    if (has_spot_shadows || has_point_shadows)
       pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
                                                 shadow_draw_list_, *spot_atlas_, *spot_atlas_view_,
                                                 startup_spot_atlas_size_);

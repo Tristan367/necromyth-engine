@@ -14,6 +14,9 @@ float4 vertMainSkinned(VSInputSkinned input) : SV_Position {
         input.inJointWeights.w * jointMatrices[(int)input.inJointIndices.w];
 
     uint cascade = pushConstants.shadowCascadeIndex;
-    float4x4 vp = cascade < 2 ? ubo.lightViewProj[cascade] : ubo.spotLightViewProj[cascade - 2];
+    float4x4 vp;
+    if (cascade < 2)      vp = ubo.lightViewProj[cascade];
+    else if (cascade < 6) vp = ubo.spotLightViewProj[cascade - 2];
+    else                  vp = ubo.pointLightViewProj[cascade - 6];
     return mul(vp, mul(pushConstants.model, mul(skinMat, float4(input.inPosition, 1.0))));
 }

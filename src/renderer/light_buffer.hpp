@@ -28,6 +28,8 @@ public:
   struct GpuPointLight {
     float pos_range[4];
     float color_intensity[4];
+    float shadow_matrix[16]; // per-face VP (0 = no shadow)
+    float atlas_rect[4];     // xy = UV offset, zw = UV scale
   };
 
   struct GpuSpotLight {
@@ -78,6 +80,32 @@ public:
     return bias * compute_shadow_view_proj(l);
   }
 
+  static auto compute_cube_face_vps(const PointLight &l) -> std::array<glm::mat4, 6> {
+    const glm::mat4 proj = glm::perspective(glm::radians(90.0F), 1.0F, 0.1F, l.range);
+    const glm::vec3 pos(l.position.x, l.position.y, l.position.z);
+    const glm::mat4 bias(glm::vec4(0.5, 0.0, 0.0, 0.0),
+                         glm::vec4(0.0, 0.5, 0.0, 0.0),
+                         glm::vec4(0.0, 0.0, 1.0, 0.0),
+                         glm::vec4(0.5, 0.5, 0.0, 1.0));
+    // Standard cube face directions (right-handed, Y-up)
+    const std::array<glm::vec3, 6> dirs{{
+        { 1, 0, 0}, {-1, 0, 0},  // +X, -X
+        { 0, 1, 0}, { 0,-1, 0},  // +Y, -Y
+        { 0, 0, 1}, { 0, 0,-1},  // +Z, -Z
+    }};
+    const std::array<glm::vec3, 6> ups{{
+        {0,-1,0}, {0,-1,0},       // +X,-X: Y-down
+        {0, 0,1}, {0, 0,-1},      // +Y,-Y: Z-front/back
+        {0,-1,0}, {0,-1,0},       // +Z,-Z: Y-down
+    }};
+    std::array<glm::mat4, 6> vps;
+    for (int i = 0; i < 6; ++i) {
+      const glm::mat4 view = glm::lookAt(pos, pos + dirs[i], ups[i]);
+      vps[i] = bias * proj * view;
+    }
+    return vps;
+  }
+
   void write(std::uint32_t frame_index,
              const std::vector<PointLight> &point_lights,
              const std::vector<SpotLight> &spot_lights,
@@ -103,6 +131,17 @@ public:
       ptrs[i].color_intensity[1] = point_lights[i].color.g;
       ptrs[i].color_intensity[2] = point_lights[i].color.b;
       ptrs[i].color_intensity[3] = point_lights[i].intensity;
+      // Shadow data: write identity matrix as shadow sentinel (non-zero → enabled)
+      if (point_lights[i].casts_shadow) {
+        ptrs[i].shadow_matrix[0] = 1.0f;
+        ptrs[i].atlas_rect[0] = 0.0f;
+        ptrs[i].atlas_rect[1] = 0.0f;
+        ptrs[i].atlas_rect[2] = 1.0f;
+        ptrs[i].atlas_rect[3] = 1.0f;
+      } else {
+        std::memset(ptrs[i].shadow_matrix, 0, sizeof(ptrs[i].shadow_matrix));
+        std::memset(ptrs[i].atlas_rect, 0, sizeof(ptrs[i].atlas_rect));
+      }
     }
 
     auto *sptr = reinterpret_cast<GpuSpotLight *>(data + 16 + num_point * sizeof(GpuPointLight));
