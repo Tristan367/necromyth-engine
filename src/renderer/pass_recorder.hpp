@@ -565,27 +565,29 @@ struct PassRecorder {
        std::uint32_t frame_index,
        PassLayoutState &layouts,
        const std::vector<DrawCommand> &shadow_draws) const {
-    const vk::ImageLayout previous_layout = layouts.shadow_image_layout;
-    const vk::AccessFlags2 previous_access =
-        previous_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead;
-    const vk::PipelineStageFlags2 previous_stage =
-        previous_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe
-                                                       : vk::PipelineStageFlagBits2::eFragmentShader;
+    if (layouts.shadow_image_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
+      const vk::ImageLayout previous_layout = layouts.shadow_image_layout;
+      const vk::AccessFlags2 previous_access =
+          previous_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead;
+      const vk::PipelineStageFlags2 previous_stage =
+          previous_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe
+                                                         : vk::PipelineStageFlagBits2::eFragmentShader;
 
-    transition_image_layout(
-        command_buffer,
-        shadow_map.image(),
-        previous_layout,
-        vk::ImageLayout::eDepthAttachmentOptimal,
-        previous_access,
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        previous_stage,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        shadow_map.aspect_mask(),
-        0,
-        1,
-        0,
-         shadow_map.layer_count());
+      transition_image_layout(
+          command_buffer,
+          shadow_map.image(),
+          previous_layout,
+          vk::ImageLayout::eDepthAttachmentOptimal,
+          previous_access,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          previous_stage,
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          shadow_map.aspect_mask(),
+          0,
+          1,
+          0,
+          shadow_map.layer_count());
+    }
 
     for (std::uint32_t cascade_index = 0; cascade_index < shadow_cascade_count; ++cascade_index) {
       const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
@@ -626,22 +628,24 @@ struct PassRecorder {
       command_buffer.endRendering();
     }
 
-    transition_image_layout(
-        command_buffer,
-        shadow_map.image(),
-        vk::ImageLayout::eDepthAttachmentOptimal,
-        vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::AccessFlagBits2::eShaderRead,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::PipelineStageFlagBits2::eFragmentShader,
-        shadow_map.aspect_mask(),
-        0,
-        1,
-        0,
-        shadow_map.layer_count());
+    if (layouts.shadow_image_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
+      transition_image_layout(
+          command_buffer,
+          shadow_map.image(),
+          vk::ImageLayout::eDepthAttachmentOptimal,
+          vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          vk::AccessFlagBits2::eShaderRead,
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          vk::PipelineStageFlagBits2::eFragmentShader,
+          shadow_map.aspect_mask(),
+          0,
+          1,
+          0,
+          shadow_map.layer_count());
 
-    layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+      layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+    }
   }
 
    void record_spot_shadow_pass(
