@@ -4,6 +4,7 @@
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
 #include "renderer/image_barrier.hpp"
+#include "renderer/light_buffer.hpp"
 #include "renderer/mesh_gpu.hpp"
 #include "renderer/msaa_color_image.hpp"
 #include "renderer/pipeline_id.hpp"
@@ -168,8 +169,15 @@ struct PassRecorder {
       const DrawCommand &draw,
       std::uint32_t cascade_index,
       std::uint32_t frame_index,
+      const glm::mat4 &light_vp,
       DrawBindState &state) const {
     if (draw.mesh_index >= mesh_gpus.size())
+      return;
+
+    // Frustum cull: skip mesh if its AABB (transformed by model) is outside the light frustum
+    const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
+    const AABB world_bounds = bounds; // TODO: transform by draw.model for non-identity scaled meshes
+    if (!world_bounds.intersects_frustum(light_vp * draw.model))
       return;
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
@@ -564,7 +572,8 @@ struct PassRecorder {
        vk::raii::CommandBuffer &command_buffer,
        std::uint32_t frame_index,
        PassLayoutState &layouts,
-       const std::vector<DrawCommand> &shadow_draws) const {
+       const std::vector<DrawCommand> &shadow_draws,
+       const std::array<glm::mat4, k_max_shadow_cascades> &cascade_vps) const {
     if (layouts.shadow_image_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
       const vk::ImageLayout previous_layout = layouts.shadow_image_layout;
       const vk::AccessFlags2 previous_access =
@@ -623,8 +632,10 @@ struct PassRecorder {
 
       DrawBindState bind_state{};
       bind_state.frame_index = frame_index;
-      for (const DrawCommand &draw : shadow_draws)
-        draw_shadow_mesh(command_buffer, draw, cascade_index, frame_index, bind_state);
+      for (const DrawCommand &draw : shadow_draws) {
+        const glm::mat4 &vp = cascade_vps[cascade_index];
+        draw_shadow_mesh(command_buffer, draw, cascade_index, frame_index, vp, bind_state);
+      }
 
       command_buffer.endRendering();
     }
@@ -702,8 +713,9 @@ struct PassRecorder {
       command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
       const std::uint32_t cascade_idx = 2 + light_idx;
+      const glm::mat4 spot_vp = LightStorageBuffer::compute_shadow_view_proj(sl);
       for (const DrawCommand &draw : draw_list)
-        draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, bind_state);
+        draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, spot_vp, bind_state);
 
       command_buffer.endRendering();
       ++light_idx;

@@ -362,7 +362,8 @@ public:
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
     command_buffer.begin({});
-    pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, shadow_draw_list_);
+    pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, shadow_draw_list_,
+                                         cascades.light_view_proj);
 
     // Spot shadow pass (Godot-style atlas) — only when shadow-casting spot lights exist
     bool has_spot_shadows = false;
