@@ -180,11 +180,12 @@ struct PassRecorder {
     const glm::mat4 &m = draw.model;
     const glm::vec3 center = glm::vec3(m * glm::vec4(bounds.center(), 1.0F));
     // Scale radius to world space: max of the 3 scaled extent components
-    const glm::vec3 extents = bounds.max - bounds.min;
-    const float world_radius = std::max({
-        glm::length(glm::vec3(m[0])) * extents.x,
-        glm::length(glm::vec3(m[1])) * extents.y,
-        glm::length(glm::vec3(m[2])) * extents.z}) * 0.5F;
+    const glm::vec3 half_extent = (bounds.max - bounds.min) * 0.5F;
+    // Bounding sphere radius: distance from center to any corner (true enclosing sphere)
+    const float world_radius = glm::length(glm::vec3(
+        glm::length(glm::vec3(m[0])) * half_extent.x,
+        glm::length(glm::vec3(m[1])) * half_extent.y,
+        glm::length(glm::vec3(m[2])) * half_extent.z));
 
     const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
     const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
