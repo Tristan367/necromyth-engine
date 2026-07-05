@@ -202,7 +202,10 @@ inline void evaluate_pose_layers(
     return blend_bone_trs(a, b, layer.xfade_weight);
   };
 
-  std::vector<std::unordered_set<std::uint32_t>> mask_sets(layers.size());
+  // Reused across calls (per thread) to avoid per-frame heap churn. resize()
+  // keeps capacity; each set is cleared then refilled from the (static) mask.
+  thread_local std::vector<std::unordered_set<std::uint32_t>> mask_sets;
+  mask_sets.resize(layers.size());
   for (std::size_t li = 0; li < layers.size(); ++li) {
     mask_sets[li].clear();
     if (layers[li].mask && !layers[li].mask->empty())

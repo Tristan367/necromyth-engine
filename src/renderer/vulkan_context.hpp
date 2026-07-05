@@ -328,7 +328,8 @@ public:
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
 
-    light_buffer_.write(scene.point_lights(), scene.spot_lights(), static_cast<float>(startup_spot_atlas_size_));
+    light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(),
+                         static_cast<float>(startup_spot_atlas_size_));
 
     if (!bone_buffers_.empty()) {
       std::vector<glm::mat4> joint_matrices;
@@ -336,8 +337,9 @@ public:
       for (const MeshInstance &instance : scene.instances()) {
         if (instance.skin_index == k_invalid_skin_index || !instance.pose_layers)
           continue;
-        if (instance.skin_index >= scene.skeletons().size() ||
-            bone_buffer_index >= bone_buffers_.size())
+        if (instance.skin_index >= scene.skeletons().size())
+          continue;
+        if (bone_buffer_index >= bone_buffers_.size())
           break;
 
         joint_matrices.clear();
@@ -354,10 +356,7 @@ public:
     }
 
     build_draw_list(scene, draw_list_);
-    if (draw_list_.size() != last_draw_list_size_) {
-      build_shadow_draw_list(draw_list_, shadow_draw_list_);
-      last_draw_list_size_ = draw_list_.size();
-    }
+    build_shadow_draw_list(draw_list_, shadow_draw_list_);
 
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
@@ -574,7 +573,8 @@ private:
         texture_array_.view(),
         shadow_map_.sampler_for_settings(startup_point_shadow_filter_),
         shadow_map_.view());
-    descriptor_resources_.update_light_buffers(device_.device(), light_buffer_.buffer_ptr());
+    descriptor_resources_.update_light_buffers(device_.device(), {
+        light_buffer_.buffer_ptr(0), light_buffer_.buffer_ptr(1)});
     descriptor_resources_.update_spot_shadow_sampler(device_.device(), *spot_atlas_sampler_,
                                                       *spot_atlas_view_);
 
@@ -787,7 +787,6 @@ private:
   PipelineRegistry pipelines_;
   std::vector<DrawCommand> draw_list_;
   std::vector<DrawCommand> shadow_draw_list_;
-  std::size_t last_draw_list_size_{0};
   PassLayoutState pass_layouts_{};
   std::vector<BoneStorageBufferSet> bone_buffers_;
   std::vector<std::uint32_t> skinned_texture_indices_;

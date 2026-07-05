@@ -12,8 +12,10 @@
 #include <vulkan/vulkan_raii.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -21,12 +23,7 @@ namespace engine {
 
 class LightStorageBuffer {
 public:
-  // GPU layout (Godot-style, 16-byte aligned):
-  //   PointLight: vec4(pos.xyz, range), vec4(color.rgb, intensity)
-  //   SpotLight:  vec4(pos.xyz, range), vec4(color.rgb, intensity),
-  //               vec4(dir.xyz, pad),   vec4(inner, outer, 0, 0),
-  //               mat4(shadowMatrix),    vec4(atlas_uv_offset.xy, atlas_uv_scale.xy)
-  // Buffer: [uint numPoint, uint numSpot, uint pad0, uint pad1][PointLight...][SpotLight...]
+  static constexpr std::uint32_t k_frames_in_flight = 2;
 
   struct GpuPointLight {
     float pos_range[4];
@@ -38,8 +35,8 @@ public:
     float color_intensity[4];
     float dir_pad[4];
     float angles[4];
-    float shadow_matrix[16]; // bias * proj * view (0 = no shadow)
-    float atlas_rect[4];     // xy = UV offset within atlas, zw = UV scale
+    float shadow_matrix[16];
+    float atlas_rect[4];
   };
 
   void create(
@@ -49,35 +46,30 @@ public:
     max_lights_ = max_lights;
     const auto mem_props = physical_device.getMemoryProperties();
     const vk::DeviceSize buf_size = 16 + max_lights * (sizeof(GpuPointLight) + sizeof(GpuSpotLight));
-    buffer_ = vk::raii::Buffer(device, vk::BufferCreateInfo{
-        .size = buf_size,
-        .usage = vk::BufferUsageFlagBits::eStorageBuffer,
-    });
-    const auto requirements = buffer_.getMemoryRequirements();
-    const auto mem_type = detail::find_memory_type(
-        mem_props, requirements.memoryTypeBits,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    memory_ = vk::raii::DeviceMemory(device,
-        vk::MemoryAllocateInfo{.allocationSize = requirements.size, .memoryTypeIndex = mem_type});
-    buffer_.bindMemory(*memory_, 0);
-    mapped_ = static_cast<std::uint8_t *>(memory_.mapMemory(0, buf_size));
+
+    for (std::size_t i = 0; i < k_frames_in_flight; ++i) {
+      buffers_[i].emplace(device, vk::BufferCreateInfo{
+          .size = buf_size,
+          .usage = vk::BufferUsageFlagBits::eStorageBuffer,
+      });
+      auto reqs = buffers_[i]->getMemoryRequirements();
+      auto mt = detail::find_memory_type(mem_props, reqs.memoryTypeBits,
+          vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+      memories_[i].emplace(device,
+          vk::MemoryAllocateInfo{.allocationSize = reqs.size, .memoryTypeIndex = mt});
+      buffers_[i]->bindMemory(**memories_[i], 0);
+      mapped_[i] = static_cast<std::uint8_t *>(memories_[i]->mapMemory(0, buf_size));
+    }
   }
 
-  // Clip-space VP (proj * view) used by the depth pass vertex shader.
-  // MUST NOT include the bias remap: SV_Position needs clip space [-1,1],
-  // not the [0,1] atlas-UV space. Applying the bias here squashes the whole
-  // scene into one atlas quadrant (the striping / scatter artifact).
   static auto compute_shadow_view_proj(const SpotLight &l) -> glm::mat4 {
     const glm::vec3 dir = glm::normalize(l.direction);
     const glm::mat4 proj = glm::perspective(l.outer_angle * 2.0F, 1.0F, 0.1F, l.range);
-    // Avoid degenerate lookAt when direction is near-vertical
     const glm::vec3 up = std::abs(dir.y) > 0.99F ? glm::vec3(0.0F, 0.0F, 1.0F) : glm::vec3(0.0F, 1.0F, 0.0F);
     const glm::mat4 view = glm::lookAt(l.position, l.position + dir, up);
     return proj * view;
   }
 
-  // Bias-remapped VP (bias * proj * view) used by the lighting fragment
-  // shader to map a world position directly to atlas UV + light-space depth.
   static auto compute_shadow_matrix(const SpotLight &l) -> glm::mat4 {
     const glm::mat4 bias(glm::vec4(0.5, 0.0, 0.0, 0.0),
                          glm::vec4(0.0, 0.5, 0.0, 0.0),
@@ -86,15 +78,17 @@ public:
     return bias * compute_shadow_view_proj(l);
   }
 
-  void write(const std::vector<PointLight> &point_lights,
+  void write(std::uint32_t frame_index,
+             const std::vector<PointLight> &point_lights,
              const std::vector<SpotLight> &spot_lights,
              float atlas_size = 2048.0F) {
+    if (frame_index >= k_frames_in_flight) return;
     const std::size_t num_point = std::min(point_lights.size(), max_lights_);
     const std::size_t num_spot = std::min(spot_lights.size(), max_lights_ - num_point);
     const vk::DeviceSize size = 16 + num_point * sizeof(GpuPointLight) + num_spot * sizeof(GpuSpotLight);
-    if (size == 0 || !mapped_) return;
+    if (size == 0 || !mapped_[frame_index]) return;
 
-    auto *data = mapped_;
+    auto *data = mapped_[frame_index];
     auto *header = reinterpret_cast<std::uint32_t *>(data);
     header[0] = static_cast<std::uint32_t>(num_point);
     header[1] = static_cast<std::uint32_t>(num_spot);
@@ -128,15 +122,9 @@ public:
       sptr[i].angles[0] = spot_lights[i].inner_angle;
       sptr[i].angles[1] = spot_lights[i].outer_angle;
 
-      // Shadow data (Godot-style atlas sub-region).
-      // glm::mat4 is column-major in memory. The shader loads 4 consecutive
-      // float4s into shadowMatrix[0..3] (Slang row indexing), so storing the
-      // transpose makes the shader's rows equal M's rows: mul(shadowMatrix, v)
-      // == M * v (correct).
       if (spot_lights[i].casts_shadow) {
         const glm::mat4 sm = glm::transpose(compute_shadow_matrix(spot_lights[i]));
         std::memcpy(sptr[i].shadow_matrix, &sm[0][0], sizeof(sm));
-        // Simple row-based sub-allocation: each light gets full atlas width, split vertically
         const float region_h = atlas_size / static_cast<float>(num_spot);
         const float uv_x = 0.0F;
         const float uv_y = static_cast<float>(i) * region_h / atlas_size;
@@ -151,18 +139,16 @@ public:
         std::memset(sptr[i].atlas_rect, 0, sizeof(sptr[i].atlas_rect));
       }
     }
-
-    // No unmap — persistently mapped like bone buffers
   }
 
-  [[nodiscard]] auto buffer() const -> const vk::raii::Buffer & { return buffer_; }
-  [[nodiscard]] auto buffer_ptr() const -> vk::Buffer { return *buffer_; }
-  [[nodiscard]] auto spot_gpu_size() const -> vk::DeviceSize { return sizeof(GpuSpotLight); }
+  [[nodiscard]] auto buffer_ptr(std::uint32_t frame_index) const -> vk::Buffer {
+    return frame_index < k_frames_in_flight && buffers_[frame_index] ? **buffers_[frame_index] : vk::Buffer{};
+  }
 
 private:
-  vk::raii::Buffer buffer_{nullptr};
-  vk::raii::DeviceMemory memory_{nullptr};
-  std::uint8_t *mapped_{nullptr};
+  std::array<std::optional<vk::raii::Buffer>, k_frames_in_flight> buffers_{};
+  std::array<std::optional<vk::raii::DeviceMemory>, k_frames_in_flight> memories_{};
+  std::array<std::uint8_t *, k_frames_in_flight> mapped_{};
   std::size_t max_lights_{0};
 };
 

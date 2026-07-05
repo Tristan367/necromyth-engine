@@ -273,22 +273,22 @@ public:
     return shadow_bone_sets_.at(static_cast<std::size_t>(instance) * 2 + frame);
   }
 
-  void update_light_buffers(vk::raii::Device &device, vk::Buffer light_buffer) {
-    const vk::DescriptorBufferInfo light_info{
-        .buffer = light_buffer,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    for (const vk::DescriptorSet &set : frame_sets_) {
-      const vk::WriteDescriptorSet write{
-          .dstSet = set,
-          .dstBinding = 3,
-          .dstArrayElement = 0,
-          .descriptorCount = 1,
-          .descriptorType = vk::DescriptorType::eStorageBuffer,
-          .pBufferInfo = &light_info,
+  void update_light_buffers(vk::raii::Device &device, const std::array<vk::Buffer, 2> &light_buffers) {
+    for (std::uint32_t i = 0; i < frame_count_ && i < 2; ++i) {
+      const vk::DescriptorBufferInfo light_info{
+          .buffer = light_buffers[i],
+          .offset = 0,
+          .range = VK_WHOLE_SIZE,
       };
-      device.updateDescriptorSets(write, nullptr);
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = frame_sets_[i],
+              .dstBinding = 3,
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eStorageBuffer,
+              .pBufferInfo = &light_info,
+          },
+          nullptr);
     }
   }
 
