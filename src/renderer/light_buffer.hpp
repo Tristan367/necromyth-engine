@@ -60,6 +60,7 @@ public:
     memory_ = vk::raii::DeviceMemory(device,
         vk::MemoryAllocateInfo{.allocationSize = requirements.size, .memoryTypeIndex = mem_type});
     buffer_.bindMemory(*memory_, 0);
+    mapped_ = static_cast<std::uint8_t *>(memory_.mapMemory(0, buf_size));
   }
 
   // Clip-space VP (proj * view) used by the depth pass vertex shader.
@@ -91,9 +92,9 @@ public:
     const std::size_t num_point = std::min(point_lights.size(), max_lights_);
     const std::size_t num_spot = std::min(spot_lights.size(), max_lights_ - num_point);
     const vk::DeviceSize size = 16 + num_point * sizeof(GpuPointLight) + num_spot * sizeof(GpuSpotLight);
-    if (size == 0) return;
+    if (size == 0 || !mapped_) return;
 
-    auto *data = static_cast<std::uint8_t *>(memory_.mapMemory(0, size));
+    auto *data = mapped_;
     auto *header = reinterpret_cast<std::uint32_t *>(data);
     header[0] = static_cast<std::uint32_t>(num_point);
     header[1] = static_cast<std::uint32_t>(num_spot);
@@ -151,7 +152,7 @@ public:
       }
     }
 
-    memory_.unmapMemory();
+    // No unmap — persistently mapped like bone buffers
   }
 
   [[nodiscard]] auto buffer() const -> const vk::raii::Buffer & { return buffer_; }
@@ -161,6 +162,7 @@ public:
 private:
   vk::raii::Buffer buffer_{nullptr};
   vk::raii::DeviceMemory memory_{nullptr};
+  std::uint8_t *mapped_{nullptr};
   std::size_t max_lights_{0};
 };
 

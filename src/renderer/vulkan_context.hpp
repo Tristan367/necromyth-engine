@@ -70,7 +70,7 @@ public:
         startup_shadow_map_resolution_,
         shadow_cascade_layer_count(scene.shadow_settings().cascade_mode));
     light_buffer_.create(device_.physical_device(), device_.device(), 64);
-    create_spot_atlas();
+    create_spot_atlas(startup_spot_atlas_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale));
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -328,7 +328,7 @@ public:
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
 
-    light_buffer_.write(scene.point_lights(), scene.spot_lights(), 1024.0F);
+    light_buffer_.write(scene.point_lights(), scene.spot_lights(), static_cast<float>(startup_spot_atlas_size_));
 
     if (!bone_buffers_.empty()) {
       std::vector<glm::mat4> joint_matrices;
@@ -354,7 +354,10 @@ public:
     }
 
     build_draw_list(scene, draw_list_);
-    build_shadow_draw_list(draw_list_, shadow_draw_list_);
+    if (draw_list_.size() != last_draw_list_size_) {
+      build_shadow_draw_list(draw_list_, shadow_draw_list_);
+      last_draw_list_size_ = draw_list_.size();
+    }
 
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
@@ -367,7 +370,8 @@ public:
       if (sl.casts_shadow) { has_spot_shadows = true; break; }
     if (has_spot_shadows)
       pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
-                                                shadow_draw_list_, *spot_atlas_, *spot_atlas_view_);
+                                                shadow_draw_list_, *spot_atlas_, *spot_atlas_view_,
+                                                startup_spot_atlas_size_);
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
     pass_recorder().record_main_pass(
@@ -490,9 +494,9 @@ private:
     shadow_map_.create(device_.physical_device(), device_.device(), resolution, layer_count);
   }
 
-  void create_spot_atlas() {
+  void create_spot_atlas(std::uint32_t size = 1024) {
     const vk::Format fmt = shadow_map_.format();
-    const std::uint32_t sz = 1024;
+    const std::uint32_t sz = size;
 
     vk::ImageCreateInfo img_info{};
     img_info.imageType = vk::ImageType::e2D;
@@ -756,6 +760,7 @@ private:
   std::uint32_t startup_render_scale_{1};
   std::uint32_t startup_shadow_scale_{1};
   std::uint32_t startup_shadow_map_resolution_{k_default_shadow_map_resolution};
+  std::uint32_t startup_spot_atlas_size_{1024};
   VulkanDevice device_;
   Swapchain swapchain_;
   vk::raii::PipelineCache pipeline_cache_{nullptr};
@@ -781,6 +786,7 @@ private:
   PipelineRegistry pipelines_;
   std::vector<DrawCommand> draw_list_;
   std::vector<DrawCommand> shadow_draw_list_;
+  std::size_t last_draw_list_size_{0};
   PassLayoutState pass_layouts_{};
   std::vector<BoneStorageBufferSet> bone_buffers_;
   std::vector<std::uint32_t> skinned_texture_indices_;

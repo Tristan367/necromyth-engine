@@ -644,28 +644,31 @@ struct PassRecorder {
     layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
   }
 
-  void record_spot_shadow_pass(
-      vk::raii::CommandBuffer &command_buffer,
-      std::uint32_t frame_index,
-      PassLayoutState &layouts,
-      const Scene &scene,
-      const std::vector<DrawCommand> &draw_list,
-      vk::Image atlas_image,
-      vk::ImageView atlas_view) const {
+   void record_spot_shadow_pass(
+       vk::raii::CommandBuffer &command_buffer,
+       std::uint32_t frame_index,
+       PassLayoutState &layouts,
+       const Scene &scene,
+       const std::vector<DrawCommand> &draw_list,
+       vk::Image atlas_image,
+       vk::ImageView atlas_view,
+       std::uint32_t atlas_size = 1024) const {
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
 
-    const vk::Extent2D atlas_ext{1024, 1024};
+    const vk::Extent2D atlas_ext{atlas_size, atlas_size};
 
-    // Barrier: previous layout → depth attachment
-    transition_image_layout(command_buffer, atlas_image,
-        layouts.spot_atlas_layout, vk::ImageLayout::eDepthAttachmentOptimal,
-        layouts.spot_atlas_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead,
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        layouts.spot_atlas_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe : vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::ImageAspectFlagBits::eDepth, 0, 1);
-    layouts.spot_atlas_layout = vk::ImageLayout::eDepthAttachmentOptimal;
+    // Barrier: previous layout → depth attachment (skip if already in correct layout)
+    if (layouts.spot_atlas_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
+      transition_image_layout(command_buffer, atlas_image,
+          layouts.spot_atlas_layout, vk::ImageLayout::eDepthAttachmentOptimal,
+          layouts.spot_atlas_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          layouts.spot_atlas_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits2::eTopOfPipe : vk::PipelineStageFlagBits2::eFragmentShader,
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          vk::ImageAspectFlagBits::eDepth, 0, 1);
+      layouts.spot_atlas_layout = vk::ImageLayout::eDepthAttachmentOptimal;
+    }
 
     std::uint32_t light_idx = 0;
     for (std::uint32_t si = 0; si < scene.spot_lights().size(); ++si) {
@@ -701,14 +704,16 @@ struct PassRecorder {
       ++light_idx;
     }
 
-    // Barrier: depth attachment → shader read
-    transition_image_layout(command_buffer, atlas_image,
-        vk::ImageLayout::eDepthAttachmentOptimal, vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite, vk::AccessFlagBits2::eShaderRead,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::ImageAspectFlagBits::eDepth, 0, 1);
-    layouts.spot_atlas_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+    // Barrier: depth attachment → shader read (skip if already correct)
+    if (layouts.spot_atlas_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
+      transition_image_layout(command_buffer, atlas_image,
+          vk::ImageLayout::eDepthAttachmentOptimal, vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite, vk::AccessFlagBits2::eShaderRead,
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          vk::PipelineStageFlagBits2::eFragmentShader,
+          vk::ImageAspectFlagBits::eDepth, 0, 1);
+      layouts.spot_atlas_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+    }
   }
 
   void finish_main_pass(
