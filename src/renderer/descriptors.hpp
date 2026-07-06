@@ -49,6 +49,12 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 5,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
     };
 
     const std::array material_bindings{
@@ -401,6 +407,23 @@ public:
       device.updateDescriptorSets(
           vk::WriteDescriptorSet{
               .dstSet = set, .dstBinding = 4, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &info,
+          },
+          nullptr);
+    }
+  }
+
+  void update_point_cube_sampler(vk::raii::Device &device, vk::Sampler sampler, vk::ImageView view) {
+    const vk::DescriptorImageInfo info{
+        .sampler = sampler,
+        .imageView = view,
+        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+    for (const vk::DescriptorSet &set : frame_sets_) {
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = set, .dstBinding = 5, .descriptorCount = 1,
               .descriptorType = vk::DescriptorType::eCombinedImageSampler,
               .pImageInfo = &info,
           },

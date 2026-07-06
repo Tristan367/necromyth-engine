@@ -24,6 +24,7 @@ public:
       std::string_view shadow_depth_spirv,
       std::string_view skinned_textured_spirv,
       std::string_view skinned_shadow_depth_spirv,
+      std::string_view point_shadow_spirv,
       vk::DescriptorSetLayout frame_layout,
       vk::DescriptorSetLayout material_layout,
       vk::DescriptorSetLayout material_skinned_layout,
@@ -42,6 +43,7 @@ public:
     shadow_depth_spirv_ = shadow_depth_spirv;
     skinned_textured_spirv_ = skinned_textured_spirv;
     skinned_shadow_depth_spirv_ = skinned_shadow_depth_spirv;
+    point_shadow_spirv_ = point_shadow_spirv;
     pipeline_cache_ = &pipeline_cache;
     profile_ = profile;
 
@@ -155,6 +157,24 @@ private:
                .depth_bias_constant = k_shadow_depth_bias_constant,
                .depth_bias_slope = k_shadow_depth_bias_slope},
               "vertMainSkinned");
+
+    // Point shadow cubemap (R32F color + depth, vertex + fragment in point_shadow.spv)
+    const vk::Format point_shadow_color_format = vk::Format::eR32Sfloat;
+    pipelines_[static_cast<std::size_t>(PipelineId::PointShadowDepth)] =
+        create_graphics_pipeline(
+            device, point_shadow_color_format, shadow_depth_format_,
+            point_shadow_spirv_, point_shadow_spirv_,
+            *pipeline_layout_, vk::SampleCountFlagBits::e1,
+            mesh_binding, shadow_attributes,
+            *pipeline_cache_,
+            {.cull_mode = vk::CullModeFlagBits::eNone,
+             .front_face = vk::FrontFace::eCounterClockwise,
+             .depth_test = true, .depth_write = true,
+             .depth_compare = vk::CompareOp::eLessOrEqual,
+             .depth_bias_enable = true,
+             .depth_bias_constant = k_shadow_depth_bias_constant,
+             .depth_bias_slope = k_shadow_depth_bias_slope},
+            "vertMain", "fragMain");
   }
 
   vk::DescriptorSetLayout frame_layout_{nullptr};
@@ -169,11 +189,12 @@ private:
   std::string_view shadow_depth_spirv_{};
   std::string_view skinned_textured_spirv_{};
   std::string_view skinned_shadow_depth_spirv_{};
+  std::string_view point_shadow_spirv_{};
   const vk::raii::PipelineCache *pipeline_cache_{nullptr};
   PipelineBuildProfile profile_{};
   vk::raii::PipelineLayout pipeline_layout_{nullptr};
   vk::raii::PipelineLayout skinned_pipeline_layout_{nullptr};
-  std::array<std::optional<vk::raii::Pipeline>, 9> pipelines_{};
+  std::array<std::optional<vk::raii::Pipeline>, 11> pipelines_{};
 };
 
 } // namespace engine

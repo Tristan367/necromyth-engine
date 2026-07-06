@@ -164,15 +164,13 @@ struct PassRecorder {
     state.material = material_key;
   }
 
-  void draw_shadow_mesh(
-      vk::raii::CommandBuffer &command_buffer,
-      const DrawCommand &draw,
-      std::uint32_t cascade_index,
-      std::uint32_t frame_index,
-      const glm::mat4 &light_vp,
-      DrawBindState &state,
-      float dp_side = 1.0F,
-      float dp_z_far = 1.0F) const {
+   void draw_shadow_mesh(
+       vk::raii::CommandBuffer &command_buffer,
+       const DrawCommand &draw,
+       std::uint32_t cascade_index,
+       std::uint32_t frame_index,
+       const glm::mat4 &light_vp,
+       DrawBindState &state) const {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
 
@@ -185,40 +183,31 @@ struct PassRecorder {
         glm::length(glm::vec3(m[1])) * half_extent.y,
         glm::length(glm::vec3(m[2])) * half_extent.z));
 
-    // Frustum cull only for projective VPs (directional/spot cascades). For the
-    // dual-paraboloid point pass (cascade >= 6) `light_vp` is a rigid light-view
-    // matrix, not a projection, so Gribb/Hartmann plane extraction is invalid.
-    // Cull instead by range: skip meshes whose bounding sphere is fully outside
-    // the light radius.
-    if (cascade_index >= 6) {
-      // light_vp is world->light-local; its translation column gives -lightPos
-      // in world after inverse, but the light-local center distance == |center'|.
-      const glm::vec3 center_local = glm::vec3(light_vp * glm::vec4(center, 1.0F));
-      if (glm::length(center_local) - world_radius > dp_z_far)
-        return;
-    } else {
-      // Gribb/Hartmann frustum planes from VP matrix (Godot: normalize normals)
-      const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
-      const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
-      const glm::vec4 r2(light_vp[0][2], light_vp[1][2], light_vp[2][2], light_vp[3][2]);
-      const glm::vec4 r3(light_vp[0][3], light_vp[1][3], light_vp[2][3], light_vp[3][3]);
+    // Frustum cull using Gribb/Hartmann planes (Godot: normalize normals).
+    const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
+    const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
+    const glm::vec4 r2(light_vp[0][2], light_vp[1][2], light_vp[2][2], light_vp[3][2]);
+    const glm::vec4 r3(light_vp[0][3], light_vp[1][3], light_vp[2][3], light_vp[3][3]);
 
-      auto norm = [](glm::vec4 p) { return p / glm::length(glm::vec3(p)); };
-      const glm::vec4 planes[6] = {
-          norm(r3 + r0), norm(r3 - r0), norm(r3 + r1),
-          norm(r3 - r1), norm(r3 + r2), norm(r3 - r2)};
+    auto norm = [](glm::vec4 p) { return p / glm::length(glm::vec3(p)); };
+    const glm::vec4 planes[6] = {
+        norm(r3 + r0), norm(r3 - r0), norm(r3 + r1),
+        norm(r3 - r1), norm(r3 + r2), norm(r3 - r2)};
 
-      auto test = [&](const glm::vec4 &p) { return glm::dot(glm::vec3(p), center) + p.w > -world_radius; };
-      for (const glm::vec4 &p : planes)
-        if (!test(p)) return;
-    }
+    auto test = [&](const glm::vec4 &p) { return glm::dot(glm::vec3(p), center) + p.w > -world_radius; };
+    for (const glm::vec4 &p : planes)
+      if (!test(p)) return;
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
+    const bool is_point = cascade_index >= 10;
 
-    if (is_skinned)
+    if (is_point) {
+      bind_pipeline(command_buffer, PipelineId::PointShadowDepth, state);
+    } else if (is_skinned) {
       bind_pipeline(command_buffer, PipelineId::ShadowDepthSkinned, state);
-    else
+    } else {
       bind_pipeline(command_buffer, PipelineId::ShadowDepth, state);
+    }
 
     if (is_skinned && draw.bone_instance_index != k_invalid_skin_index) {
       command_buffer.bindDescriptorSets(
@@ -234,8 +223,6 @@ struct PassRecorder {
     const TexturedPushConstants push_constants{
         .model = draw.model,
         .shadow_cascade_index = cascade_index,
-        .dp_side = dp_side,
-        .dp_z_far = dp_z_far,
     };
     command_buffer.pushConstants(
         pipelines.layout_for(is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth),
@@ -756,54 +743,6 @@ struct PassRecorder {
       ++light_idx;
     }
 
-    // Point light shadows: dual-paraboloid (Godot omni model).
-    // Two hemispheres rendered into the top/bottom halves of the atlas:
-    //   top half    (y in [0, H/2))  = -Z hemisphere (dp_side = -1)
-    //   bottom half (y in [H/2, H))  = +Z hemisphere (dp_side = +1)
-    // This matches the sampler: base atlas_rect = top half, flip_offset = (0,0.5)
-    // added when the light-local direction has z >= 0 (the +Z hemisphere).
-    const float half_h = atlas_ext.height / 2.0F;
-    for (std::uint32_t si = 0; si < scene.point_lights().size(); ++si) {
-      const PointLight &pl = scene.point_lights()[si];
-      if (!pl.casts_shadow) continue;
-
-      const glm::mat4 point_view = LightStorageBuffer::compute_point_light_view(pl);
-      // dp_side, atlas row offset (in pixels)
-      const std::array<std::pair<float, int32_t>, 2> halves{{
-          {-1.0F, 0},                          // -Z -> top half
-          {+1.0F, int32_t(half_h)},            // +Z -> bottom half
-      }};
-
-      for (int h = 0; h < 2; ++h) {
-        const float dp_side = halves[h].first;
-        const vk::Rect2D region{{0, halves[h].second},
-                                {atlas_ext.width, uint32_t(half_h)}};
-        const vk::ClearValue cd{vk::ClearDepthStencilValue{1.0F, 0}};
-        vk::RenderingAttachmentInfo da{};
-        da.imageView = atlas_view;
-        da.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
-        da.loadOp = (h == 0) ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
-        da.storeOp = vk::AttachmentStoreOp::eStore;
-        da.clearValue = cd;
-        vk::RenderingInfo ri{};
-        ri.renderArea = region;
-        ri.layerCount = 1;
-        ri.pDepthAttachment = &da;
-        command_buffer.beginRendering(ri);
-        bind_pass_descriptors(command_buffer, frame_index);
-        command_buffer.setViewport(0, vk::Viewport{
-            0.0F, float(halves[h].second), float(atlas_ext.width), half_h, 0.0F, 1.0F});
-        command_buffer.setScissor(0, region);
-        command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0, k_shadow_depth_bias_slope);
-
-        // cascade index 6 flags the point (DP) path in the depth VS.
-        for (const DrawCommand &draw : draw_list)
-          draw_shadow_mesh(command_buffer, draw, 6, frame_index, point_view,
-                           bind_state, dp_side, pl.range);
-        command_buffer.endRendering();
-      }
-    }
-
     // Barrier: depth attachment → shader read (skip if already correct)
     if (layouts.spot_atlas_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
       transition_image_layout(command_buffer, atlas_image,
@@ -816,7 +755,86 @@ struct PassRecorder {
     }
   }
 
-  void finish_main_pass(
+  void record_point_shadow_pass(
+      vk::raii::CommandBuffer &command_buffer,
+      std::uint32_t frame_index,
+      const Scene &scene,
+      const std::vector<DrawCommand> &draw_list,
+      vk::Image cube_image,
+      std::span<const vk::raii::ImageView> cube_face_views,
+      vk::Image cube_depth_image,
+      vk::ImageView cube_depth_view) const {
+    DrawBindState bind_state{};
+    bind_state.frame_index = frame_index;
+
+    const vk::Extent2D face_ext{1024, 1024};
+    const vk::ClearValue clear_dist = vk::ClearColorValue{std::array<float, 4>{1e6f, 0.0f, 0.0f, 0.0f}};
+    const vk::ClearValue clear_depth{vk::ClearDepthStencilValue{1.0F, 0}};
+
+    // Barrier: cubemap undefined/shader-read → color attachment optimal
+    transition_image_layout(command_buffer, cube_image,
+        vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
+        {}, vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::ImageAspectFlagBits::eColor, 0, 1, 0, VK_REMAINING_ARRAY_LAYERS);
+
+    // Barrier: depth undefined → depth attachment optimal
+    transition_image_layout(command_buffer, cube_depth_image,
+        vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
+        {}, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        vk::ImageAspectFlagBits::eDepth, 0, 1);
+
+    std::uint32_t layer = 0;
+    for (std::uint32_t si = 0; si < scene.point_lights().size(); ++si) {
+      const PointLight &pl = scene.point_lights()[si];
+      if (!pl.casts_shadow) continue;
+
+      for (std::uint32_t face = 0; face < 6; ++face) {
+        vk::RenderingAttachmentInfo color_attach{};
+        color_attach.imageView = *cube_face_views[layer * 6 + face];
+        color_attach.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+        color_attach.loadOp = vk::AttachmentLoadOp::eClear;
+        color_attach.storeOp = vk::AttachmentStoreOp::eStore;
+        color_attach.clearValue = clear_dist;
+
+        vk::RenderingAttachmentInfo depth_attach{};
+        depth_attach.imageView = cube_depth_view;
+        depth_attach.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
+        depth_attach.loadOp = vk::AttachmentLoadOp::eClear;
+        depth_attach.storeOp = vk::AttachmentStoreOp::eDontCare;
+        depth_attach.clearValue = clear_depth;
+
+        vk::RenderingInfo ri{};
+        ri.renderArea = vk::Rect2D{vk::Offset2D{0, 0}, face_ext};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &color_attach;
+        ri.pDepthAttachment = &depth_attach;
+
+        command_buffer.beginRendering(ri);
+        bind_pass_descriptors(command_buffer, frame_index);
+        command_buffer.setViewport(0, vk::Viewport{0.0F, 0.0F, 1024.0F, 1024.0F, 0.0F, 1.0F});
+        command_buffer.setScissor(0, vk::Rect2D{vk::Offset2D{0, 0}, face_ext});
+        command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
+
+        // cascade_index 10+face selects PointShadowDepth pipeline + point_shadow VS
+        for (const DrawCommand &draw : draw_list)
+          draw_shadow_mesh(command_buffer, draw, 10 + face, frame_index, glm::mat4(1.0F), bind_state);
+
+        command_buffer.endRendering();
+      }
+      ++layer;
+    }
+
+    // Barrier: color attachment → shader read
+    transition_image_layout(command_buffer, cube_image,
+        vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+        vk::AccessFlagBits2::eColorAttachmentWrite, vk::AccessFlagBits2::eShaderRead,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::ImageAspectFlagBits::eColor, 0, 1, 0, VK_REMAINING_ARRAY_LAYERS);
+  }  void finish_main_pass(
       vk::raii::CommandBuffer &command_buffer,
       std::uint32_t image_index,
       PassLayoutState &layouts) const {

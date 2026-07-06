@@ -15,6 +15,12 @@ Texture2D spotShadowAtlas;
 [[vk::binding(4, 0)]]
 SamplerState spotShadowSampler;
 
+// Point light cubemap array (set 0 binding 5, Samper oen:omni model)
+[[vk::binding(5, 0)]]
+TextureCubeArray pointShadowCube;
+[[vk::binding(5, 0)]]
+SamplerState pointShadowCubeSampler;
+
 struct GpuPointLight {
     float4 posRange;
     float4 colorIntensity;
@@ -55,78 +61,36 @@ float3 calcPointLight(GpuPointLight l, float3 fragPos, float3 normal, float3 vie
     float lightContrib = (diffuse.r + diffuse.g + diffuse.b + specular.r + specular.g + specular.b) * atten;
     if (lightContrib <= 0.0001) return float3(0, 0, 0);
 
-    // Shadow (dual-paraboloid). For now always run if x=invRadius > 0.
+    // Point shadow: cubemap array (Sascha omni model). Enabled when invRadius > 0.
     float shadowVis = 1.0;
     if (ubo.pointLightParams.x > 0.0) {
-        shadowVis = samplePointShadowDP(fragPos, normal, ndotl);
+        shadowVis = samplePointShadowCubemap(fragPos, normal, ndotl);
     }
 
     return min((diffuse + specular) * atten * shadowVis, l.colorIntensity.rgb * l.colorIntensity.w);
 }
 
-// Godot light_process_omni hard-shadow path (scene_forward_lights_inc.glsl).
-// Transforms the world position into light-local space, picks the paraboloid
-// hemisphere by the sign of z, paraboloid-projects to atlas UV, and compares
-// against the stored NORMALIZED RADIAL DISTANCE. This is the key to stability:
-// both the depth pass and this sampler compute radial distance the same way.
-float samplePointShadowDP(float3 worldPos, float3 normal, float ndotl) {
-    float invRadius = ubo.pointLightParams.x;
-    float2 flipOffset = ubo.pointLightParams.yz;
-    float4 baseUvRect = ubo.pointLightAtlasRect;
+// Sascha Willems omni shadow: sample cubemap array, manual distance comparison.
+// Each face stores the distance from light to occluder (R32F).
+// Compare actual distance against stored + epsilon (absolute world units).
+float samplePointShadowCubemap(float3 worldPos, float3 normal, float ndotl) {
+    float3 lightPos = ubo.pointLightPos.xyz;
 
-    // Inset the rect by one texel to avoid bleeding across the hemisphere seam.
-    uint atlasW, atlasH;
-    spotShadowAtlas.GetDimensions(atlasW, atlasH);
-    float2 texel = float2(1.0 / float(atlasW), 1.0 / float(atlasH));
-    baseUvRect.xy += texel;
-    baseUvRect.zw -= texel * 2.0;
+    float3 lightVec = worldPos - lightPos;
+    float dist = length(lightVec);
 
-    // World -> light-local.
-    float3 localVert = mul(ubo.pointLightView, float4(worldPos, 1.0)).xyz;
+    // Normal bias: offset sample direction along surface normal
     float3 localNormal = normalize(mul((float3x3)ubo.pointLightView, normal));
+    float3 sampleDir = normalize(lightVec);
+    float ndotd = abs(dot(localNormal, sampleDir));
+    float nBias = 0.02 * (1.0 - ndotd);
+    sampleDir = normalize(sampleDir + localNormal * nBias);
 
-    float shadowLen = length(localVert);
-    float3 shadowDir = localVert / max(shadowLen, 1e-6);
+    // Sample cubemap array layer 0 (first shadow-casting point light)
+    float storedDist = pointShadowCube.Sample(pointShadowCubeSampler, float4(sampleDir, 0.0)).r;
+    const float kEpsilon = 0.1; // absolute world-space bias (Sascha: 0.15)
 
-    // Normal-offset bias in light-local space (Godot shadow_normal_bias).
-    float normalBias = 2.0 * texel.x * (1.0 - abs(dot(localNormal, shadowDir)));
-    float3 shadowSample = normalize(shadowDir + localNormal * normalBias);
-
-    // Pick hemisphere: +Z half lives at base + flip_offset (bottom of atlas),
-    // -Z half at the base rect (top). Must match the render pass assignment.
-    float4 uvRect = baseUvRect;
-    if (shadowSample.z >= 0.0) {
-        uvRect.xy += flipOffset;
-    }
-
-    // Paraboloid: must match vertex shader's xy / (1 + n.z) with n.z >= 0.
-    // Vertex mirrors z to positive (dpSide), so n.z is always ≥ 0 and
-    // outputs xy / (1 + |z|). Godot uses this formulation because 1 + |z|
-    // avoids the pole singularity of 1 - |z|.
-    float denom = 1.0 + abs(shadowSample.z);
-    float2 pos = shadowSample.xy / max(denom, 1e-4);
-    pos = pos * 0.5 + 0.5;
-
-    // Godot: depth = (shadow_len - bias) * inv_radius, then depth = 1.0 - depth
-    // because Godot's shadow atlas comparison expects inverted depth.
-    // Our atlas stores distance/range directly (not inverted), so we compare
-    // refDepth <= stored (closer fragments are lit, farther are shadowed).
-    float depthBias = max(0.0015 * (1.0 - ndotl), 0.0004);
-    float refDepth = shadowLen * invRadius - depthBias;
-
-    // 3x3 PCF within the hemisphere sub-rect.
-    float2 pcfStep = texel;
-    float shadow = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float2 uv = pos + float2(x, y) * pcfStep;
-            uv = clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0));
-            uv = uvRect.xy + uv * uvRect.zw;
-            float stored = spotShadowAtlas.SampleLevel(spotShadowSampler, uv, 0).r;
-            shadow += refDepth <= stored ? 1.0 : 0.0;
-        }
-    }
-    return shadow / 9.0;
+    return dist <= storedDist + kEpsilon ? 1.0 : 0.0;
 }
 
 float sampleSpotShadow(float3 worldPos, float4x4 shadowMatrix, float4 atlasRect,

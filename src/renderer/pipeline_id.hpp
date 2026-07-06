@@ -20,6 +20,8 @@ enum class PipelineId : std::uint8_t {
   TexturedCutoutSkinned = 6,
   TexturedAlphaToCoverageSkinned = 7,
   ShadowDepthSkinned = 8,
+  PointShadowDepth = 9,
+  PointShadowDepthSkinned = 10,
 };
 
 [[nodiscard]] constexpr auto textured_pipeline(MeshAlphaMode alpha_mode, bool skinned = false) -> PipelineId {
@@ -82,7 +84,8 @@ enum class PipelineId : std::uint8_t {
 }
 
 [[nodiscard]] constexpr auto is_skinned_pipeline(PipelineId id) -> bool {
-  return static_cast<std::uint8_t>(id) >= 5;
+  const auto v = static_cast<std::uint8_t>(id);
+  return v >= 5 && v <= 8;
 }
 
 [[nodiscard]] constexpr auto casts_shadow(PipelineId id) -> bool {

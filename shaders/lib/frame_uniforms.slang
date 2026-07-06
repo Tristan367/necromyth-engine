@@ -8,12 +8,13 @@ struct FrameUniforms {
     float4 lightColor;
     float4x4 lightViewProj[2];     // 0-1 = directional cascades
     float4x4 spotLightViewProj[4]; // 2-5 = spot lights
-    // Point light dual-paraboloid shadow (Godot omni model). One shadow-casting
-    // point light supported. pointLightView is the world->light-local rigid
-    // transform (no projection); depth stored as normalized radial distance.
-    float4x4 pointLightView;      // world -> light-local (Godot shadow_matrix)
-    float4 pointLightParams;      // x = inv_radius (1/range), yz = flip_offset(uv), w = enabled
-    float4 pointLightAtlasRect;   // xy = uv offset, zw = uv scale (full DP region)
+    // Point light cubemap shadow (Sascha omni model). One shadow-casting
+    // point light. pointLightView is world->light-local (translate -pos).
+    // pointFaceVP[6] = 90° perspective * rotated face views.
+    float4x4 pointLightView;      // world -> light-local translation
+    float4x4 pointFaceVP[6];      // VP per cube face (perspective * rotation)
+    float4 pointLightPos;         // world-space light position (for fragment)
+    float4 pointLightParams;      // x = inv_radius (1/range), w = enabled
     // x = split view-space Z (negative); y = blend half-width in view meters (0 = hard pick).
     float4 cascadeParams;
     // x = UV coverage fade width (0 = hard edge)

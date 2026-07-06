@@ -16,12 +16,8 @@ struct TexturedPushConstants {
   std::uint32_t texture_array_layer{0};
   std::uint32_t sample_texture_array{0};
   std::uint32_t shadow_cascade_index{0};
-  // Dual-paraboloid point shadow params (Godot omni model). Only meaningful
-  // when shadow_cascade_index >= 6 (point light depth pass).
-  //   dp_side  = +1.0 for the +Z paraboloid half, -1.0 for the -Z half.
-  //   dp_z_far = point light range (used to normalize radial distance).
-  float dp_side{1.0F};
-  float dp_z_far{1.0F};
+  // Padding to maintain 16-byte alignment of the entire struct
+  float _pad{0.0F};
 };
 
 } // namespace engine

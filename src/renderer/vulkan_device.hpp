@@ -373,6 +373,8 @@ private:
     // SV_ClipDistance0 to discard the far paraboloid hemisphere.
     if (available_features.shaderClipDistance == vk::True)
       feature_chain.get<vk::PhysicalDeviceFeatures2>().features.shaderClipDistance = vk::True;
+    if (available_features.imageCubeArray == vk::True)
+      feature_chain.get<vk::PhysicalDeviceFeatures2>().features.imageCubeArray = vk::True;
 
     std::vector<const char *> device_extensions{vk::KHRSwapchainExtensionName};
     const auto available_device_extensions = physical_device_.enumerateDeviceExtensionProperties();
