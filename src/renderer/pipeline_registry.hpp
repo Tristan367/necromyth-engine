@@ -175,6 +175,25 @@ private:
              .depth_bias_constant = k_shadow_depth_bias_constant,
              .depth_bias_slope = k_shadow_depth_bias_slope},
             "vertMain", "fragMain");
+
+    // Point shadow cubemap skinned (R32F color + depth, skinned vertex input)
+    if (profile_.build_skinned) {
+      pipelines_[static_cast<std::size_t>(PipelineId::PointShadowDepthSkinned)] =
+          create_graphics_pipeline(
+              device, point_shadow_color_format, shadow_depth_format_,
+              point_shadow_spirv_, point_shadow_spirv_,
+              *skinned_pipeline_layout_, vk::SampleCountFlagBits::e1,
+              mesh_binding, shadow_skinned_attributes,
+              *pipeline_cache_,
+              {.cull_mode = vk::CullModeFlagBits::eNone,
+               .front_face = vk::FrontFace::eCounterClockwise,
+               .depth_test = true, .depth_write = true,
+               .depth_compare = vk::CompareOp::eLessOrEqual,
+               .depth_bias_enable = true,
+               .depth_bias_constant = k_shadow_depth_bias_constant,
+               .depth_bias_slope = k_shadow_depth_bias_slope},
+              "vertMainSkinned", "fragMain");
+    }
   }
 
   vk::DescriptorSetLayout frame_layout_{nullptr};

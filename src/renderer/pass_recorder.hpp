@@ -202,17 +202,21 @@ struct PassRecorder {
     const bool is_point = cascade_index >= 10;
 
     if (is_point) {
-      bind_pipeline(command_buffer, PipelineId::PointShadowDepth, state);
+      bind_pipeline(command_buffer, is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth, state);
     } else if (is_skinned) {
       bind_pipeline(command_buffer, PipelineId::ShadowDepthSkinned, state);
     } else {
       bind_pipeline(command_buffer, PipelineId::ShadowDepth, state);
     }
 
+    const PipelineId shadow_pipeline = is_point
+        ? (is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth)
+        : (is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth);
+
     if (is_skinned && draw.bone_instance_index != k_invalid_skin_index) {
       command_buffer.bindDescriptorSets(
           vk::PipelineBindPoint::eGraphics,
-          pipelines.layout_for(PipelineId::ShadowDepthSkinned),
+          pipelines.layout_for(shadow_pipeline),
           1,
           descriptors.shadow_bone_set(draw.bone_instance_index, frame_index),
           nullptr);
@@ -225,7 +229,7 @@ struct PassRecorder {
         .shadow_cascade_index = cascade_index,
     };
     command_buffer.pushConstants(
-        pipelines.layout_for(is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth),
+        pipelines.layout_for(shadow_pipeline),
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
         0,
         sizeof(TexturedPushConstants),
@@ -763,7 +767,9 @@ struct PassRecorder {
       vk::Image cube_image,
       std::span<const vk::raii::ImageView> cube_face_views,
       vk::Image cube_depth_image,
-      vk::ImageView cube_depth_view) const {
+      vk::ImageView cube_depth_view,
+      std::span<const glm::mat4, 6> point_face_vps,
+      const glm::mat4 &point_light_view) const {
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
 
@@ -820,8 +826,9 @@ struct PassRecorder {
         command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
         // cascade_index 10+face selects PointShadowDepth pipeline + point_shadow VS
+        const glm::mat4 face_vp = point_face_vps[face] * point_light_view;
         for (const DrawCommand &draw : draw_list)
-          draw_shadow_mesh(command_buffer, draw, 10 + face, frame_index, glm::mat4(1.0F), bind_state);
+          draw_shadow_mesh(command_buffer, draw, 10 + face, frame_index, face_vp, bind_state);
 
         command_buffer.endRendering();
       }

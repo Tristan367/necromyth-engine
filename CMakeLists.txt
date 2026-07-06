@@ -135,6 +135,25 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
             COMMENT "Compiling ${SHADER_NAME}.slang"
             VERBATIM
         )
+    elseif(SHADER_NAME STREQUAL "point_shadow")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMain
+                -entry vertMainSkinned
+                -entry fragMain
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
     else()
         add_custom_command(
             OUTPUT "${SHADER_SPIRV}"

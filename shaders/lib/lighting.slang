@@ -86,9 +86,8 @@ float samplePointShadowCubemap(float3 worldPos, float3 normal, float ndotl) {
     float nBias = 0.02 * (1.0 - ndotd);
     sampleDir = normalize(sampleDir + localNormal * nBias);
 
-    // Sample cubemap array layer 0 (first shadow-casting point light)
     float storedDist = pointShadowCube.Sample(pointShadowCubeSampler, float4(sampleDir, 0.0)).r;
-    const float kEpsilon = 0.1; // absolute world-space bias (Sascha: 0.15)
+    const float kEpsilon = 0.1;
 
     return dist <= storedDist + kEpsilon ? 1.0 : 0.0;
 }

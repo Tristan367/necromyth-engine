@@ -320,22 +320,24 @@ public:
         point_params = glm::vec4(inv_radius, 0.0F, 0.0F, 1.0F);
         // 90° FOV perspective for cube faces
         const glm::mat4 proj = glm::perspective(glm::radians(90.0F), 1.0F, 0.01F, pl.range);
-        // 6 face VP matrices: perspective * faceView * (world->light-local)
-        // Face views match the Vulkan cubemap convention (hardcoded in point_shadow.slang).
-        // +X,+Y,+Z use CCW from inside; -X,-Y,-Z use CW.
+
+        // Sascha Willems face rotation matrices (positive X = first face).
+        // These match Vulkan's cubemap sampler convention.
         const std::array<glm::mat4, 6> face_views{{
-            // +X: look at (1,0,0), up (0,-1,0)
-            glm::lookAt(glm::vec3(0), glm::vec3( 1, 0, 0), glm::vec3(0,-1, 0)),
-            // -X: look at (-1,0,0), up (0,-1,0)
-            glm::lookAt(glm::vec3(0), glm::vec3(-1, 0, 0), glm::vec3(0,-1, 0)),
-            // +Y: look at (0,1,0), up (0,0,1)
-            glm::lookAt(glm::vec3(0), glm::vec3( 0, 1, 0), glm::vec3(0, 0, 1)),
-            // -Y: look at (0,-1,0), up (0,0,-1)
-            glm::lookAt(glm::vec3(0), glm::vec3( 0,-1, 0), glm::vec3(0, 0,-1)),
-            // +Z: look at (0,0,1), up (0,-1,0)
-            glm::lookAt(glm::vec3(0), glm::vec3( 0, 0, 1), glm::vec3(0,-1, 0)),
-            // -Z: look at (0,0,-1), up (0,-1,0)
-            glm::lookAt(glm::vec3(0), glm::vec3( 0, 0,-1), glm::vec3(0,-1, 0)),
+            // +X: rotate Y +90°, then X +180°
+            glm::rotate(glm::rotate(glm::mat4(1.0F), glm::radians( 90.0F), glm::vec3(0,1,0)),
+                        glm::radians(180.0F), glm::vec3(1,0,0)),
+            // -X: rotate Y -90°, then X +180°
+            glm::rotate(glm::rotate(glm::mat4(1.0F), glm::radians(-90.0F), glm::vec3(0,1,0)),
+                        glm::radians(180.0F), glm::vec3(1,0,0)),
+            // +Y: rotate X -90°
+            glm::rotate(glm::mat4(1.0F), glm::radians(-90.0F), glm::vec3(1,0,0)),
+            // -Y: rotate X +90°
+            glm::rotate(glm::mat4(1.0F), glm::radians( 90.0F), glm::vec3(1,0,0)),
+            // +Z: rotate X +180° (points toward +Z in world, matches default)
+            glm::rotate(glm::mat4(1.0F), glm::radians(180.0F), glm::vec3(1,0,0)),
+            // -Z: rotate Z +180° (roll, so +Z world → -Z)
+            glm::rotate(glm::mat4(1.0F), glm::radians(180.0F), glm::vec3(0,0,1)),
         }};
         for (int f = 0; f < 6; ++f)
           point_face_vps[f] = proj * face_views[f];
@@ -424,7 +426,9 @@ public:
                                                 shadow_draw_list_, *point_cube_,
                                                 point_cube_face_views_,
                                                 *point_cube_depth_,
-                                                *point_cube_depth_view_);
+                                                *point_cube_depth_view_,
+                                                point_face_vps,
+                                                point_view);
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
     pass_recorder().record_main_pass(
@@ -635,7 +639,7 @@ private:
     cube_view_info.subresourceRange.baseMipLevel = 0;
     cube_view_info.subresourceRange.levelCount = 1;
     cube_view_info.subresourceRange.baseArrayLayer = 0;
-    cube_view_info.subresourceRange.layerCount = max_point_lights;
+    cube_view_info.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
     point_cube_array_view_ = vk::raii::ImageView(device_.device(), cube_view_info);
 
     // Sampler for the cube array (linear, clamp to edge)

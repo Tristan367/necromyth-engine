@@ -85,7 +85,7 @@ enum class PipelineId : std::uint8_t {
 
 [[nodiscard]] constexpr auto is_skinned_pipeline(PipelineId id) -> bool {
   const auto v = static_cast<std::uint8_t>(id);
-  return v >= 5 && v <= 8;
+  return (v >= 5 && v <= 8) || v == 10;
 }
 
 [[nodiscard]] constexpr auto casts_shadow(PipelineId id) -> bool {
