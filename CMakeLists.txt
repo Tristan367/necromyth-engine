@@ -50,6 +50,7 @@ set(VCE_SKINNED_SHADER_SPIRV "")
 set(VCE_SKINNED_SHADOW_DEPTH_SPIRV "")
 set(VCE_DEBUG_LINE_SPIRV "")
 set(VCE_POINT_SHADOW_SPIRV "")
+set(VCE_NO_POINT_SHADER_SPIRV "")
 
 foreach(SHADER_SOURCE ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME_WE)
@@ -73,6 +74,35 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
             VERBATIM
         )
     elseif(SHADER_NAME STREQUAL "triangle")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMain
+                -entry fragOpaqueHard
+                -entry fragCutoutHard
+                -entry fragA2CHard
+                -entry fragOpaquePcf
+                -entry fragCutoutPcf
+                -entry fragA2CPcf
+                -entry fragOpaqueHardCsm2
+                -entry fragCutoutHardCsm2
+                -entry fragA2CHardCsm2
+                -entry fragOpaquePcfCsm2
+                -entry fragCutoutPcfCsm2
+                -entry fragA2CPcfCsm2
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    elseif(SHADER_NAME STREQUAL "triangle_nopt")
         add_custom_command(
             OUTPUT "${SHADER_SPIRV}"
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
@@ -177,6 +207,8 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
     list(APPEND SHADER_SPIRV_OUTPUTS "${SHADER_SPIRV}")
     if(SHADER_NAME STREQUAL "triangle")
         set(VCE_SHADER_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "triangle_nopt")
+        set(VCE_NO_POINT_SHADER_SPIRV "${SHADER_SPIRV}")
     elseif(SHADER_NAME STREQUAL "sky")
         set(VCE_SKY_SHADER_SPIRV "${SHADER_SPIRV}")
     elseif(SHADER_NAME STREQUAL "shadow_depth")
@@ -270,6 +302,7 @@ target_compile_definitions(vce_renderer INTERFACE
     ENGINE_SKINNED_SHADER_SPIRV="${VCE_SKINNED_SHADER_SPIRV}"
     ENGINE_SKINNED_SHADOW_DEPTH_SPIRV="${VCE_SKINNED_SHADOW_DEPTH_SPIRV}"
     ENGINE_POINT_SHADOW_SPIRV="${VCE_POINT_SHADOW_SPIRV}"
+    ENGINE_NO_POINT_SHADER_SPIRV="${VCE_NO_POINT_SHADER_SPIRV}"
     ENGINE_DEBUG_LINE_SPIRV="${VCE_DEBUG_LINE_SPIRV}"
 )
 

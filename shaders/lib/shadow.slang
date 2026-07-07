@@ -22,9 +22,7 @@ float textureProj(float3 projection, uint layer, float2 offset, float bias) {
 }
 
 float filterPCF(float3 projection, uint layer, float bias) {
-    uint width;
-    uint height;
-    uint layers;
+    uint width, height, layers;
     shadowMap.GetDimensions(width, height, layers);
     const float scale = 0.75;
     const float dx = scale / float(width);

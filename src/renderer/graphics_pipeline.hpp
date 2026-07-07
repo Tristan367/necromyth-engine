@@ -79,7 +79,9 @@ struct GraphicsPipelineRasterState {
     const vk::raii::PipelineCache &pipeline_cache,
     GraphicsPipelineRasterState raster_state = {},
     const char *vertex_entry_point = "vertMain",
-    const char *fragment_entry_point = "fragMain") -> vk::raii::Pipeline {
+    const char *fragment_entry_point = "fragMain",
+    const vk::SpecializationInfo *frag_spec_info = nullptr,
+    std::uint32_t view_mask = 0) -> vk::raii::Pipeline {
   const auto vertex_spirv = read_spirv_file(vertex_spirv_path);
   const auto fragment_spirv = read_spirv_file(fragment_spirv_path);
   const vk::raii::ShaderModule vertex_module = create_shader_module(device, vertex_spirv);
@@ -95,6 +97,7 @@ struct GraphicsPipelineRasterState {
           .stage = vk::ShaderStageFlagBits::eFragment,
           .module = *fragment_module,
           .pName = fragment_entry_point,
+          .pSpecializationInfo = frag_spec_info,
       },
   };
 
@@ -130,9 +133,10 @@ struct GraphicsPipelineRasterState {
       .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
   };
+  const bool has_color = color_format != vk::Format::eUndefined;
   const vk::PipelineColorBlendStateCreateInfo color_blending{
-      .attachmentCount = 1,
-      .pAttachments = &color_blend_attachment,
+      .attachmentCount = has_color ? 1u : 0u,
+      .pAttachments = has_color ? &color_blend_attachment : nullptr,
   };
 
   const vk::PipelineDepthStencilStateCreateInfo depth_stencil{
@@ -173,8 +177,9 @@ struct GraphicsPipelineRasterState {
           .renderPass = nullptr,
       },
       vk::PipelineRenderingCreateInfo{
-          .colorAttachmentCount = 1,
-          .pColorAttachmentFormats = &color_attachment_format,
+          .viewMask = view_mask,
+          .colorAttachmentCount = has_color ? 1u : 0u,
+          .pColorAttachmentFormats = has_color ? &color_attachment_format : nullptr,
           .depthAttachmentFormat = depth_attachment_format,
       },
   };
@@ -196,7 +201,8 @@ struct GraphicsPipelineRasterState {
     std::span<const vk::VertexInputAttributeDescription> attributes,
     const vk::raii::PipelineCache &pipeline_cache,
     GraphicsPipelineRasterState raster_state = {},
-    const char *fragment_entry_point = "fragMain") -> vk::raii::Pipeline {
+    const char *fragment_entry_point = "fragMain",
+    const vk::SpecializationInfo *frag_spec_info = nullptr) -> vk::raii::Pipeline {
   const auto spirv = read_spirv_file(spirv_path);
   const vk::raii::ShaderModule shader_module = create_shader_module(device, spirv);
 
@@ -210,6 +216,7 @@ struct GraphicsPipelineRasterState {
           .stage = vk::ShaderStageFlagBits::eFragment,
           .module = *shader_module,
           .pName = fragment_entry_point,
+          .pSpecializationInfo = frag_spec_info,
       },
   };
 

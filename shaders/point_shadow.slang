@@ -1,6 +1,7 @@
-// Cubemap point-light shadow pass (Sascha Willems omni model).
-// Renders 6 cube faces to an R32F cubemap array, storing distance from light.
-// Sampled in lighting.slang via TextureCubeArray + manual depth comparison.
+// Cubemap point-light shadow pass.
+// Depth-only: writes linear distance / range to SV_Depth.
+// Hardware depth attachment provides z-test with early-Z.
+// Sampled in lighting.slang via comparison sampler (SampleCmp + hardware PCF).
 #include "lib/frame_uniforms.slang"
 #include "lib/mesh_types_skinned.slang"
 #include "lib/textured_push_constants.slang"
@@ -11,18 +12,16 @@ struct VSInput {
 
 struct VSOutput {
     float4 position : SV_Position;
-    float3 worldPos : TEXCOORD0;
+    float  lightDist : TEXCOORD0;
 };
 
 [shader("vertex")]
-VSOutput vertMain(VSInput input) {
+VSOutput vertMain(VSInput input, uint viewID : SV_ViewID) {
     VSOutput output;
-    uint face = pushConstants.shadowCascadeIndex - 10; // 0-5
     float4 worldPos = mul(pushConstants.model, float4(input.inPosition, 1.0));
-    output.worldPos = worldPos.xyz;
-    // Transform: world -> light-local -> face rotation -> perspective
     float4 lightLocal = mul(ubo.pointLightView, worldPos);
-    output.position = mul(ubo.pointFaceVP[face], lightLocal);
+    output.position = mul(ubo.pointFaceVP[viewID], lightLocal);
+    output.lightDist = length(worldPos.xyz - ubo.pointLightPos.xyz);
     return output;
 }
 
@@ -31,7 +30,7 @@ VSOutput vertMain(VSInput input) {
 StructuredBuffer<float4x4> jointMatrices;
 
 [shader("vertex")]
-VSOutput vertMainSkinned(VSInputSkinned input) {
+VSOutput vertMainSkinned(VSInputSkinned input, uint viewID : SV_ViewID) {
     float4x4 skinMat =
         input.inJointWeights.x * jointMatrices[(int)input.inJointIndices.x] +
         input.inJointWeights.y * jointMatrices[(int)input.inJointIndices.y] +
@@ -39,17 +38,15 @@ VSOutput vertMainSkinned(VSInputSkinned input) {
         input.inJointWeights.w * jointMatrices[(int)input.inJointIndices.w];
 
     VSOutput output;
-    uint face = pushConstants.shadowCascadeIndex - 10;
     float4 skinned = mul(skinMat, float4(input.inPosition, 1.0));
     float4 worldPos = mul(pushConstants.model, skinned);
-    output.worldPos = worldPos.xyz;
     float4 lightLocal = mul(ubo.pointLightView, worldPos);
-    output.position = mul(ubo.pointFaceVP[face], lightLocal);
+    output.position = mul(ubo.pointFaceVP[viewID], lightLocal);
+    output.lightDist = length(worldPos.xyz - ubo.pointLightPos.xyz);
     return output;
 }
 
 [shader("fragment")]
-float fragMain(VSOutput input) : SV_Target0 {
-    float3 lightVec = input.worldPos.xyz - ubo.pointLightPos.xyz;
-    return length(lightVec);
+float fragMain(VSOutput input) : SV_Depth {
+    return input.lightDist / ubo.pointLightParams.y;
 }

@@ -102,6 +102,17 @@ private:
     static constexpr std::array k_alpha_modes{
         MeshAlphaMode::Opaque, MeshAlphaMode::Cutout, MeshAlphaMode::AlphaToCoverage};
 
+    // Specialization constant: constant_id=0 = kHasPointShadows (bool)
+    const vk::Bool32 spec_has_point_shadows = profile_.has_point_shadows ? vk::True : vk::False;
+    const vk::SpecializationMapEntry spec_map_entry{
+        .constantID = 0, .offset = 0, .size = sizeof(vk::Bool32)};
+    const vk::SpecializationInfo frag_spec_info{
+        .mapEntryCount = 1,
+        .pMapEntries = &spec_map_entry,
+        .dataSize = sizeof(spec_has_point_shadows),
+        .pData = &spec_has_point_shadows,
+    };
+
     for (const MeshAlphaMode alpha_mode : k_alpha_modes) {
       const auto alpha_index = static_cast<std::size_t>(alpha_mode);
       if (!profile_.textured_alpha_modes[alpha_index])
@@ -120,7 +131,7 @@ private:
           create_graphics_pipeline(
               device, color_format_, depth_format_, textured_mesh_spirv_,
               *pipeline_layout_, sample_count_, mesh_binding, static_mesh_attributes,
-              *pipeline_cache_, raster, frag_entry);
+              *pipeline_cache_, raster, frag_entry, &frag_spec_info);
 
       if (profile_.build_skinned)
         pipelines_[static_cast<std::size_t>(textured_pipeline(alpha_mode, true))] =
@@ -128,7 +139,7 @@ private:
                 device, color_format_, depth_format_,
                 skinned_textured_spirv_, textured_mesh_spirv_,
                 *skinned_pipeline_layout_, sample_count_, mesh_binding, mesh_attributes,
-                *pipeline_cache_, raster, "vertMainSkinned", frag_entry);
+                *pipeline_cache_, raster, "vertMainSkinned", frag_entry, &frag_spec_info);
     }
 
     pipelines_[static_cast<std::size_t>(PipelineId::ShadowDepth)] =
@@ -158,11 +169,11 @@ private:
                .depth_bias_slope = k_shadow_depth_bias_slope},
               "vertMainSkinned");
 
-    // Point shadow cubemap (R32F color + depth, vertex + fragment in point_shadow.spv)
-    const vk::Format point_shadow_color_format = vk::Format::eR32Sfloat;
+    // Point shadow cubemap (depth-only, SV_Depth fragment output, hardware PCF)
+    const vk::Format point_cube_depth_format = vk::Format::eD32Sfloat;
     pipelines_[static_cast<std::size_t>(PipelineId::PointShadowDepth)] =
         create_graphics_pipeline(
-            device, point_shadow_color_format, shadow_depth_format_,
+            device, vk::Format::eUndefined, point_cube_depth_format,
             point_shadow_spirv_, point_shadow_spirv_,
             *pipeline_layout_, vk::SampleCountFlagBits::e1,
             mesh_binding, shadow_attributes,
@@ -174,13 +185,13 @@ private:
              .depth_bias_enable = true,
              .depth_bias_constant = k_shadow_depth_bias_constant,
              .depth_bias_slope = k_shadow_depth_bias_slope},
-            "vertMain", "fragMain");
+            "vertMain", "fragMain", nullptr, 0b111111);
 
-    // Point shadow cubemap skinned (R32F color + depth, skinned vertex input)
+    // Point shadow cubemap skinned (depth-only)
     if (profile_.build_skinned) {
       pipelines_[static_cast<std::size_t>(PipelineId::PointShadowDepthSkinned)] =
           create_graphics_pipeline(
-              device, point_shadow_color_format, shadow_depth_format_,
+              device, vk::Format::eUndefined, point_cube_depth_format,
               point_shadow_spirv_, point_shadow_spirv_,
               *skinned_pipeline_layout_, vk::SampleCountFlagBits::e1,
               mesh_binding, shadow_skinned_attributes,
@@ -192,7 +203,7 @@ private:
                .depth_bias_enable = true,
                .depth_bias_constant = k_shadow_depth_bias_constant,
                .depth_bias_slope = k_shadow_depth_bias_slope},
-              "vertMainSkinned", "fragMain");
+              "vertMainSkinned", "fragMain", nullptr, 0b111111);
     }
   }
 
@@ -213,7 +224,8 @@ private:
   PipelineBuildProfile profile_{};
   vk::raii::PipelineLayout pipeline_layout_{nullptr};
   vk::raii::PipelineLayout skinned_pipeline_layout_{nullptr};
-  std::array<std::optional<vk::raii::Pipeline>, 11> pipelines_{};
+  static constexpr auto k_pipeline_count = static_cast<std::size_t>(PipelineId::PointShadowDepthSkinned) + 1;
+  std::array<std::optional<vk::raii::Pipeline>, k_pipeline_count> pipelines_{};
 };
 
 } // namespace engine

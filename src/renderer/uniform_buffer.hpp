@@ -84,6 +84,22 @@ public:
     std::memcpy(mapped_[frame_index], &ubo, sizeof(FrameUniformBufferObject));
   }
 
+  void write_point_light_data(
+      std::uint32_t frame_index,
+      const glm::mat4 &light_view,
+      const std::array<glm::mat4, 6> &face_vps,
+      const glm::vec4 &light_pos,
+      const glm::vec4 &light_params) const {
+    constexpr auto offset = offsetof(FrameUniformBufferObject, point_light_view);
+    auto *ptr = static_cast<char *>(mapped_[frame_index]) + offset;
+    constexpr std::size_t mat_size = sizeof(glm::mat4);
+    constexpr std::size_t vec_size = sizeof(glm::vec4);
+    std::memcpy(ptr, &light_view, mat_size);
+    std::memcpy(ptr + mat_size, face_vps.data(), mat_size * 6);
+    std::memcpy(ptr + mat_size * 7, &light_pos, vec_size);
+    std::memcpy(ptr + mat_size * 7 + vec_size, &light_params, vec_size);
+  }
+
   [[nodiscard]] auto buffer(std::uint32_t frame_index) const -> vk::Buffer {
     return *buffers_[frame_index];
   }

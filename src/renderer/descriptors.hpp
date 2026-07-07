@@ -121,7 +121,7 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = frame_count * 3 + texture_count + skinned_instance_count * 4,
+            .descriptorCount = frame_count * 4 + texture_count + skinned_instance_count * 4,
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eStorageBuffer,
@@ -418,7 +418,7 @@ public:
     const vk::DescriptorImageInfo info{
         .sampler = sampler,
         .imageView = view,
-        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
     };
     for (const vk::DescriptorSet &set : frame_sets_) {
       device.updateDescriptorSets(

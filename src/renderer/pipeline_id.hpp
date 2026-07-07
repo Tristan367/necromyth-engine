@@ -97,6 +97,7 @@ struct PipelineBuildProfile {
   ShadowCascadeMode cascade_mode{ShadowCascadeMode::Dual};
   std::array<bool, 3> textured_alpha_modes{{true, false, false}};
   bool build_skinned{false};
+  bool has_point_shadows{false};
 };
 
 } // namespace engine

@@ -80,21 +80,6 @@ public:
     return bias * compute_shadow_view_proj(l);
   }
 
-  // Dual-paraboloid point shadow (Godot omni model).
-  //
-  // Godot renders the omni shadow as TWO paraboloid hemispheres (+Z and -Z)
-  // into one atlas region, storing normalized RADIAL distance from the light
-  // (not perspective depth). Both the depth pass and the sampler compute the
-  // same radial-distance value, so there is no perspective-matrix round-trip
-  // to keep in sync — this is why it is robust.
-  //
-  // `pointLightView` is the world -> light-local rigid transform (Godot's
-  // `shadow_matrix = light_transform.inverse()`). No projection. The light
-  // has no meaningful orientation, so this is just a translation by -position;
-  // the paraboloid basis is the light-local axes.
-  static auto compute_point_light_view(const PointLight &l) -> glm::mat4 {
-    return glm::translate(glm::mat4(1.0F), -glm::vec3(l.position));
-  }
 
   void write(std::uint32_t frame_index,
              const std::vector<PointLight> &point_lights,
@@ -150,6 +135,8 @@ public:
       sptr[i].dir_pad[3] = 0;
       sptr[i].angles[0] = spot_lights[i].inner_angle;
       sptr[i].angles[1] = spot_lights[i].outer_angle;
+      sptr[i].angles[2] = 0.0f;
+      sptr[i].angles[3] = 0.0f;
 
       if (spot_lights[i].casts_shadow) {
         const glm::mat4 sm = glm::transpose(compute_shadow_matrix(spot_lights[i]));

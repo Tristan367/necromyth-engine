@@ -51,7 +51,6 @@ public:
   VulkanContext(SDL_Window *window, const EngineConfig &config, const Scene &scene)
       : window_(window),
         msaa_config_(resolve_msaa_for_scene(config.msaa, scene_uses_alpha_to_coverage(scene.instances()))),
-        msaa_boosted_for_a2c_(!config.msaa.enabled && msaa_config_.enabled),
         startup_point_shadow_filter_(scene.shadow_settings().point_shadow_filter),
         startup_shadow_filter_mode_(scene.shadow_settings().filter_mode),
         startup_cascade_mode_(scene.shadow_settings().cascade_mode),
@@ -71,7 +70,7 @@ public:
         shadow_cascade_layer_count(scene.shadow_settings().cascade_mode));
     light_buffer_.create(device_.physical_device(), device_.device(), 64);
     create_spot_atlas(startup_spot_atlas_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale));
-    create_point_cubemap(scaled_shadow_map_resolution(1024, config.shadow_scale));
+    create_point_cubemap(point_cube_face_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale), 10);
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -113,7 +112,7 @@ public:
       std::cout << "MSAA: off (set ENGINE_MSAA=4 to enable; A2C foliage needs MSAA)\n";
     else
       std::cout << "MSAA: off (GPU supports up to " << vk::to_string(device_.max_msaa_samples()) << ")\n";
-    if (msaa_boosted_for_a2c_)
+    if (!config.msaa.enabled && msaa_config_.enabled)
       std::cout << "MSAA auto-enabled for AlphaToCoverage meshes\n";
     std::cout << "Present mode: " << present_mode_name(swapchain_.present_mode())
               << " (set ENGINE_PRESENT=mailbox to uncap for profiling)\n";
@@ -307,43 +306,10 @@ public:
     }
 
     // Point shadow: cubemap (Sascha omni model). First shadow-casting
-    // point light only. 6 face VP matrices precomputed for the UBO.
-    glm::mat4 point_view(1.0F);
-    std::array<glm::mat4, 6> point_face_vps{};
-    glm::vec4 point_pos(0.0F);
-    glm::vec4 point_params(0.0F);       // x=inv_radius, w=enabled
-    for (const PointLight &pl : scene.point_lights()) {
-      if (pl.casts_shadow) {
-        point_view = LightStorageBuffer::compute_point_light_view(pl);
-        point_pos = glm::vec4(pl.position, 1.0F);
-        const float inv_radius = pl.range > 0.0F ? 1.0F / pl.range : 0.0F;
-        point_params = glm::vec4(inv_radius, 0.0F, 0.0F, 1.0F);
-        // 90° FOV perspective for cube faces
-        const glm::mat4 proj = glm::perspective(glm::radians(90.0F), 1.0F, 0.01F, pl.range);
-
-        // Sascha Willems face rotation matrices (positive X = first face).
-        // These match Vulkan's cubemap sampler convention.
-        const std::array<glm::mat4, 6> face_views{{
-            // +X: rotate Y +90°, then X +180°
-            glm::rotate(glm::rotate(glm::mat4(1.0F), glm::radians( 90.0F), glm::vec3(0,1,0)),
-                        glm::radians(180.0F), glm::vec3(1,0,0)),
-            // -X: rotate Y -90°, then X +180°
-            glm::rotate(glm::rotate(glm::mat4(1.0F), glm::radians(-90.0F), glm::vec3(0,1,0)),
-                        glm::radians(180.0F), glm::vec3(1,0,0)),
-            // +Y: rotate X -90°
-            glm::rotate(glm::mat4(1.0F), glm::radians(-90.0F), glm::vec3(1,0,0)),
-            // -Y: rotate X +90°
-            glm::rotate(glm::mat4(1.0F), glm::radians( 90.0F), glm::vec3(1,0,0)),
-            // +Z: rotate X +180° (points toward +Z in world, matches default)
-            glm::rotate(glm::mat4(1.0F), glm::radians(180.0F), glm::vec3(1,0,0)),
-            // -Z: rotate Z +180° (roll, so +Z world → -Z)
-            glm::rotate(glm::mat4(1.0F), glm::radians(180.0F), glm::vec3(0,0,1)),
-        }};
-        for (int f = 0; f < 6; ++f)
-          point_face_vps[f] = proj * face_views[f];
-        break;
-      }
-    }
+    // Point light shadow data is updated per light during the shadow pass
+    // — it varies per light (position, range, face VPs differ). The main pass
+    // reads per-light position/range from the SSBO directly, so the UBO's
+    // point-light fields are only used by the shadow vertex/fragment shader.
 
     uniform_buffers_.write(
         frame_index_,
@@ -360,10 +326,6 @@ public:
                 scene.directional_light().ambient),
             .light_view_proj = cascades.light_view_proj,
             .spot_light_vp = spot_vps,
-            .point_light_view = point_view,
-            .point_face_vp = point_face_vps,
-            .point_light_pos = point_pos,
-            .point_light_params = point_params,
             .cascade_params = glm::vec4(
                 cascades.split_view_z,
                 shadow_settings.cascade_blend_range,
@@ -422,13 +384,11 @@ public:
 
     // Point shadow cubemap pass (Sascha omni model)
     if (has_point_shadows)
-      pass_recorder().record_point_shadow_pass(command_buffer, frame_index_, scene,
+      pass_recorder().record_point_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
                                                 shadow_draw_list_, *point_cube_,
                                                 point_cube_face_views_,
-                                                *point_cube_depth_,
-                                                *point_cube_depth_view_,
-                                                point_face_vps,
-                                                point_view);
+                                                uniform_buffers_,
+                                                point_cube_face_size_);
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
     pass_recorder().record_main_pass(
@@ -590,19 +550,20 @@ private:
     spot_atlas_sampler_ = vk::raii::Sampler(device_.device(), samp_info);
   }
 
-  void create_point_cubemap(std::uint32_t face_size = 1024, std::uint32_t max_point_lights = 4) {
+  void create_point_cubemap(std::uint32_t face_size = 1024, std::uint32_t max_point_lights = 1) {
     const std::uint32_t total_layers = max_point_lights * 6;
 
-    // R32F cubemap array: stores per-face distance from light
+    // D32 depth cubemap array. Depth-only rendering (SV_Depth fragment output).
+    // Sampled via comparison sampler in main pass for hardware PCF.
     vk::ImageCreateInfo img_info{};
     img_info.imageType = vk::ImageType::e2D;
-    img_info.format = vk::Format::eR32Sfloat;
+    img_info.format = vk::Format::eD32Sfloat;
     img_info.extent = vk::Extent3D{face_size, face_size, 1};
     img_info.mipLevels = 1;
     img_info.arrayLayers = total_layers;
     img_info.samples = vk::SampleCountFlagBits::e1;
     img_info.tiling = vk::ImageTiling::eOptimal;
-    img_info.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+    img_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
     img_info.flags = vk::ImageCreateFlagBits::eCubeCompatible;
     point_cube_ = vk::raii::Image(device_.device(), img_info);
 
@@ -615,73 +576,43 @@ private:
     point_cube_mem_ = vk::raii::DeviceMemory(device_.device(), mem_info);
     point_cube_.bindMemory(*point_cube_mem_, 0);
 
-    // Per-face 2D views for color attachment rendering
+    // Per-light D32 2D_ARRAY depth views for multiview rendering
     point_cube_face_views_.clear();
-    for (std::uint32_t layer = 0; layer < total_layers; ++layer) {
+    for (std::uint32_t light = 0; light < max_point_lights; ++light) {
       vk::ImageViewCreateInfo view_info{};
       view_info.image = *point_cube_;
-      view_info.viewType = vk::ImageViewType::e2D;
-      view_info.format = vk::Format::eR32Sfloat;
-      view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+      view_info.viewType = vk::ImageViewType::e2DArray;
+      view_info.format = vk::Format::eD32Sfloat;
+      view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
       view_info.subresourceRange.baseMipLevel = 0;
       view_info.subresourceRange.levelCount = 1;
-      view_info.subresourceRange.baseArrayLayer = layer;
-      view_info.subresourceRange.layerCount = 1;
+      view_info.subresourceRange.baseArrayLayer = light * 6;
+      view_info.subresourceRange.layerCount = 6;
       point_cube_face_views_.push_back(vk::raii::ImageView(device_.device(), view_info));
     }
 
-    // CubeArray view for sampling in the fragment shader
+    // CubeArray view for comparison sampling in the fragment shader
     vk::ImageViewCreateInfo cube_view_info{};
     cube_view_info.image = *point_cube_;
     cube_view_info.viewType = vk::ImageViewType::eCubeArray;
-    cube_view_info.format = vk::Format::eR32Sfloat;
-    cube_view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    cube_view_info.format = vk::Format::eD32Sfloat;
+    cube_view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
     cube_view_info.subresourceRange.baseMipLevel = 0;
     cube_view_info.subresourceRange.levelCount = 1;
     cube_view_info.subresourceRange.baseArrayLayer = 0;
     cube_view_info.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
     point_cube_array_view_ = vk::raii::ImageView(device_.device(), cube_view_info);
 
-    // Sampler for the cube array (linear, clamp to edge)
+    // Comparison sampler: hardware PCF (bilinear 2x2) with LessOrEqual depth test
     vk::SamplerCreateInfo samp_info{};
     samp_info.magFilter = vk::Filter::eLinear;
     samp_info.minFilter = vk::Filter::eLinear;
     samp_info.addressModeU = vk::SamplerAddressMode::eClampToEdge;
     samp_info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
     samp_info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    samp_info.borderColor = vk::BorderColor::eFloatOpaqueWhite;
+    samp_info.compareEnable = vk::True;
+    samp_info.compareOp = vk::CompareOp::eLessOrEqual;
     point_cube_sampler_ = vk::raii::Sampler(device_.device(), samp_info);
-
-    // Depth image for point shadow rendering (shared by all faces)
-    vk::ImageCreateInfo depth_info{};
-    depth_info.imageType = vk::ImageType::e2D;
-    depth_info.format = shadow_map_.format();
-    depth_info.extent = vk::Extent3D{face_size, face_size, 1};
-    depth_info.mipLevels = 1;
-    depth_info.arrayLayers = 1;
-    depth_info.samples = vk::SampleCountFlagBits::e1;
-    depth_info.tiling = vk::ImageTiling::eOptimal;
-    depth_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
-    point_cube_depth_ = vk::raii::Image(device_.device(), depth_info);
-
-    auto depth_reqs = point_cube_depth_.getMemoryRequirements();
-    auto depth_mt = detail::find_memory_type(device_.physical_device().getMemoryProperties(),
-                                              depth_reqs.memoryTypeBits,
-                                              vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk::MemoryAllocateInfo depth_mem_info{};
-    depth_mem_info.allocationSize = depth_reqs.size;
-    depth_mem_info.memoryTypeIndex = depth_mt;
-    point_cube_depth_mem_ = vk::raii::DeviceMemory(device_.device(), depth_mem_info);
-    point_cube_depth_.bindMemory(*point_cube_depth_mem_, 0);
-
-    vk::ImageViewCreateInfo depth_view_info{};
-    depth_view_info.image = *point_cube_depth_;
-    depth_view_info.viewType = vk::ImageViewType::e2D;
-    depth_view_info.format = shadow_map_.format();
-    depth_view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-    depth_view_info.subresourceRange.levelCount = 1;
-    depth_view_info.subresourceRange.layerCount = 1;
-    point_cube_depth_view_ = vk::raii::ImageView(device_.device(), depth_view_info);
   }
 
   void create_depth_image() {
@@ -745,6 +676,7 @@ private:
         .cascade_mode = startup_cascade_mode_,
         .textured_alpha_modes = collect_used_alpha_modes(scene.instances()),
         .build_skinned = has_skinned_instances(scene.instances()),
+        .has_point_shadows = has_point_shadow_lights(scene.point_lights()),
     };
 
     std::size_t textured_pipeline_count = 0;
@@ -753,17 +685,23 @@ private:
         ++textured_pipeline_count;
     }
     const std::size_t skinned_count = profile.build_skinned ? textured_pipeline_count + 1 : 0;
-    std::cout << "Graphics pipelines: " << (2 + textured_pipeline_count + skinned_count)
+    const std::size_t point_count = profile.has_point_shadows ? 2 : 0; // PointShadowDepth + skinned
+    std::cout << "Graphics pipelines: " << (2 + textured_pipeline_count + skinned_count + point_count)
               << " (background + shadow depth + " << textured_pipeline_count << " textured"
               << (profile.build_skinned ? " + " + std::to_string(skinned_count) + " skinned" : "")
+              << (profile.has_point_shadows ? " + " + std::to_string(point_count) + " point shadow" : "")
               << ")\n";
+
+    const auto textured_spirv = profile.has_point_shadows
+        ? std::string_view(ENGINE_SHADER_SPIRV)
+        : std::string_view(ENGINE_NO_POINT_SHADER_SPIRV);
 
     pipelines_.create(
         device_.device(),
         swapchain_.image_format(),
         depth_image_.format(),
         shadow_map_.format(),
-        ENGINE_SHADER_SPIRV,
+        textured_spirv,
         ENGINE_SKY_SHADER_SPIRV,
         ENGINE_SHADOW_DEPTH_SPIRV,
         ENGINE_SKINNED_SHADER_SPIRV,
@@ -862,6 +800,12 @@ private:
     return count_skinned_instances(instances) > 0;
   }
 
+  [[nodiscard]] static auto has_point_shadow_lights(const std::vector<PointLight> &point_lights) -> bool {
+    for (const PointLight &pl : point_lights)
+      if (pl.casts_shadow) return true;
+    return false;
+  }
+
   void create_bone_buffers(const Scene &scene) {
     bone_buffers_.clear();
     skinned_texture_indices_.clear();
@@ -908,7 +852,6 @@ private:
 
   SDL_Window *window_{};
   MsaaSettings msaa_config_{};
-  bool msaa_boosted_for_a2c_{false};
   bool startup_point_shadow_filter_{false};
   ShadowFilterMode startup_shadow_filter_mode_{ShadowFilterMode::Pcf3x3};
   ShadowCascadeMode startup_cascade_mode_{ShadowCascadeMode::Dual};
@@ -938,9 +881,7 @@ private:
   std::vector<vk::raii::ImageView> point_cube_face_views_;
   vk::raii::ImageView point_cube_array_view_{nullptr};
   vk::raii::Sampler point_cube_sampler_{nullptr};
-  vk::raii::Image point_cube_depth_{nullptr};
-  vk::raii::DeviceMemory point_cube_depth_mem_{nullptr};
-  vk::raii::ImageView point_cube_depth_view_{nullptr};
+  float point_cube_face_size_{1024.0F};
   TextureTable texture_table_;
   TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;

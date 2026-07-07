@@ -14,7 +14,7 @@ struct FrameUniforms {
     float4x4 pointLightView;      // world -> light-local translation
     float4x4 pointFaceVP[6];      // VP per cube face (perspective * rotation)
     float4 pointLightPos;         // world-space light position (for fragment)
-    float4 pointLightParams;      // x = inv_radius (1/range), w = enabled
+    float4 pointLightParams;      // x=inv_radius, y=range, z=face_size, w=enabled
     // x = split view-space Z (negative); y = blend half-width in view meters (0 = hard pick).
     float4 cascadeParams;
     // x = UV coverage fade width (0 = hard edge)
