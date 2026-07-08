@@ -59,6 +59,24 @@ public:
     return glm::normalize(glm::cross(look_direction(), up_));
   }
 
+  // Camera follows a world-space target at a fixed elevation offset.
+  void follow(const glm::vec3 &target, const glm::vec3 &look_direction, float elevation = 1.5F) {
+    const glm::vec3 eye{target.x, target.y + elevation, target.z};
+    look_at(eye, eye + look_direction);
+  }
+
+  // Horizontal (XZ-plane) basis from the camera's look direction.
+  // Forward is the horizontal component, right is the cross product.
+  // Returns {forward, right} — handles straight-up/down edge case.
+  [[nodiscard]] auto horizontal_basis() const -> std::pair<glm::vec3, glm::vec3> {
+    const glm::vec3 look = look_direction();
+    const glm::vec3 horiz = glm::vec3(look.x, 0.0F, look.z);
+    const float len2 = glm::dot(horiz, horiz);
+    const glm::vec3 fwd = len2 > 1e-10F ? glm::normalize(horiz) : glm::vec3(0.0F, 0.0F, -1.0F);
+    const glm::vec3 rgt = glm::normalize(glm::cross(fwd, glm::vec3(0.0F, 1.0F, 0.0F)));
+    return {fwd, rgt};
+  }
+
   [[nodiscard]] auto up() const -> glm::vec3 {
     return glm::normalize(glm::cross(right(), look_direction()));
   }

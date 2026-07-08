@@ -17,7 +17,9 @@ struct AudioEngine::Impl {
   bool initialized{false};
 };
 
-AudioEngine::AudioEngine() : impl_(std::make_unique<Impl>()) {}
+AudioEngine::AudioEngine() : impl_(std::make_unique<Impl>()) {
+  (void)init();
+}
 
 AudioEngine::~AudioEngine() {
   if (impl_)
