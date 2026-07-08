@@ -190,7 +190,7 @@ When capping ticks per frame (max 2), drain the overflow: `accumulator = fmod(ac
 
 ## Deferred refactors (design decisions needed)
 
-1. **Graphics pipeline dedup** — `graphics_pipeline.hpp` has 3 functions (`create_graphics_pipeline` x2 + `create_depth_only_graphics_pipeline`) sharing ~90% setup code. ~200 lines of triplication. Extracting shared logic would touch all pipeline paths (main, shadow, point, particle) — needs thorough re-testing.
+1. **Graphics pipeline dedup** — ~~`graphics_pipeline.hpp` has 3 functions (`create_graphics_pipeline` x2 + `create_depth_only_graphics_pipeline`) sharing ~90% setup code. ~200 lines of triplication. Extracting shared logic would touch all pipeline paths (main, shadow, point, particle) — needs thorough re-testing.~~ Done. Extracted `detail::build_graphics_pipeline`. File: 425 → 275 lines.
 
 2. **Two-step init → RAII** — `Swapchain`, `DepthImage`, `RenderColorImage`, `ShadowMap`, `TextureImage`, `TextureArray`, `ParticleSystem`, `BoneStorageBufferSet`, `UniformBufferSet` all default-construct empty, then require `create()`. Moving to RAII constructors prevents use-before-init bugs. Some (Swapchain) need `recreate()` anyway for resize.
 

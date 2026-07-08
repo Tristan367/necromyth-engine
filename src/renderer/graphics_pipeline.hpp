@@ -77,6 +77,107 @@ struct GraphicsPipelineRasterState {
   return create_pipeline_layout(device, descriptor_set_layouts, push_constant_range);
 }
 
+namespace detail {
+
+[[nodiscard]] inline auto build_graphics_pipeline(
+    vk::raii::Device &device,
+    vk::PipelineLayout pipeline_layout,
+    const vk::raii::PipelineCache &pipeline_cache,
+    std::span<const vk::PipelineShaderStageCreateInfo> stages,
+    vk::VertexInputBindingDescription binding,
+    std::span<const vk::VertexInputAttributeDescription> attributes,
+    vk::SampleCountFlagBits sample_count,
+    const GraphicsPipelineRasterState &raster_state,
+    const vk::PipelineRenderingCreateInfo &rendering_info) -> vk::raii::Pipeline {
+  const vk::PipelineVertexInputStateCreateInfo vertex_input_info{
+      .vertexBindingDescriptionCount = 1,
+      .pVertexBindingDescriptions = &binding,
+      .vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size()),
+      .pVertexAttributeDescriptions = attributes.data(),
+  };
+  const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
+      .topology = vk::PrimitiveTopology::eTriangleList,
+  };
+  const vk::PipelineViewportStateCreateInfo viewport_state{
+      .viewportCount = 1,
+      .scissorCount = 1,
+  };
+  const vk::PipelineRasterizationStateCreateInfo rasterizer{
+      .depthClampEnable = vk::False,
+      .rasterizerDiscardEnable = vk::False,
+      .polygonMode = vk::PolygonMode::eFill,
+      .cullMode = raster_state.cull_mode,
+      .frontFace = raster_state.front_face,
+      .depthBiasEnable = raster_state.depth_bias_enable ? vk::True : vk::False,
+      .depthBiasConstantFactor = raster_state.depth_bias_constant,
+      .depthBiasSlopeFactor = raster_state.depth_bias_slope,
+      .lineWidth = 1.0F,
+  };
+  const vk::PipelineMultisampleStateCreateInfo multisampling{
+      .rasterizationSamples = sample_count,
+      .alphaToCoverageEnable = raster_state.alpha_to_coverage ? vk::True : vk::False,
+  };
+  const vk::PipelineDepthStencilStateCreateInfo depth_stencil{
+      .depthTestEnable = raster_state.depth_test ? vk::True : vk::False,
+      .depthWriteEnable = raster_state.depth_write ? vk::True : vk::False,
+      .depthCompareOp = raster_state.depth_compare,
+  };
+
+  std::vector<vk::DynamicState> dynamic_state_list{
+      vk::DynamicState::eViewport,
+      vk::DynamicState::eScissor,
+  };
+  if (raster_state.depth_bias_enable)
+    dynamic_state_list.push_back(vk::DynamicState::eDepthBias);
+  const vk::PipelineDynamicStateCreateInfo dynamic_state{
+      .dynamicStateCount = static_cast<std::uint32_t>(dynamic_state_list.size()),
+      .pDynamicStates = dynamic_state_list.data(),
+  };
+
+  const bool has_color = rendering_info.colorAttachmentCount > 0;
+  const vk::PipelineColorBlendAttachmentState color_blend_attachment{
+      .blendEnable = raster_state.blend_enable ? vk::True : vk::False,
+      .srcColorBlendFactor = raster_state.src_color_blend,
+      .dstColorBlendFactor = raster_state.dst_color_blend,
+      .colorBlendOp = vk::BlendOp::eAdd,
+      .srcAlphaBlendFactor = raster_state.src_alpha_blend,
+      .dstAlphaBlendFactor = raster_state.dst_alpha_blend,
+      .alphaBlendOp = vk::BlendOp::eAdd,
+      .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+  };
+  const vk::PipelineColorBlendStateCreateInfo color_blending{
+      .attachmentCount = has_color ? 1u : 0u,
+      .pAttachments = has_color ? &color_blend_attachment : nullptr,
+  };
+
+  vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipeline_chain{
+      vk::GraphicsPipelineCreateInfo{
+          .stageCount = static_cast<std::uint32_t>(stages.size()),
+          .pStages = stages.data(),
+          .pVertexInputState = &vertex_input_info,
+          .pInputAssemblyState = &input_assembly,
+          .pViewportState = &viewport_state,
+          .pRasterizationState = &rasterizer,
+          .pMultisampleState = &multisampling,
+          .pDepthStencilState = &depth_stencil,
+          .pColorBlendState = &color_blending,
+          .pDynamicState = &dynamic_state,
+          .layout = pipeline_layout,
+          .renderPass = nullptr,
+      },
+      rendering_info,
+  };
+
+  return vk::raii::Pipeline(
+      device,
+      pipeline_cache,
+      pipeline_chain.get<vk::GraphicsPipelineCreateInfo>());
+}
+
+} // namespace detail
+
+// Separate VS/FS SPIR-V files (e.g. skinned shaders with different vertex entry).
 [[nodiscard]] inline auto create_graphics_pipeline(
     vk::raii::Device &device,
     vk::Format color_format,
@@ -99,115 +200,21 @@ struct GraphicsPipelineRasterState {
   const vk::raii::ShaderModule fragment_module = create_shader_module(device, fragment_spirv);
 
   const std::array stages{
-      vk::PipelineShaderStageCreateInfo{
-          .stage = vk::ShaderStageFlagBits::eVertex,
-          .module = *vertex_module,
-          .pName = vertex_entry_point,
-      },
-      vk::PipelineShaderStageCreateInfo{
-          .stage = vk::ShaderStageFlagBits::eFragment,
-          .module = *fragment_module,
-          .pName = fragment_entry_point,
-          .pSpecializationInfo = frag_spec_info,
-      },
-  };
-
-  const vk::PipelineVertexInputStateCreateInfo vertex_input_info{
-      .vertexBindingDescriptionCount = 1,
-      .pVertexBindingDescriptions = &binding,
-      .vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size()),
-      .pVertexAttributeDescriptions = attributes.data(),
-  };
-  const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
-      .topology = vk::PrimitiveTopology::eTriangleList,
-  };
-  const vk::PipelineViewportStateCreateInfo viewport_state{
-      .viewportCount = 1,
-      .scissorCount = 1,
-  };
-  const vk::PipelineRasterizationStateCreateInfo rasterizer{
-      .depthClampEnable = vk::False,
-      .rasterizerDiscardEnable = vk::False,
-      .polygonMode = vk::PolygonMode::eFill,
-      .cullMode = raster_state.cull_mode,
-      .frontFace = raster_state.front_face,
-      .depthBiasEnable = raster_state.depth_bias_enable ? vk::True : vk::False,
-      .depthBiasConstantFactor = raster_state.depth_bias_constant,
-      .depthBiasSlopeFactor = raster_state.depth_bias_slope,
-      .lineWidth = 1.0F,
-  };
-  const vk::PipelineMultisampleStateCreateInfo multisampling{
-      .rasterizationSamples = sample_count,
-      .alphaToCoverageEnable = raster_state.alpha_to_coverage ? vk::True : vk::False,
-  };
-  const vk::PipelineColorBlendAttachmentState color_blend_attachment{
-      .blendEnable = raster_state.blend_enable ? vk::True : vk::False,
-      .srcColorBlendFactor = raster_state.src_color_blend,
-      .dstColorBlendFactor = raster_state.dst_color_blend,
-      .colorBlendOp = vk::BlendOp::eAdd,
-      .srcAlphaBlendFactor = raster_state.src_alpha_blend,
-      .dstAlphaBlendFactor = raster_state.dst_alpha_blend,
-      .alphaBlendOp = vk::BlendOp::eAdd,
-      .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+      vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = *vertex_module, .pName = vertex_entry_point},
+      vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = *fragment_module, .pName = fragment_entry_point, .pSpecializationInfo = frag_spec_info},
   };
   const bool has_color = color_format != vk::Format::eUndefined;
-  const vk::PipelineColorBlendStateCreateInfo color_blending{
-      .attachmentCount = has_color ? 1u : 0u,
-      .pAttachments = has_color ? &color_blend_attachment : nullptr,
+  const vk::PipelineRenderingCreateInfo render_info{
+      .viewMask = view_mask,
+      .colorAttachmentCount = has_color ? 1u : 0u,
+      .pColorAttachmentFormats = has_color ? &color_format : nullptr,
+      .depthAttachmentFormat = depth_format,
   };
-
-  const vk::PipelineDepthStencilStateCreateInfo depth_stencil{
-      .depthTestEnable = raster_state.depth_test ? vk::True : vk::False,
-      .depthWriteEnable = raster_state.depth_write ? vk::True : vk::False,
-      .depthCompareOp = raster_state.depth_compare,
-  };
-
-  const std::array dynamic_states{
-      vk::DynamicState::eViewport,
-      vk::DynamicState::eScissor,
-  };
-  std::vector<vk::DynamicState> dynamic_state_list{dynamic_states.begin(), dynamic_states.end()};
-  if (raster_state.depth_bias_enable)
-    dynamic_state_list.push_back(vk::DynamicState::eDepthBias);
-
-  const vk::PipelineDynamicStateCreateInfo dynamic_state{
-      .dynamicStateCount = static_cast<std::uint32_t>(dynamic_state_list.size()),
-      .pDynamicStates = dynamic_state_list.data(),
-  };
-
-  vk::Format color_attachment_format = color_format;
-  vk::Format depth_attachment_format = depth_format;
-
-  vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipeline_chain{
-      vk::GraphicsPipelineCreateInfo{
-          .stageCount = static_cast<std::uint32_t>(stages.size()),
-          .pStages = stages.data(),
-          .pVertexInputState = &vertex_input_info,
-          .pInputAssemblyState = &input_assembly,
-          .pViewportState = &viewport_state,
-          .pRasterizationState = &rasterizer,
-          .pMultisampleState = &multisampling,
-          .pDepthStencilState = &depth_stencil,
-          .pColorBlendState = &color_blending,
-          .pDynamicState = &dynamic_state,
-          .layout = pipeline_layout,
-          .renderPass = nullptr,
-      },
-      vk::PipelineRenderingCreateInfo{
-          .viewMask = view_mask,
-          .colorAttachmentCount = has_color ? 1u : 0u,
-          .pColorAttachmentFormats = has_color ? &color_attachment_format : nullptr,
-          .depthAttachmentFormat = depth_attachment_format,
-      },
-  };
-
-  return vk::raii::Pipeline(
-      device,
-      pipeline_cache,
-      pipeline_chain.get<vk::GraphicsPipelineCreateInfo>());
+  return detail::build_graphics_pipeline(device, pipeline_layout, pipeline_cache, stages,
+      binding, attributes, sample_count, raster_state, render_info);
 }
 
+// Single SPIR-V file — vertex + fragment share the same module.
 [[nodiscard]] inline auto create_graphics_pipeline(
     vk::raii::Device &device,
     vk::Format color_format,
@@ -225,113 +232,19 @@ struct GraphicsPipelineRasterState {
   const vk::raii::ShaderModule shader_module = create_shader_module(device, spirv);
 
   const std::array stages{
-      vk::PipelineShaderStageCreateInfo{
-          .stage = vk::ShaderStageFlagBits::eVertex,
-          .module = *shader_module,
-          .pName = "vertMain",
-      },
-      vk::PipelineShaderStageCreateInfo{
-          .stage = vk::ShaderStageFlagBits::eFragment,
-          .module = *shader_module,
-          .pName = fragment_entry_point,
-          .pSpecializationInfo = frag_spec_info,
-      },
+      vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = *shader_module, .pName = "vertMain"},
+      vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = *shader_module, .pName = fragment_entry_point, .pSpecializationInfo = frag_spec_info},
   };
-
-  const vk::PipelineVertexInputStateCreateInfo vertex_input_info{
-      .vertexBindingDescriptionCount = 1,
-      .pVertexBindingDescriptions = &binding,
-      .vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size()),
-      .pVertexAttributeDescriptions = attributes.data(),
+  const vk::PipelineRenderingCreateInfo render_info{
+      .colorAttachmentCount = 1,
+      .pColorAttachmentFormats = &color_format,
+      .depthAttachmentFormat = depth_format,
   };
-  const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
-      .topology = vk::PrimitiveTopology::eTriangleList,
-  };
-  const vk::PipelineViewportStateCreateInfo viewport_state{
-      .viewportCount = 1,
-      .scissorCount = 1,
-  };
-  const vk::PipelineRasterizationStateCreateInfo rasterizer{
-      .depthClampEnable = vk::False,
-      .rasterizerDiscardEnable = vk::False,
-      .polygonMode = vk::PolygonMode::eFill,
-      .cullMode = raster_state.cull_mode,
-      .frontFace = raster_state.front_face,
-      .depthBiasEnable = raster_state.depth_bias_enable ? vk::True : vk::False,
-      .depthBiasConstantFactor = raster_state.depth_bias_constant,
-      .depthBiasSlopeFactor = raster_state.depth_bias_slope,
-      .lineWidth = 1.0F,
-  };
-  const vk::PipelineMultisampleStateCreateInfo multisampling{
-      .rasterizationSamples = sample_count,
-      .alphaToCoverageEnable = raster_state.alpha_to_coverage ? vk::True : vk::False,
-  };
-  const vk::PipelineColorBlendAttachmentState color_blend_attachment{
-      .blendEnable = raster_state.blend_enable ? vk::True : vk::False,
-      .srcColorBlendFactor = raster_state.src_color_blend,
-      .dstColorBlendFactor = raster_state.dst_color_blend,
-      .colorBlendOp = vk::BlendOp::eAdd,
-      .srcAlphaBlendFactor = raster_state.src_alpha_blend,
-      .dstAlphaBlendFactor = raster_state.dst_alpha_blend,
-      .alphaBlendOp = vk::BlendOp::eAdd,
-      .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
-  };
-  const vk::PipelineColorBlendStateCreateInfo color_blending{
-      .attachmentCount = 1,
-      .pAttachments = &color_blend_attachment,
-  };
-
-  const vk::PipelineDepthStencilStateCreateInfo depth_stencil{
-      .depthTestEnable = raster_state.depth_test ? vk::True : vk::False,
-      .depthWriteEnable = raster_state.depth_write ? vk::True : vk::False,
-      .depthCompareOp = raster_state.depth_compare,
-  };
-
-  const std::array dynamic_states{
-      vk::DynamicState::eViewport,
-      vk::DynamicState::eScissor,
-  };
-  std::vector<vk::DynamicState> dynamic_state_list{dynamic_states.begin(), dynamic_states.end()};
-  if (raster_state.depth_bias_enable)
-    dynamic_state_list.push_back(vk::DynamicState::eDepthBias);
-
-  const vk::PipelineDynamicStateCreateInfo dynamic_state{
-      .dynamicStateCount = static_cast<std::uint32_t>(dynamic_state_list.size()),
-      .pDynamicStates = dynamic_state_list.data(),
-  };
-
-  vk::Format color_attachment_format = color_format;
-  vk::Format depth_attachment_format = depth_format;
-
-  vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipeline_chain{
-      vk::GraphicsPipelineCreateInfo{
-          .stageCount = static_cast<std::uint32_t>(stages.size()),
-          .pStages = stages.data(),
-          .pVertexInputState = &vertex_input_info,
-          .pInputAssemblyState = &input_assembly,
-          .pViewportState = &viewport_state,
-          .pRasterizationState = &rasterizer,
-          .pMultisampleState = &multisampling,
-          .pDepthStencilState = &depth_stencil,
-          .pColorBlendState = &color_blending,
-          .pDynamicState = &dynamic_state,
-          .layout = pipeline_layout,
-          .renderPass = nullptr,
-      },
-      vk::PipelineRenderingCreateInfo{
-          .colorAttachmentCount = 1,
-          .pColorAttachmentFormats = &color_attachment_format,
-          .depthAttachmentFormat = depth_attachment_format,
-      },
-  };
-
-  return vk::raii::Pipeline(
-      device,
-      pipeline_cache,
-      pipeline_chain.get<vk::GraphicsPipelineCreateInfo>());
+  return detail::build_graphics_pipeline(device, pipeline_layout, pipeline_cache, stages,
+      binding, attributes, sample_count, raster_state, render_info);
 }
 
+// Vertex-only, no color attachments (shadow depth pass).
 [[nodiscard]] inline auto create_depth_only_graphics_pipeline(
     vk::raii::Device &device,
     vk::Format depth_format,
@@ -350,76 +263,13 @@ struct GraphicsPipelineRasterState {
       .module = *shader_module,
       .pName = entry_point,
   };
-
-  const vk::PipelineVertexInputStateCreateInfo vertex_input_info{
-      .vertexBindingDescriptionCount = 1,
-      .pVertexBindingDescriptions = &binding,
-      .vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size()),
-      .pVertexAttributeDescriptions = attributes.data(),
+  const vk::PipelineRenderingCreateInfo render_info{
+      .colorAttachmentCount = 0,
+      .depthAttachmentFormat = depth_format,
   };
-  const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
-      .topology = vk::PrimitiveTopology::eTriangleList,
-  };
-  const vk::PipelineViewportStateCreateInfo viewport_state{
-      .viewportCount = 1,
-      .scissorCount = 1,
-  };
-  const vk::PipelineRasterizationStateCreateInfo rasterizer{
-      .depthClampEnable = vk::False,
-      .rasterizerDiscardEnable = vk::False,
-      .polygonMode = vk::PolygonMode::eFill,
-      .cullMode = raster_state.cull_mode,
-      .frontFace = raster_state.front_face,
-      .depthBiasEnable = raster_state.depth_bias_enable ? vk::True : vk::False,
-      .depthBiasConstantFactor = raster_state.depth_bias_constant,
-      .depthBiasSlopeFactor = raster_state.depth_bias_slope,
-      .lineWidth = 1.0F,
-  };
-  const vk::PipelineMultisampleStateCreateInfo multisampling{
-      .rasterizationSamples = vk::SampleCountFlagBits::e1,
-  };
-  const vk::PipelineDepthStencilStateCreateInfo depth_stencil{
-      .depthTestEnable = raster_state.depth_test ? vk::True : vk::False,
-      .depthWriteEnable = raster_state.depth_write ? vk::True : vk::False,
-      .depthCompareOp = raster_state.depth_compare,
-  };
-
-  std::vector<vk::DynamicState> dynamic_state_list{
-      vk::DynamicState::eViewport,
-      vk::DynamicState::eScissor,
-  };
-  if (raster_state.depth_bias_enable)
-    dynamic_state_list.push_back(vk::DynamicState::eDepthBias);
-
-  const vk::PipelineDynamicStateCreateInfo dynamic_state{
-      .dynamicStateCount = static_cast<std::uint32_t>(dynamic_state_list.size()),
-      .pDynamicStates = dynamic_state_list.data(),
-  };
-
-  vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipeline_chain{
-      vk::GraphicsPipelineCreateInfo{
-          .stageCount = 1,
-          .pStages = &vert_stage,
-          .pVertexInputState = &vertex_input_info,
-          .pInputAssemblyState = &input_assembly,
-          .pViewportState = &viewport_state,
-          .pRasterizationState = &rasterizer,
-          .pMultisampleState = &multisampling,
-          .pDepthStencilState = &depth_stencil,
-          .pDynamicState = &dynamic_state,
-          .layout = pipeline_layout,
-          .renderPass = nullptr,
-      },
-      vk::PipelineRenderingCreateInfo{
-          .colorAttachmentCount = 0,
-          .depthAttachmentFormat = depth_format,
-      },
-  };
-
-  return vk::raii::Pipeline(
-      device,
-      pipeline_cache,
-      pipeline_chain.get<vk::GraphicsPipelineCreateInfo>());
+  return detail::build_graphics_pipeline(device, pipeline_layout, pipeline_cache,
+      {&vert_stage, 1}, binding, attributes, vk::SampleCountFlagBits::e1,
+      raster_state, render_info);
 }
 
 } // namespace engine
