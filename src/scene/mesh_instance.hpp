@@ -37,6 +37,4 @@ struct MeshInstance {
 
 constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();
 
-[[nodiscard]] inline auto is_skinned_instance(const MeshInstance &instance, const Scene &scene) -> bool;
-
 } // namespace engine

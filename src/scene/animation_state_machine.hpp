@@ -1,8 +1,6 @@
 #pragma once
 
 #include "scene/animation_types.hpp"
-#include "scene/animation_utils.hpp"
-#include "scene/mesh_instance.hpp"
 
 #include <algorithm>
 #include <cmath>

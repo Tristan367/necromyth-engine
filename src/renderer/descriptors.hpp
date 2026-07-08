@@ -1,7 +1,6 @@
 #pragma once
 
 #include "renderer/texture_image.hpp"
-#include "renderer/texture_array.hpp"
 #include "renderer/uniform_buffer.hpp"
 
 #include <vulkan/vulkan_raii.hpp>

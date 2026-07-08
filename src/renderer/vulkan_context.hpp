@@ -226,7 +226,7 @@ public:
       descriptors_changed = true;
     }
 
-    if (count_skinned_instances(scene.instances()) != static_cast<std::uint32_t>(bone_buffers_.size())) {
+    if (count_skinned_instances(scene.instances(), scene) != static_cast<std::uint32_t>(bone_buffers_.size())) {
       create_bone_buffers(scene);
       descriptors_changed = true;
     }
@@ -691,7 +691,7 @@ private:
   }
 
   void create_descriptor_pool_and_sets(const Scene &scene) {
-    rebuild_descriptor_sets(count_skinned_instances(scene.instances()));
+    rebuild_descriptor_sets(count_skinned_instances(scene.instances(), scene));
   }
 
   void rebuild_descriptor_sets(std::uint32_t skinned_count) {
@@ -739,7 +739,7 @@ private:
         .shadow_filter = startup_shadow_filter_mode_,
         .cascade_mode = startup_cascade_mode_,
         .textured_alpha_modes = collect_used_alpha_modes(scene.instances()),
-        .build_skinned = has_skinned_instances(scene.instances()),
+        .build_skinned = has_skinned_instances(scene.instances(), scene),
         .has_point_shadows = has_point_shadow_lights(scene.point_lights()),
     };
 
@@ -851,17 +851,21 @@ private:
     frame_index_ = 0;
   }
 
-  [[nodiscard]] static auto count_skinned_instances(const std::vector<MeshInstance> &instances) -> std::uint32_t {
+  [[nodiscard]] static auto count_skinned_instances(const std::vector<MeshInstance> &instances,
+                                                     const Scene &scene) -> std::uint32_t {
     std::uint32_t count = 0;
     for (const MeshInstance &instance : instances) {
-      if (instance.skin_index != k_invalid_skin_index)
-        ++count;
+      if (instance.skin_index == k_invalid_skin_index) continue;
+      if (instance.skin_index >= scene.skeletons().size()) continue;
+      if (scene.skeletons()[instance.skin_index].joint_nodes.empty()) continue;
+      ++count;
     }
     return count;
   }
 
-  [[nodiscard]] static auto has_skinned_instances(const std::vector<MeshInstance> &instances) -> bool {
-    return count_skinned_instances(instances) > 0;
+  [[nodiscard]] static auto has_skinned_instances(const std::vector<MeshInstance> &instances,
+                                                     const Scene &scene) -> bool {
+    return count_skinned_instances(instances, scene) > 0;
   }
 
   [[nodiscard]] static auto has_point_shadow_lights(const std::vector<PointLight> &point_lights) -> bool {

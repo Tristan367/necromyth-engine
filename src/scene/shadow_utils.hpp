@@ -115,7 +115,6 @@ struct DirectionalShadowCascadeData {
   case ShadowCascadeMode::Dual:
     return "dual";
   }
-  return "unknown";
 }
 
 [[nodiscard]] inline auto shadow_filter_mode_name(ShadowFilterMode mode) -> const char * {
@@ -125,7 +124,6 @@ struct DirectionalShadowCascadeData {
   case ShadowFilterMode::Pcf3x3:
     return "pcf3x3";
   }
-  return "unknown";
 }
 
 namespace detail {

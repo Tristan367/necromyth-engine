@@ -128,10 +128,4 @@ private:
   std::vector<SpotLight> spot_lights_;
 };
 
-[[nodiscard]] inline auto is_skinned_instance(const MeshInstance &instance, const Scene &scene) -> bool {
-  if (instance.skin_index >= scene.skeletons().size())
-    return false;
-  return !scene.skeletons()[instance.skin_index].joint_nodes.empty();
-}
-
 } // namespace engine

@@ -16,7 +16,6 @@
 #include "renderer/texture_table.hpp"
 #include "renderer/textured_push_constants.hpp"
 #include "renderer/depth_image.hpp"
-#include "renderer/uniform_buffer.hpp"
 #include "scene/shadow_utils.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -776,6 +775,7 @@ struct PassRecorder {
       const std::uint32_t cascade_idx = 2 + light_idx;
       const glm::mat4 spot_vp = LightStorageBuffer::compute_shadow_view_proj(sl);
       for (const DrawCommand &draw : draw_list) {
+        if (draw.mesh_index >= mesh_gpus.size()) continue;
         const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
         const float s0 = glm::length(glm::vec3(draw.model[0]));
         const float s1 = glm::length(glm::vec3(draw.model[1]));
@@ -873,6 +873,7 @@ struct PassRecorder {
       command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
       for (const DrawCommand &draw : draw_list) {
+        if (draw.mesh_index >= mesh_gpus.size()) continue;
         // Per-light sphere culling: skip meshes whose world-space bounding
         // sphere doesn't intersect this light's range sphere.
         const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
