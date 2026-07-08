@@ -12,6 +12,7 @@ struct FrameOverlayContext {
   std::uint32_t frame_index{};
   std::uint32_t image_index{};
   vk::Extent2D extent{};
+  std::function<void()> pre_overlay{};
 };
 
 using FrameOverlayCallback = std::function<void(const FrameOverlayContext &)>;

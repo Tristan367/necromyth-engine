@@ -564,41 +564,45 @@ struct PassRecorder {
     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, render_extent});
   }
 
-  void record_overlay_pass(
-      vk::raii::CommandBuffer &command_buffer,
-      std::uint32_t frame_index,
-      std::uint32_t image_index,
-      const FrameOverlayCallback &overlay) const {
-    const vk::RenderingAttachmentInfo overlay_color{
-        .imageView = *swapchain.image_views()[image_index],
-        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eLoad,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-    };
-    const vk::RenderingInfo overlay_info{
-        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain.extent()},
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &overlay_color,
-    };
-    command_buffer.beginRendering(overlay_info);
-    command_buffer.setViewport(
-        0,
-        vk::Viewport{
-            0.0F,
-            0.0F,
-            static_cast<float>(swapchain.extent().width),
-            static_cast<float>(swapchain.extent().height),
-            0.0F,
-            1.0F,
-        });
-    command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain.extent()});
-    overlay(FrameOverlayContext{
-        .command_buffer = command_buffer,
-        .frame_index = frame_index,
-        .image_index = image_index,
-        .extent = swapchain.extent(),
-    });
+   void record_overlay_pass(
+       vk::raii::CommandBuffer &command_buffer,
+       std::uint32_t frame_index,
+       std::uint32_t image_index,
+       const FrameOverlayCallback &overlay,
+       std::function<void(vk::raii::CommandBuffer &)> pre_overlay = {}) const {
+     const vk::RenderingAttachmentInfo overlay_color{
+         .imageView = *swapchain.image_views()[image_index],
+         .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+         .loadOp = vk::AttachmentLoadOp::eLoad,
+         .storeOp = vk::AttachmentStoreOp::eStore,
+     };
+     const vk::RenderingInfo overlay_info{
+         .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain.extent()},
+         .layerCount = 1,
+         .colorAttachmentCount = 1,
+         .pColorAttachments = &overlay_color,
+     };
+     command_buffer.beginRendering(overlay_info);
+     command_buffer.setViewport(
+         0,
+         vk::Viewport{
+             0.0F,
+             0.0F,
+             static_cast<float>(swapchain.extent().width),
+             static_cast<float>(swapchain.extent().height),
+             0.0F,
+             1.0F,
+         });
+     command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain.extent()});
+
+     if (pre_overlay) pre_overlay(command_buffer);
+
+     overlay(FrameOverlayContext{
+         .command_buffer = command_buffer,
+         .frame_index = frame_index,
+         .image_index = image_index,
+         .extent = swapchain.extent(),
+     });
     command_buffer.endRendering();
   }
 
@@ -926,7 +930,8 @@ struct PassRecorder {
       std::uint32_t image_index,
       PassLayoutState &layouts,
       const std::vector<DrawCommand> &draw_list,
-      const FrameOverlayCallback *overlay = nullptr) const {
+      const FrameOverlayCallback *overlay = nullptr,
+      std::function<void(vk::raii::CommandBuffer &)> pre_overlay = {}) const {
     if (uses_render_scale())
       transition_render_color_to_color_attachment(command_buffer, layouts);
     else
@@ -977,6 +982,8 @@ struct PassRecorder {
       }
     }
 
+    if (pre_overlay) pre_overlay(command_buffer);
+
     if (overlay != nullptr && *overlay)
       record_overlay_pass(command_buffer, frame_index, image_index, *overlay);
 
@@ -993,10 +1000,10 @@ struct PassRecorder {
       glm::vec3 cam_right,
       glm::vec3 cam_up,
       float size,
-      glm::vec4 color) const {
+      glm::vec4 color,
+      std::uint32_t image_index) const {
     if (active_count == 0) return;
 
-    // Push constants: viewProj(64) + camRight(16) + camUp(16) + size(4) + color(16) = 116 bytes
     struct ParticlePC {
       glm::mat4 viewProj;
       glm::vec4 camRight;
@@ -1011,10 +1018,24 @@ struct PassRecorder {
     pc.size = size;
     pc.color = color;
 
+    const vk::RenderingAttachmentInfo color_attach{
+        .imageView = *swapchain.image_views()[image_index],
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eLoad,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+    };
+    const vk::RenderingInfo ri{
+        .renderArea = {.offset = {0, 0}, .extent = swapchain.extent()},
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color_attach,
+    };
+    command_buffer.beginRendering(ri);
+
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
     command_buffer.pushConstants<ParticlePC>(
         particle_layout,
-        vk::ShaderStageFlagBits::eVertex,
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
         0,
         pc);
     command_buffer.bindDescriptorSets(
@@ -1024,6 +1045,8 @@ struct PassRecorder {
         descriptors.frame_set(frame_index),
         nullptr);
     command_buffer.draw(3, active_count, 0, 0);
+
+    command_buffer.endRendering();
   }
 };
 

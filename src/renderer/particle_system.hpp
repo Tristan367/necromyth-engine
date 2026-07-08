@@ -29,6 +29,8 @@ public:
     glm::vec3 position{};
     float rate{10.0F}; // particles per second
     float accumulator{0.0F};
+    // Called when a new particle spawns. Set pos, vel, lifetime.
+    std::function<void(Particle &)> on_emit;
     // Called each frame per alive particle. Return false to recycle.
     std::function<bool(Particle &, float dt)> on_update;
   };
@@ -103,7 +105,10 @@ public:
         free_list_.pop_back();
         Particle &p = particles_[idx];
         p.pos = e.position;
-        p.lifetime = 1.0F; // default: never expires
+        p.vel = glm::vec3{};
+        p.age = 0.0F;
+        p.lifetime = 1.0F;
+        if (e.on_emit) e.on_emit(p);
         p.alive = true;
       }
     }

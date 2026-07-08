@@ -226,7 +226,7 @@ private:
         create_graphics_pipeline(
             device, color_format_, depth_format_,
             particle_billboard_spirv_, particle_billboard_spirv_,
-            *particle_pipeline_layout_, sample_count_,
+            *particle_pipeline_layout_, vk::SampleCountFlagBits::e1,
             empty_binding, std::span<const vk::VertexInputAttributeDescription>{},
             *pipeline_cache_,
             {.cull_mode = vk::CullModeFlagBits::eNone,

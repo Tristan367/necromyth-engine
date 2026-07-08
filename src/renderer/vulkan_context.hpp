@@ -399,24 +399,34 @@ public:
     }
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
+
+    std::function<void(vk::raii::CommandBuffer &)> pre_overlay;
+    if (particle_system_.active_count() > 0) {
+      particle_system_.upload(frame_index_);
+      pre_overlay = [this, image_index, &scene](vk::raii::CommandBuffer &cmd) {
+        pass_recorder().draw_particles(
+            cmd, frame_index_, particle_system_.active_count(),
+            pipelines_.pipeline(PipelineId::ParticleBillboard),
+            pipelines_.pipeline_layout_for_particles(),
+            scene.camera().view_projection_matrix(),
+            glm::vec3(scene.camera().right()), glm::vec3(scene.camera().up()),
+            0.15F, glm::vec4(1.0F, 1.0F, 1.0F, 0.8F),
+            image_index);
+      };
+    }
+
     pass_recorder().record_main_pass(
         command_buffer,
         frame_index_,
         image_index,
         pass_layouts_,
         draw_list_,
-        overlay_ptr);
+        overlay_ptr,
+        std::move(pre_overlay));
 
     // Particle rendering
     if (particle_system_.active_count() > 0) {
       particle_system_.upload(frame_index_);
-      pass_recorder().draw_particles(
-          command_buffer, frame_index_, particle_system_.active_count(),
-          pipelines_.pipeline(PipelineId::ParticleBillboard),
-          pipelines_.pipeline_layout_for_particles(),
-          scene.camera().view_projection_matrix(),
-          glm::vec3(scene.camera().right()), glm::vec3(scene.camera().up()),
-          0.15F, glm::vec4(1.0F, 1.0F, 1.0F, 0.8F));
     }
 
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
