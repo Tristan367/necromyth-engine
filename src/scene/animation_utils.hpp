@@ -276,4 +276,25 @@ inline void compute_joint_matrices_for_instance(
                        out_joint_matrices, out_bone_worlds);
 }
 
+inline void update_bone_attachments(
+    const std::vector<SkeletonAsset> &skeletons,
+    const std::vector<AnimationClip> &animations,
+    std::vector<MeshInstance> &instances) {
+  std::vector<glm::mat4> joint_matrices;
+  std::vector<glm::mat4> bone_worlds;
+  for (MeshInstance &instance : instances) {
+    if (instance.bone_attachments.empty()) continue;
+    if (instance.skin_index >= skeletons.size()) continue;
+    if (!instance.pose_layers || instance.pose_layers->empty()) continue;
+
+    const SkeletonAsset &skel = skeletons[instance.skin_index];
+    compute_joint_matrices_for_instance(skel, instance, animations, joint_matrices, &bone_worlds);
+
+    for (BoneAttachment &att : instance.bone_attachments) {
+      if (att.joint_index < bone_worlds.size())
+        att.world_transform = instance.model * bone_worlds[att.joint_index];
+    }
+  }
+}
+
 } // namespace engine

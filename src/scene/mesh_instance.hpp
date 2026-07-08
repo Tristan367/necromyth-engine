@@ -15,6 +15,11 @@ namespace engine {
 
 class Scene;
 
+struct BoneAttachment {
+  std::uint32_t joint_index{};
+  glm::mat4 world_transform{1.0F};
+};
+
 enum class MeshAlphaMode : std::uint8_t {
   Opaque = 0,
   Cutout = 1,
@@ -33,6 +38,8 @@ struct MeshInstance {
 
   const std::unordered_map<std::uint32_t, BoneTRS> *joint_overrides{nullptr};
   const std::vector<PoseLayer> *pose_layers{nullptr};
+
+  std::vector<BoneAttachment> bone_attachments;
 };
 
 constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();
