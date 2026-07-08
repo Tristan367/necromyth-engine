@@ -187,3 +187,19 @@ When capping ticks per frame (max 2), drain the overflow: `accumulator = fmod(ac
 - Use Sascha **`shadowmapping`** (perspective point light) as directional shadow authority.
 - Commit without user asking.
 - Add PBR/normal maps unless direction changes.
+
+## Deferred refactors (design decisions needed)
+
+1. **Graphics pipeline dedup** — `graphics_pipeline.hpp` has 3 functions (`create_graphics_pipeline` x2 + `create_depth_only_graphics_pipeline`) sharing ~90% setup code. ~200 lines of triplication. Extracting shared logic would touch all pipeline paths (main, shadow, point, particle) — needs thorough re-testing.
+
+2. **Two-step init → RAII** — `Swapchain`, `DepthImage`, `RenderColorImage`, `ShadowMap`, `TextureImage`, `TextureArray`, `ParticleSystem`, `BoneStorageBufferSet`, `UniformBufferSet` all default-construct empty, then require `create()`. Moving to RAII constructors prevents use-before-init bugs. Some (Swapchain) need `recreate()` anyway for resize.
+
+3. **`MeshInstance::pose_layers` raw pointer** — pointer to `AnimStateMachine::layers()` owned by user. If the state machine moves/relocates/reallocates, the pointer dangles silently. Options: `std::shared_ptr`, `std::reference_wrapper`, or keep raw with debug assert.
+
+4. **`PipelineId` insertion safety** — adding a pipeline in the middle of the enum breaks `is_textured_surface_pipeline(id >= E_First && id <= E_Last)` and `is_skinned_pipeline`. Options: explicit check sets (`std::unordered_set<PipelineId>`) or sentinel `Count` values.
+
+5. **Bone buffer instance mapping** — `bone_instance_index` is computed sequentially. If instances are reordered (insertion/removal in the middle), bone buffers silently map to wrong skeletons. Slot-map or stable `bone_handle` per instance would fix both this and dead-instance sequencing issues at the root.
+
+6. **`TextureImage/TextureArray::create_sampler` identical** — character-for-character duplicate (~20 lines each). Extract to `detail::create_mipmapped_sampler`.
+
+7. **`scene_uses_alpha_to_coverage` startup-only** — checked once in `VulkanContext` ctor. New A2C meshes added via `sync_scene` won't enable MSAA. Could be checked in `sync_scene` or deferred to a `render_settings` flag.
