@@ -727,7 +727,8 @@ struct PassRecorder {
       layouts.spot_atlas_layout = vk::ImageLayout::eDepthAttachmentOptimal;
     }
 
-    const float region_h = static_cast<float>(atlas_size) / static_cast<float>(k_max_spot_shadow_lights);
+    const float num_spot = static_cast<float>(scene.spot_lights().size());
+    const float region_h = num_spot > 0.0F ? static_cast<float>(atlas_size) / num_spot : static_cast<float>(atlas_size);
 
     // Clear the entire atlas once up front (single clear, not per-light).
     {
