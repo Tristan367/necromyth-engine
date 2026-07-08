@@ -5,6 +5,7 @@
 // Per-light transforms read from storage buffer at set 0, binding 6,
 // indexed by pushConstants.pointLightIndex — avoids CPU/GPU UBO overwrite.
 #include "lib/mesh_types_skinned.slang"
+#include "lib/skinning.slang"
 #include "lib/textured_push_constants.slang"
 
 struct PointLightShadowData {
@@ -51,11 +52,7 @@ VSOutput vertMainSkinned(VSInputSkinned input, uint viewID : SV_ViewID) {
     uint li = pushConstants.pointLightIndex;
     PointLightShadowData d = perLightData[li];
 
-    float4x4 skinMat =
-        input.inJointWeights.x * jointMatrices[(int)input.inJointIndices.x] +
-        input.inJointWeights.y * jointMatrices[(int)input.inJointIndices.y] +
-        input.inJointWeights.z * jointMatrices[(int)input.inJointIndices.z] +
-        input.inJointWeights.w * jointMatrices[(int)input.inJointIndices.w];
+    float4x4 skinMat = computeSkinMatrix(input, jointMatrices);
 
     VSOutput output;
     float4 skinned = mul(skinMat, float4(input.inPosition, 1.0));

@@ -1,4 +1,5 @@
 #include "lib/frame_uniforms.slang"
+#include "lib/shadow_vp.slang"
 #include "lib/textured_push_constants.slang"
 
 struct VSInputPosition {
@@ -17,9 +18,7 @@ VSOutput vertMain(VSInputPosition input) {
     VSOutput output;
     uint cascade = pushConstants.shadowCascadeIndex;
 
-    float4x4 vp;
-    if (cascade < 2)      vp = ubo.lightViewProj[cascade];
-    else                  vp = ubo.spotLightViewProj[cascade - 2];
+    float4x4 vp = selectShadowVP(cascade);
     output.position = mul(vp, mul(pushConstants.model, float4(input.inPosition, 1.0)));
     return output;
 }

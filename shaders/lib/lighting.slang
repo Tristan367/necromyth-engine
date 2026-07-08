@@ -56,27 +56,34 @@ struct GpuSpotLight {
 
 [[vk::binding(3, 0)]] ByteAddressBuffer lightBuffer : register(t3);
 
+float calcAttenuation(float dist, float range) {
+    float atten = 1.0 / (1.0 + dist * dist / max(range * range, 0.0001));
+    if (range <= 0.0) atten = 1.0 / max(dist * dist, 0.0001);
+    if (range > 0.0)
+        atten *= 1.0 - smoothstep(range * 0.5, range, dist);
+    return atten;
+}
+
+float3 calcBlinnPhong(float3 lightColor, float intensity, float3 normal, float3 lightDir, float3 viewDir) {
+    float ndotl = max(dot(normal, lightDir), 0.0);
+    float3 diffuse = lightColor.rgb * intensity * ndotl;
+    float3 halfVec = lightDir + viewDir;
+    halfVec = dot(halfVec, halfVec) > 0.000001 ? normalize(halfVec) : lightDir;
+    float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
+    float3 specular = lightColor.rgb * intensity * spec * 0.3;
+    return diffuse + specular;
+}
+
 float3 calcPointLight(GpuPointLight l, uint lightIndex, float3 fragPos, float3 normal, float3 viewDir) {
     float3 toLight = l.posRange.xyz - fragPos;
     float dist = length(toLight);
     float3 lightDir = toLight / max(dist, 0.0001);
 
-    float atten = 1.0 / (1.0 + dist * dist / max(l.posRange.w * l.posRange.w, 0.0001));
-    if (l.posRange.w <= 0.0) atten = 1.0 / max(dist * dist, 0.0001);
-
-    // Range fade: smooth cutoff near max range (last 50%), matching spot lights.
-    if (l.posRange.w > 0.0)
-        atten *= 1.0 - smoothstep(l.posRange.w * 0.5, l.posRange.w, dist);
-
+    float atten = calcAttenuation(dist, l.posRange.w);
     float ndotl = max(dot(normal, lightDir), 0.0);
-    float3 diffuse = l.colorIntensity.rgb * l.colorIntensity.w * ndotl;
+    float3 diffSpec = calcBlinnPhong(l.colorIntensity.rgb, l.colorIntensity.w, normal, lightDir, viewDir);
 
-    float3 halfVec = lightDir + viewDir;
-    halfVec = dot(halfVec, halfVec) > 0.000001 ? normalize(halfVec) : lightDir;
-    float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
-    float3 specular = l.colorIntensity.rgb * l.colorIntensity.w * spec * 0.3;
-
-    float lightContrib = (diffuse.r + diffuse.g + diffuse.b + specular.r + specular.g + specular.b) * atten;
+    float lightContrib = (diffSpec.r + diffSpec.g + diffSpec.b) * atten;
     if (lightContrib <= 0.0001) return float3(0, 0, 0);
 
     // Per-light point shadow: each light has its own cubemap layer and world position.
@@ -88,7 +95,7 @@ float3 calcPointLight(GpuPointLight l, uint lightIndex, float3 fragPos, float3 n
     }
 #endif
 
-    return min((diffuse + specular) * atten * shadowVis, l.colorIntensity.rgb * l.colorIntensity.w);
+    return min(diffSpec * atten * shadowVis, l.colorIntensity.rgb * l.colorIntensity.w);
 }
 
 // Point light cubemap depth comparison with hardware PCF.
@@ -176,8 +183,7 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     float dist = length(toLight);
     float3 lightDir = toLight / max(dist, 0.0001);
 
-    float atten = 1.0 / (1.0 + dist * dist / max(l.posRange.w * l.posRange.w, 0.0001));
-    if (l.posRange.w <= 0.0) atten = 1.0 / max(dist * dist, 0.0001);
+    float atten = calcAttenuation(dist, l.posRange.w);
 
     // Spot cone falloff
     float3 spotDir = normalize(l.dirPad.xyz);
@@ -187,19 +193,10 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     float spotAtten = smoothstep(cosOuter, cosInner, cosTheta);
     atten *= spotAtten;
 
-    // Range fade: smooth cutoff near max range (last 50%)
-    if (l.posRange.w > 0.0)
-        atten *= 1.0 - smoothstep(l.posRange.w * 0.5, l.posRange.w, dist);
-
     float ndotl = max(dot(normal, lightDir), 0.0);
-    float3 diffuse = l.colorIntensity.rgb * l.colorIntensity.w * ndotl;
+    float3 diffSpec = calcBlinnPhong(l.colorIntensity.rgb, l.colorIntensity.w, normal, lightDir, viewDir);
 
-    float3 halfVec = lightDir + viewDir;
-    halfVec = dot(halfVec, halfVec) > 0.000001 ? normalize(halfVec) : lightDir;
-    float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
-    float3 specular = l.colorIntensity.rgb * l.colorIntensity.w * spec * 0.3;
-
-    float lightContrib = (diffuse.r + diffuse.g + diffuse.b + specular.r + specular.g + specular.b) * atten;
+    float lightContrib = (diffSpec.r + diffSpec.g + diffSpec.b) * atten;
     if (lightContrib <= 0.0001) return float3(0, 0, 0);
 
     // Shadow (Godot-style: sample from atlas using sub-rect)
@@ -209,7 +206,7 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
         shadowVis = sampleSpotShadow(fragPos, l.shadowMatrix, l.atlasRect, lightDir, normal, bias);
     }
 
-    return min((diffuse + specular) * atten * shadowVis, l.colorIntensity.rgb * l.colorIntensity.w);
+    return min(diffSpec * atten * shadowVis, l.colorIntensity.rgb * l.colorIntensity.w);
 }
 
 float3 evaluatePointLights(float3 fragPos, float3 normal, float3 viewDir) {
