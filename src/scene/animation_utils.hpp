@@ -71,6 +71,7 @@ inline auto sample_animation_trs(const AnimationClip &clip, float time,
     return result;
 
   for (const AnimationChannel *channel : it->second) {
+    if (channel->sampler_index >= clip.samplers.size()) continue;
     const AnimationSampler &sampler = clip.samplers[channel->sampler_index];
     const KeyframeIndex kf = find_keyframes(sampler, time, true);
 
@@ -123,7 +124,9 @@ inline void build_world_matrices(
 
     s_chain.clear();
     std::uint32_t current = node_index;
-    while (current != k_invalid) {
+    std::size_t depth_guard = 0;
+    const std::size_t max_depth = skeleton.node_parents.size() + 1;
+    while (current != k_invalid && depth_guard++ < max_depth) {
       s_chain.push_back(current);
       if (current < skeleton.node_parents.size())
         current = skeleton.node_parents[current];
@@ -262,6 +265,12 @@ inline void compute_joint_matrices_for_instance(
     const std::vector<AnimationClip> &clips,
     std::vector<glm::mat4> &out_joint_matrices,
     std::vector<glm::mat4> *out_bone_worlds = nullptr) {
+  if (!instance.pose_layers || instance.pose_layers->empty()) {
+    out_joint_matrices.resize(skel.joint_nodes.size(), glm::mat4(1.0F));
+    if (out_bone_worlds)
+      out_bone_worlds->resize(skel.joint_nodes.size(), glm::mat4(1.0F));
+    return;
+  }
   evaluate_pose_layers(skel, *instance.pose_layers, clips,
                        instance.joint_overrides,
                        out_joint_matrices, out_bone_worlds);

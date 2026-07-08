@@ -172,7 +172,8 @@ struct PassRecorder {
        std::uint32_t cascade_index,
        std::uint32_t frame_index,
        const glm::mat4 &light_vp,
-       DrawBindState &state) const {
+       DrawBindState &state,
+       std::uint32_t point_light_index = 0) const {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
 
@@ -234,6 +235,7 @@ struct PassRecorder {
     const TexturedPushConstants push_constants{
         .model = draw.model,
         .shadow_cascade_index = cascade_index,
+        .point_light_index = point_light_index,
     };
     command_buffer.pushConstants(
         pipelines.layout_for(shadow_pipeline),
@@ -744,6 +746,7 @@ struct PassRecorder {
     for (std::uint32_t si = 0; si < scene.spot_lights().size(); ++si) {
       const SpotLight &sl = scene.spot_lights()[si];
       if (!sl.casts_shadow) continue;
+      if (light_idx >= 4) break; // spotLightViewProj UBO holds 4 matrices (see vulkan_context)
 
       // Sub-rect: each spotlight slot occupies a vertical strip of the atlas.
       // The sub-rect index matches the spotlight's index in the scene array,
@@ -810,7 +813,6 @@ struct PassRecorder {
       const std::vector<DrawCommand> &draw_list,
       vk::Image cube_image,
       std::span<const vk::raii::ImageView> cube_face_views,
-      const UniformBufferSet &uniforms,
       float face_size) const {
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
@@ -844,25 +846,12 @@ struct PassRecorder {
       }};
     }();
 
-    std::uint32_t layer = 0;
-    for (std::uint32_t si = 0; si < scene.point_lights().size(); ++si) {
+    for (std::uint32_t si = 0; si < scene.point_lights().size() && si < cube_face_views.size(); ++si) {
       const PointLight &pl = scene.point_lights()[si];
       if (!pl.casts_shadow) continue;
 
-      // Per-light UBO update: each light has its own position, range, and
-      // therefore its own face VP matrices.
-      const float inv_radius = pl.range > 0.0F ? 1.0F / pl.range : 0.0F;
-      const glm::vec4 light_pos{pl.position, 1.0F};
-      const glm::vec4 light_params{inv_radius, pl.range, face_size, 1.0F};
-      const glm::mat4 light_view = glm::translate(glm::mat4(1.0F), -glm::vec3(pl.position));
-      const glm::mat4 proj = glm::perspective(glm::radians(90.0F), 1.0F, 0.01F, pl.range);
-      std::array<glm::mat4, 6> face_vps{};
-      for (int f = 0; f < 6; ++f)
-        face_vps[f] = proj * face_views[f];
-      uniforms.write_point_light_data(frame_index, light_view, face_vps, light_pos, light_params);
-
       vk::RenderingAttachmentInfo depth_attach{};
-      depth_attach.imageView = *cube_face_views[layer];
+      depth_attach.imageView = *cube_face_views[si];
       depth_attach.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
       depth_attach.loadOp = vk::AttachmentLoadOp::eClear;
       depth_attach.storeOp = vk::AttachmentStoreOp::eStore;
@@ -897,11 +886,10 @@ struct PassRecorder {
         const float r_sum = world_radius + pl.range;
         if (glm::dot(delta, delta) > r_sum * r_sum) continue;
 
-        draw_shadow_mesh(command_buffer, draw, 10, frame_index, light_view, bind_state);
+        draw_shadow_mesh(command_buffer, draw, 10, frame_index, glm::mat4(1.0F), bind_state, si);
       }
 
       command_buffer.endRendering();
-      ++layer;
     }
 
     // Barrier: depth attachment → shader read for comparison sampling in main pass

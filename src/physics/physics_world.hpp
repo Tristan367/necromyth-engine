@@ -119,14 +119,40 @@ public:
   [[nodiscard]] auto create_static_mesh(const MeshSource &mesh, const glm::vec3 &position,
                                         const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F))
         -> JPH::BodyID {
-    JPH::VertexList vertex_list;
-    for (const MeshVertex &v : mesh.vertices)
-      vertex_list.emplace_back(v.pos[0], v.pos[1], v.pos[2]);
-    JPH::IndexedTriangleList tri_list;
-    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3)
-      tri_list.emplace_back(mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]);
+    // Vertex welding: collapse coincident positions to shared indices at
+    // 0.1 mm grid resolution so Jolt's mEnhancedInternalEdgeRemoval can
+    // detect internal edges topologically (matching AGENTS.md documentation).
+    static constexpr float kWeldTol = 0.0001F;
+    const float inv_tol = 1.0F / kWeldTol;
+    auto hash = [inv_tol](const glm::vec3 &p) -> std::uint64_t {
+      return (static_cast<std::uint64_t>(static_cast<std::int64_t>(p.x * inv_tol)) << 42) ^
+             (static_cast<std::uint64_t>(static_cast<std::int64_t>(p.y * inv_tol)) << 21) ^
+             static_cast<std::uint64_t>(static_cast<std::int64_t>(p.z * inv_tol));
+    };
 
-    JPH::MeshShapeSettings shape_settings(vertex_list, tri_list);
+    std::unordered_map<std::uint64_t, std::uint32_t> pos_map;
+    JPH::VertexList welded_vertices;
+    JPH::IndexedTriangleList welded_triangles;
+    welded_vertices.reserve(mesh.vertices.size());
+    welded_triangles.reserve(mesh.indices.size() / 3);
+
+    for (const MeshVertex &v : mesh.vertices) {
+      const std::uint64_t key = hash(glm::vec3{v.pos[0], v.pos[1], v.pos[2]});
+      auto [it, inserted] = pos_map.try_emplace(key, static_cast<std::uint32_t>(welded_vertices.size()));
+      if (inserted)
+        welded_vertices.emplace_back(v.pos[0], v.pos[1], v.pos[2]);
+    }
+
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+      auto idx = [&](std::uint32_t vi) -> std::uint32_t {
+        const MeshVertex &v = mesh.vertices[vi];
+        return pos_map.at(hash(glm::vec3{v.pos[0], v.pos[1], v.pos[2]}));
+      };
+      welded_triangles.emplace_back(idx(mesh.indices[i]), idx(mesh.indices[i+1]),
+                                    idx(mesh.indices[i+2]), 0);
+    }
+
+    JPH::MeshShapeSettings shape_settings(welded_vertices, welded_triangles);
     shape_settings.SetEmbedded();
     JPH::ShapeRefC shape = shape_settings.Create().Get();
 
@@ -249,6 +275,7 @@ private:
     }
     std::uint32_t GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::kNumLayers; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override {
+      JPH_ASSERT(inLayer < Layers::kNumLayers);
       return mObjectToBroadPhase[inLayer];
     }
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
@@ -306,6 +333,11 @@ public:
   }
 
   ~Character() { delete character_; }
+
+  Character(const Character &) = delete;
+  Character &operator=(const Character &) = delete;
+  Character(Character &&) = delete;
+  Character &operator=(Character &&) = delete;
 
   void update(float delta) {
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
@@ -368,7 +400,8 @@ private:
         ioNewCharacterVelocity = JPH::Vec3::sZero();
     }
     bool allow_sliding_{true};
-  } contact_listener_;};
+  } contact_listener_;
+};
 
 } // namespace physics
 } // namespace engine

@@ -98,7 +98,7 @@ public:
 
   [[nodiscard]] auto add_instance(MeshInstance instance) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(instances_.size());
-    instances_.push_back(instance);
+    instances_.push_back(std::move(instance));
     return index;
   }
 

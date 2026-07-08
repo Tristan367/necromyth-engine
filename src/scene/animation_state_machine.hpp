@@ -122,7 +122,7 @@ public:
   // Sets a manual hold — auto conditions are suppressed until clear_hold().
   void travel(const std::string &name) {
     const std::size_t idx = find_state(name);
-    if (idx == k_invalid || idx == current_index_) return;
+    if (idx == k_invalid || idx == current_index_ || states_.empty()) return;
 
     manual_hold_ = true;
 

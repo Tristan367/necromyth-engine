@@ -61,6 +61,14 @@ public:
     }
   }
 
+  ~HitboxManager() {
+    JPH::BodyInterface &bi = world_.body_interface();
+    for (const HitboxBody &b : bodies_) {
+      bi.RemoveBody(b.body_id);
+      bi.DestroyBody(b.body_id);
+    }
+  }
+
   void update(const engine::SkeletonAsset &skeleton,
               const std::vector<glm::mat4> &bone_worlds) {
     for (std::size_t i = 0; i < bodies_.size() && i < skeleton.hitboxes.size(); ++i) {

@@ -566,8 +566,10 @@ inline void load_animations(const tinygltf::Model &model, std::vector<AnimationC
 
   result.node_parents.assign(model.nodes.size(), std::numeric_limits<std::uint32_t>::max());
   for (std::size_t i = 0; i < model.nodes.size(); ++i) {
-    for (int child : model.nodes[i].children)
+    for (int child : model.nodes[i].children) {
+      if (child < 0 || static_cast<std::size_t>(child) >= result.node_parents.size()) continue;
       result.node_parents[static_cast<std::size_t>(child)] = static_cast<std::uint32_t>(i);
+    }
   }
 
   if (!model.skins.empty())

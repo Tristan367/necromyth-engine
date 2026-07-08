@@ -106,7 +106,11 @@ public:
       ptrs[i].color_intensity[1] = point_lights[i].color.g;
       ptrs[i].color_intensity[2] = point_lights[i].color.b;
       ptrs[i].color_intensity[3] = point_lights[i].intensity;
-      // Shadow data: write identity matrix as shadow sentinel (non-zero → enabled)
+      // Point shadows: cubemap layer = light array index.
+      // The shadow pass writes each light to cube_face_views[si], and the main-pass
+      // shader uses lightIndex (array position) as the cubemap layer via
+      // TextureCubeArray.  Non-shadow-casting lights skip the shadow pass entirely;
+      // the shader ignores them (shadow_matrix sentinel is zero).
       if (point_lights[i].casts_shadow) {
         ptrs[i].shadow_matrix[0] = 1.0f;
         ptrs[i].atlas_rect[0] = 0.0f;

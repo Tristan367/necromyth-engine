@@ -55,6 +55,12 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 6,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        },
     };
 
     const std::array material_bindings{
@@ -125,7 +131,7 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eStorageBuffer,
-            .descriptorCount = frame_count + skinned_instance_count * 4,
+            .descriptorCount = frame_count * 2 + skinned_instance_count * 4,
         },
     };
 
@@ -426,6 +432,25 @@ public:
               .dstSet = set, .dstBinding = 5, .descriptorCount = 1,
               .descriptorType = vk::DescriptorType::eCombinedImageSampler,
               .pImageInfo = &info,
+          },
+          nullptr);
+    }
+  }
+
+  void update_point_light_shadow_ssbo(
+      vk::raii::Device &device,
+      std::span<const vk::Buffer> buffers) {
+    for (std::size_t i = 0; i < frame_sets_.size() && i < buffers.size(); ++i) {
+      const vk::DescriptorBufferInfo info{
+          .buffer = buffers[i],
+          .offset = 0,
+          .range = vk::WholeSize,
+      };
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = *frame_sets_[i], .dstBinding = 6, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eStorageBuffer,
+              .pBufferInfo = &info,
           },
           nullptr);
     }

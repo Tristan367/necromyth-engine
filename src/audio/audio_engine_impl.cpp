@@ -45,9 +45,14 @@ void AudioEngine::shutdown() {
   if (!impl_->initialized)
     return;
 
+  // Stop and uninit all sounds before tearing down the engine.
+  // On some backends (PulseAudio), ma_sound_uninit alone may not
+  // flush the output buffer — explicit stop prevents ghost playback.
   for (auto &s : impl_->sounds) {
-    if (s)
+    if (s) {
+      ma_sound_stop(s.get());
       ma_sound_uninit(s.get());
+    }
   }
   impl_->sounds.clear();
 

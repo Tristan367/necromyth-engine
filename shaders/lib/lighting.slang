@@ -106,7 +106,7 @@ float samplePointShadowCubemap(float3 fragPos, float3 normal, float ndotl,
 
     float ref = length(lightVec) / range;
 
-    float sinTheta = sqrt(1.0 - ndotd * ndotd);
+    float sinTheta = sqrt(max(1.0 - ndotd * ndotd, 0.0));
     float bias = max(0.0003, 0.002 * sinTheta);
     float refDepth = ref - bias;
 

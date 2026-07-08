@@ -71,6 +71,7 @@ public:
     light_buffer_.create(device_.physical_device(), device_.device(), 64);
     create_spot_atlas(startup_spot_atlas_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale));
     create_point_cubemap(point_cube_face_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale), 10);
+    create_point_light_shadow_ssbo(10);
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -326,6 +327,7 @@ public:
                 scene.directional_light().ambient),
             .light_view_proj = cascades.light_view_proj,
             .spot_light_vp = spot_vps,
+            .point_light_params = glm::vec4(0.0F, 0.0F, point_cube_face_size_, 1.0F),
             .cascade_params = glm::vec4(
                 cascades.split_view_z,
                 shadow_settings.cascade_blend_range,
@@ -383,12 +385,13 @@ public:
                                                 startup_spot_atlas_size_);
 
     // Point shadow cubemap pass (Sascha omni model)
-    if (has_point_shadows)
+    if (has_point_shadows) {
+      write_point_light_shadows(frame_index_, scene);
       pass_recorder().record_point_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
                                                 shadow_draw_list_, *point_cube_,
                                                 point_cube_face_views_,
-                                                uniform_buffers_,
                                                 point_cube_face_size_);
+    }
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
     pass_recorder().record_main_pass(
@@ -615,6 +618,62 @@ private:
     point_cube_sampler_ = vk::raii::Sampler(device_.device(), samp_info);
   }
 
+  void create_point_light_shadow_ssbo(std::uint32_t max_lights) {
+    pt_shadow_max_lights_ = max_lights;
+    const vk::DeviceSize buf_size = max_lights * sizeof(GpuPointLightShadowData);
+
+    for (std::uint32_t i = 0; i < k_pt_shadow_frames; ++i) {
+      vk::BufferCreateInfo buf_info{};
+      buf_info.size = buf_size;
+      buf_info.usage = vk::BufferUsageFlagBits::eStorageBuffer;
+      buf_info.sharingMode = vk::SharingMode::eExclusive;
+      pt_shadow_buffers_[i] = vk::raii::Buffer(device_.device(), buf_info);
+
+      const auto reqs = pt_shadow_buffers_[i]->getMemoryRequirements();
+      const auto mt = detail::find_memory_type(
+          device_.physical_device().getMemoryProperties(),
+          reqs.memoryTypeBits,
+          vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+      vk::MemoryAllocateInfo alloc{};
+      alloc.allocationSize = reqs.size;
+      alloc.memoryTypeIndex = mt;
+      pt_shadow_memories_[i] = vk::raii::DeviceMemory(device_.device(), alloc);
+      pt_shadow_buffers_[i]->bindMemory(**pt_shadow_memories_[i], 0);
+
+      pt_shadow_mapped_[i] = static_cast<GpuPointLightShadowData *>(
+          pt_shadow_memories_[i]->mapMemory(0, buf_size));
+    }
+  }
+
+  void write_point_light_shadows(std::uint32_t frame_index, const Scene &scene) {
+    if (frame_index >= k_pt_shadow_frames || !pt_shadow_mapped_[frame_index])
+      return;
+
+    const auto &lights = scene.point_lights();
+    static const std::array<glm::mat4, 6> face_views = [] {
+      using namespace glm;
+      return std::array<glm::mat4, 6>{{
+          rotate(rotate(mat4(1.0F), radians( 90.0F), vec3(0,1,0)), radians(180.0F), vec3(1,0,0)),
+          rotate(rotate(mat4(1.0F), radians(-90.0F), vec3(0,1,0)), radians(180.0F), vec3(1,0,0)),
+          rotate(mat4(1.0F), radians(-90.0F), vec3(1,0,0)),
+          rotate(mat4(1.0F), radians( 90.0F), vec3(1,0,0)),
+          rotate(mat4(1.0F), radians(180.0F), vec3(1,0,0)),
+          rotate(mat4(1.0F), radians(180.0F), vec3(0,0,1)),
+      }};
+    }();
+
+    auto *ptr = pt_shadow_mapped_[frame_index];
+    for (std::size_t i = 0; i < lights.size() && i < pt_shadow_max_lights_; ++i) {
+      const auto &pl = lights[i];
+      const glm::mat4 proj = glm::perspective(glm::radians(90.0F), 1.0F, 0.01F, pl.range);
+      ptr[i].view = glm::translate(glm::mat4(1.0F), -glm::vec3(pl.position));
+      for (int f = 0; f < 6; ++f)
+        ptr[i].face_vp[f] = proj * face_views[f];
+      ptr[i].pos = glm::vec4(pl.position, 0.0F);
+      ptr[i].range = pl.range;
+    }
+  }
+
   void create_depth_image() {
     depth_image_.create(
         device_.physical_device(),
@@ -660,7 +719,12 @@ private:
     descriptor_resources_.update_spot_shadow_sampler(device_.device(), *spot_atlas_sampler_,
                                                        *spot_atlas_view_);
     descriptor_resources_.update_point_cube_sampler(device_.device(), *point_cube_sampler_,
-                                                     *point_cube_array_view_);
+                                                      *point_cube_array_view_);
+
+    std::array<vk::Buffer, k_pt_shadow_frames> buf_ptrs{};
+    for (std::uint32_t i = 0; i < k_pt_shadow_frames; ++i)
+      buf_ptrs[i] = pt_shadow_buffers_[i] ? **pt_shadow_buffers_[i] : vk::Buffer{};
+    descriptor_resources_.update_point_light_shadow_ssbo(device_.device(), buf_ptrs);
 
     allocate_skinned_descriptor_sets(texture_table_, skinned_count);
   }
@@ -882,6 +946,20 @@ private:
   vk::raii::ImageView point_cube_array_view_{nullptr};
   vk::raii::Sampler point_cube_sampler_{nullptr};
   float point_cube_face_size_{1024.0F};
+  struct GpuPointLightShadowData {
+    glm::mat4 view{1.0F};
+    std::array<glm::mat4, 6> face_vp{};
+    glm::vec4 pos{};
+    float range{0.0F};
+    float _pad0{0.0F};
+    float _pad1{0.0F};
+    float _pad2{0.0F};
+  };
+  static constexpr std::uint32_t k_pt_shadow_frames = 2;
+  std::array<std::optional<vk::raii::Buffer>, k_pt_shadow_frames> pt_shadow_buffers_{};
+  std::array<std::optional<vk::raii::DeviceMemory>, k_pt_shadow_frames> pt_shadow_memories_{};
+  std::array<GpuPointLightShadowData *, k_pt_shadow_frames> pt_shadow_mapped_{};
+  std::uint32_t pt_shadow_max_lights_{0};
   TextureTable texture_table_;
   TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;

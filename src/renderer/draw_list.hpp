@@ -28,12 +28,14 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
 
   std::uint32_t bone_instance_count = 0;
   for (const MeshInstance &instance : scene.instances()) {
-    const bool skinned = instance.skin_index != k_invalid_skin_index;
+    const bool has_valid_skin = instance.skin_index != k_invalid_skin_index
+        && instance.skin_index < scene.skeletons().size()
+        && !scene.skeletons()[instance.skin_index].joint_nodes.empty();
     const PipelineId pipeline = instance.layer == RenderLayer::Background
         ? PipelineId::Background
-        : textured_pipeline(instance.alpha_mode, skinned);
+        : textured_pipeline(instance.alpha_mode, has_valid_skin);
 
-    const std::uint32_t bone_index = skinned ? bone_instance_count : k_invalid_skin_index;
+    const std::uint32_t bone_index = has_valid_skin ? bone_instance_count : k_invalid_skin_index;
 
     out.push_back({
         .mesh_index = instance.mesh_index,
@@ -46,7 +48,7 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
         .bone_instance_index = bone_index,
     });
 
-    if (skinned)
+    if (has_valid_skin)
       ++bone_instance_count;
   }
 
