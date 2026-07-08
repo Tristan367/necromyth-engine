@@ -568,8 +568,7 @@ struct PassRecorder {
        vk::raii::CommandBuffer &command_buffer,
        std::uint32_t frame_index,
        std::uint32_t image_index,
-       const FrameOverlayCallback &overlay,
-       std::function<void(vk::raii::CommandBuffer &)> pre_overlay = {}) const {
+       const FrameOverlayCallback &overlay) const {
      const vk::RenderingAttachmentInfo overlay_color{
          .imageView = *swapchain.image_views()[image_index],
          .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
@@ -594,8 +593,6 @@ struct PassRecorder {
              1.0F,
          });
      command_buffer.setScissor(0, vk::Rect2D{{0, 0}, swapchain.extent()});
-
-     if (pre_overlay) pre_overlay(command_buffer);
 
      overlay(FrameOverlayContext{
          .command_buffer = command_buffer,
@@ -931,7 +928,7 @@ struct PassRecorder {
       PassLayoutState &layouts,
       const std::vector<DrawCommand> &draw_list,
       const FrameOverlayCallback *overlay = nullptr,
-      std::function<void(vk::raii::CommandBuffer &)> pre_overlay = {}) const {
+      std::function<void(vk::raii::CommandBuffer &)> post_geometry = {}) const {
     if (uses_render_scale())
       transition_render_color_to_color_attachment(command_buffer, layouts);
     else
@@ -960,6 +957,8 @@ struct PassRecorder {
     for (const DrawCommand &draw : draw_list)
       draw_mesh(command_buffer, draw, bind_state);
 
+    if (post_geometry) post_geometry(command_buffer);
+
     command_buffer.endRendering();
 
     if (uses_render_scale()) {
@@ -982,8 +981,6 @@ struct PassRecorder {
       }
     }
 
-    if (pre_overlay) pre_overlay(command_buffer);
-
     if (overlay != nullptr && *overlay)
       record_overlay_pass(command_buffer, frame_index, image_index, *overlay);
 
@@ -1000,8 +997,7 @@ struct PassRecorder {
       glm::vec3 cam_right,
       glm::vec3 cam_up,
       float size,
-      glm::vec4 color,
-      std::uint32_t image_index) const {
+      glm::vec4 color) const {
     if (active_count == 0) return;
 
     struct ParticlePC {
@@ -1018,20 +1014,6 @@ struct PassRecorder {
     pc.size = size;
     pc.color = color;
 
-    const vk::RenderingAttachmentInfo color_attach{
-        .imageView = *swapchain.image_views()[image_index],
-        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eLoad,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-    };
-    const vk::RenderingInfo ri{
-        .renderArea = {.offset = {0, 0}, .extent = swapchain.extent()},
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color_attach,
-    };
-    command_buffer.beginRendering(ri);
-
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
     command_buffer.pushConstants<ParticlePC>(
         particle_layout,
@@ -1045,8 +1027,6 @@ struct PassRecorder {
         descriptors.frame_set(frame_index),
         nullptr);
     command_buffer.draw(3, active_count, 0, 0);
-
-    command_buffer.endRendering();
   }
 };
 

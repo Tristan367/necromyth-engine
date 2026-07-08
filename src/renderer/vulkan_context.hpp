@@ -74,7 +74,7 @@ public:
     create_spot_atlas(startup_spot_atlas_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale));
     create_point_cubemap(point_cube_face_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale), 10);
     create_point_light_shadow_ssbo(10);
-    particle_system_.create(device_.physical_device(), device_.device(), 16384, 2);
+    particle_system_.create(device_.physical_device(), device_.device(), 65536, 2);
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -400,18 +400,17 @@ public:
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
 
-    std::function<void(vk::raii::CommandBuffer &)> pre_overlay;
+    std::function<void(vk::raii::CommandBuffer &)> post_geometry;
     if (particle_system_.active_count() > 0) {
       particle_system_.upload(frame_index_);
-      pre_overlay = [this, image_index, &scene](vk::raii::CommandBuffer &cmd) {
+      post_geometry = [this, &scene](vk::raii::CommandBuffer &cmd) {
         pass_recorder().draw_particles(
             cmd, frame_index_, particle_system_.active_count(),
             pipelines_.pipeline(PipelineId::ParticleBillboard),
             pipelines_.pipeline_layout_for_particles(),
             scene.camera().view_projection_matrix(),
             glm::vec3(scene.camera().right()), glm::vec3(scene.camera().up()),
-            0.15F, glm::vec4(1.0F, 1.0F, 1.0F, 0.8F),
-            image_index);
+            0.15F, glm::vec4(1.0F, 1.0F, 1.0F, 1.0F));
       };
     }
 
@@ -422,7 +421,7 @@ public:
         pass_layouts_,
         draw_list_,
         overlay_ptr,
-        std::move(pre_overlay));
+        std::move(post_geometry));
 
     // Particle rendering
     if (particle_system_.active_count() > 0) {

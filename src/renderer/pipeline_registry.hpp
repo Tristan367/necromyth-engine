@@ -226,17 +226,12 @@ private:
         create_graphics_pipeline(
             device, color_format_, depth_format_,
             particle_billboard_spirv_, particle_billboard_spirv_,
-            *particle_pipeline_layout_, vk::SampleCountFlagBits::e1,
+            *particle_pipeline_layout_, sample_count_,
             empty_binding, std::span<const vk::VertexInputAttributeDescription>{},
             *pipeline_cache_,
             {.cull_mode = vk::CullModeFlagBits::eNone,
              .front_face = vk::FrontFace::eCounterClockwise,
-             .depth_test = false, .depth_write = false,
-             .blend_enable = true,
-             .src_color_blend = vk::BlendFactor::eSrcAlpha,
-             .dst_color_blend = vk::BlendFactor::eOne,
-             .src_alpha_blend = vk::BlendFactor::eOne,
-             .dst_alpha_blend = vk::BlendFactor::eOne},
+             .depth_test = true, .depth_write = true},
             "vertMain", "fragMain");
   }
 
