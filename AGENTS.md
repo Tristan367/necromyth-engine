@@ -200,6 +200,6 @@ When capping ticks per frame (max 2), drain the overflow: `accumulator = fmod(ac
 
 5. **Bone buffer instance mapping** — `bone_instance_index` is computed sequentially. If instances are reordered (insertion/removal in the middle), bone buffers silently map to wrong skeletons. Slot-map or stable `bone_handle` per instance would fix both this and dead-instance sequencing issues at the root.
 
-6. **`TextureImage/TextureArray::create_sampler` identical** — character-for-character duplicate (~20 lines each). Extract to `detail::create_mipmapped_sampler`.
+6. **`TextureImage/TextureArray::create_sampler` identical** — ~~character-for-character duplicate (~20 lines each). Extract to `detail::create_mipmapped_sampler`.~~ Done.
 
 7. **`scene_uses_alpha_to_coverage` startup-only** — checked once in `VulkanContext` ctor. New A2C meshes added via `sync_scene` won't enable MSAA. Could be checked in `sync_scene` or deferred to a `render_settings` flag.
