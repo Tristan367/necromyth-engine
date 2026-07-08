@@ -133,6 +133,16 @@ public:
     return index;
   }
 
+  void remove_point_light(std::uint32_t index) {
+    if (index < point_lights_.size())
+      point_lights_[index] = {};
+  }
+
+  void remove_spot_light(std::uint32_t index) {
+    if (index < spot_lights_.size())
+      spot_lights_[index] = {};
+  }
+
   [[nodiscard]] auto add_skeleton(SkeletonAsset skeleton) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(skeletons_.size());
     skeletons_.push_back(std::move(skeleton));

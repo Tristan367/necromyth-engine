@@ -35,6 +35,13 @@ public:
     return position_;
   }
 
+  void set_position(const glm::vec3 &p) {
+    const glm::vec3 offset = p - position_;
+    position_ = p;
+    target_ += offset;
+    view_dirty_ = true;
+  }
+
   [[nodiscard]] auto target() const -> const glm::vec3 & {
     return target_;
   }

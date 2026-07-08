@@ -157,7 +157,7 @@ inline auto trs_to_mat4(const BoneTRS &trs) -> glm::mat4 {
          glm::scale(glm::mat4(1.0F), trs.scale);
 }
 
-inline auto blend_bone_trs(const BoneTRS &a, const BoneTRS &b, float factor) -> BoneTRS {
+[[nodiscard]] inline auto blend_bone_trs(const BoneTRS &a, const BoneTRS &b, float factor) -> BoneTRS {
   if (factor <= 0.0F) return a;
   if (factor >= 1.0F) return b;
   return {

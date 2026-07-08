@@ -295,7 +295,7 @@ public:
       const vk::DescriptorBufferInfo light_info{
           .buffer = light_buffers[i],
           .offset = 0,
-          .range = VK_WHOLE_SIZE,
+          .range = vk::WholeSize,
       };
       device.updateDescriptorSets(
           vk::WriteDescriptorSet{
@@ -338,7 +338,7 @@ public:
         const vk::DescriptorBufferInfo bone_info{
             .buffer = bone_buffers[i * 2 + frame],
             .offset = 0,
-            .range = VK_WHOLE_SIZE,
+            .range = vk::WholeSize,
         };
 
         // Main pass skinned set (texture + bone SSBO)

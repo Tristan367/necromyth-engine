@@ -3,6 +3,7 @@
 
 #include "audio/audio_engine.hpp"
 
+#include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -18,7 +19,9 @@ struct AudioEngine::Impl {
 };
 
 AudioEngine::AudioEngine() : impl_(std::make_unique<Impl>()) {
-  (void)init();
+  const bool ok = init();
+  if (!ok)
+    std::cerr << "Warning: AudioEngine failed to initialize. Audio will be unavailable.\n";
 }
 
 AudioEngine::~AudioEngine() {

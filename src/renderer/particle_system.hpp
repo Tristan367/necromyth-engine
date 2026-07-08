@@ -82,7 +82,12 @@ public:
   }
 
   auto emitter(std::uint32_t index) -> Emitter & {
-    return emitters_[index];
+    return emitters_.at(index);
+  }
+
+  void remove_emitter(std::uint32_t index) {
+    if (index < emitters_.size())
+      emitters_[index] = {};
   }
 
   void update(float dt) {

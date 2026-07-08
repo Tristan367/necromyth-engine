@@ -68,7 +68,7 @@ public:
   static auto compute_shadow_view_proj(const SpotLight &l) -> glm::mat4 {
     const glm::vec3 dir = glm::normalize(l.direction);
     const glm::mat4 proj = glm::perspective(l.outer_angle * 2.0F, 1.0F, 0.1F, l.range);
-    const glm::vec3 up = std::abs(dir.y) > 0.99F ? glm::vec3(0.0F, 0.0F, 1.0F) : glm::vec3(0.0F, 1.0F, 0.0F);
+    const glm::vec3 up = detail::stable_up_for_light(dir);
     const glm::mat4 view = glm::lookAt(l.position, l.position + dir, up);
     return proj * view;
   }
