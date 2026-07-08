@@ -277,22 +277,14 @@ inline void compute_joint_matrices_for_instance(
 }
 
 inline void update_bone_attachments(
-    const std::vector<SkeletonAsset> &skeletons,
-    const std::vector<AnimationClip> &animations,
     std::vector<MeshInstance> &instances) {
-  std::vector<glm::mat4> joint_matrices;
-  std::vector<glm::mat4> bone_worlds;
   for (MeshInstance &instance : instances) {
     if (instance.bone_attachments.empty()) continue;
-    if (instance.skin_index >= skeletons.size()) continue;
-    if (!instance.pose_layers || instance.pose_layers->empty()) continue;
-
-    const SkeletonAsset &skel = skeletons[instance.skin_index];
-    compute_joint_matrices_for_instance(skel, instance, animations, joint_matrices, &bone_worlds);
+    if (instance.cached_bone_worlds.empty()) continue;
 
     for (BoneAttachment &att : instance.bone_attachments) {
-      if (att.joint_index < bone_worlds.size()) {
-        att.world_transform = instance.model * bone_worlds[att.joint_index];
+      if (att.joint_index < instance.cached_bone_worlds.size()) {
+        att.world_transform = instance.model * instance.cached_bone_worlds[att.joint_index];
         if (att.target_instance != k_invalid_skin_index && att.target_instance < instances.size())
           instances[att.target_instance].model = att.world_transform;
       }

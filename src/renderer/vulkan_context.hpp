@@ -347,8 +347,10 @@ public:
 
     if (!bone_buffers_.empty()) {
       std::vector<glm::mat4> joint_matrices;
+      std::vector<glm::mat4> bone_worlds;
       std::uint32_t bone_buffer_index = 0;
-      for (const MeshInstance &instance : scene.instances()) {
+      for (std::size_t ii = 0; ii < scene.instances().size(); ++ii) {
+        MeshInstance &instance = scene.instances()[ii];
         if (!instance.alive) continue;
         if (instance.skin_index == k_invalid_skin_index || !instance.pose_layers)
           continue;
@@ -363,7 +365,10 @@ public:
             scene.skeletons()[instance.skin_index],
             instance,
             scene.animations(),
-            joint_matrices);
+            joint_matrices,
+            &bone_worlds);
+
+        instance.cached_bone_worlds = bone_worlds;
 
         bone_buffers_[bone_buffer_index].write(frame_index_, joint_matrices);
         ++bone_buffer_index;

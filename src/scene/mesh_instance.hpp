@@ -41,6 +41,7 @@ struct MeshInstance {
   const std::vector<PoseLayer> *pose_layers{nullptr};
 
   std::vector<BoneAttachment> bone_attachments;
+  std::vector<glm::mat4> cached_bone_worlds;
   bool alive{true};
 };
 
