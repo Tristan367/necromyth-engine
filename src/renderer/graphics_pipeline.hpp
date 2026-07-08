@@ -25,6 +25,11 @@ struct GraphicsPipelineRasterState {
   float depth_bias_constant{0.0F};
   float depth_bias_slope{0.0F};
   bool alpha_to_coverage{false};
+  bool blend_enable{false};
+  vk::BlendFactor src_color_blend{vk::BlendFactor::eSrcAlpha};
+  vk::BlendFactor dst_color_blend{vk::BlendFactor::eOneMinusSrcAlpha};
+  vk::BlendFactor src_alpha_blend{vk::BlendFactor::eOne};
+  vk::BlendFactor dst_alpha_blend{vk::BlendFactor::eOneMinusSrcAlpha};
 };
 
 [[nodiscard]] inline auto read_spirv_file(std::string_view path) -> std::vector<char> {
@@ -49,21 +54,28 @@ struct GraphicsPipelineRasterState {
 
 [[nodiscard]] inline auto create_pipeline_layout(
     vk::raii::Device &device,
+    std::span<const vk::DescriptorSetLayout> descriptor_set_layouts,
+    vk::PushConstantRange push_constant_range) -> vk::raii::PipelineLayout {
+  const bool has_pc = push_constant_range.size > 0;
+  return vk::raii::PipelineLayout(
+      device,
+      vk::PipelineLayoutCreateInfo{
+          .setLayoutCount = static_cast<std::uint32_t>(descriptor_set_layouts.size()),
+          .pSetLayouts = descriptor_set_layouts.data(),
+          .pushConstantRangeCount = has_pc ? 1u : 0u,
+          .pPushConstantRanges = has_pc ? &push_constant_range : nullptr,
+      });
+}
+
+[[nodiscard]] inline auto create_pipeline_layout(
+    vk::raii::Device &device,
     std::span<const vk::DescriptorSetLayout> descriptor_set_layouts) -> vk::raii::PipelineLayout {
   const vk::PushConstantRange push_constant_range{
       .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
       .offset = 0,
       .size = sizeof(TexturedPushConstants),
   };
-
-  return vk::raii::PipelineLayout(
-      device,
-      vk::PipelineLayoutCreateInfo{
-          .setLayoutCount = static_cast<std::uint32_t>(descriptor_set_layouts.size()),
-          .pSetLayouts = descriptor_set_layouts.data(),
-          .pushConstantRangeCount = 1,
-          .pPushConstantRanges = &push_constant_range,
-      });
+  return create_pipeline_layout(device, descriptor_set_layouts, push_constant_range);
 }
 
 [[nodiscard]] inline auto create_graphics_pipeline(
@@ -130,6 +142,13 @@ struct GraphicsPipelineRasterState {
       .alphaToCoverageEnable = raster_state.alpha_to_coverage ? vk::True : vk::False,
   };
   const vk::PipelineColorBlendAttachmentState color_blend_attachment{
+      .blendEnable = raster_state.blend_enable ? vk::True : vk::False,
+      .srcColorBlendFactor = raster_state.src_color_blend,
+      .dstColorBlendFactor = raster_state.dst_color_blend,
+      .colorBlendOp = vk::BlendOp::eAdd,
+      .srcAlphaBlendFactor = raster_state.src_alpha_blend,
+      .dstAlphaBlendFactor = raster_state.dst_alpha_blend,
+      .alphaBlendOp = vk::BlendOp::eAdd,
       .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
   };
@@ -249,6 +268,13 @@ struct GraphicsPipelineRasterState {
       .alphaToCoverageEnable = raster_state.alpha_to_coverage ? vk::True : vk::False,
   };
   const vk::PipelineColorBlendAttachmentState color_blend_attachment{
+      .blendEnable = raster_state.blend_enable ? vk::True : vk::False,
+      .srcColorBlendFactor = raster_state.src_color_blend,
+      .dstColorBlendFactor = raster_state.dst_color_blend,
+      .colorBlendOp = vk::BlendOp::eAdd,
+      .srcAlphaBlendFactor = raster_state.src_alpha_blend,
+      .dstAlphaBlendFactor = raster_state.dst_alpha_blend,
+      .alphaBlendOp = vk::BlendOp::eAdd,
       .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
   };

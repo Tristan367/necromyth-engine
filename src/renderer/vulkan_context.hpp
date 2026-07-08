@@ -18,6 +18,8 @@
 #include "renderer/render_settings.hpp"
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_array.hpp"
+#include "renderer/gpu_particle.hpp"
+#include "renderer/particle_system.hpp"
 #include "renderer/texture_table.hpp"
 #include "renderer/uniform_buffer.hpp"
 #include "renderer/mesh_gpu.hpp"
@@ -72,6 +74,7 @@ public:
     create_spot_atlas(startup_spot_atlas_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale));
     create_point_cubemap(point_cube_face_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale), 10);
     create_point_light_shadow_ssbo(10);
+    particle_system_.create(device_.physical_device(), device_.device(), 16384, 2);
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -164,6 +167,8 @@ public:
   [[nodiscard]] auto color_fmt() const -> vk::Format { return swapchain_.image_format(); }
   [[nodiscard]] auto depth_fmt() const -> vk::Format { return depth_image_.format(); }
   [[nodiscard]] auto frame_layout_obj() const -> vk::DescriptorSetLayout { return descriptor_resources_.frame_layout(); }
+
+  [[nodiscard]] auto &particle_system() { return particle_system_; }
   [[nodiscard]] auto sample_count() const -> vk::SampleCountFlagBits { return device_.msaa_samples(); }
   [[nodiscard]] auto frame_set_obj(std::uint32_t i) const -> vk::DescriptorSet { return descriptor_resources_.frame_set(i); }
   [[nodiscard]] auto phys_dev() -> vk::raii::PhysicalDevice { return device_.physical_device(); }
@@ -401,6 +406,18 @@ public:
         pass_layouts_,
         draw_list_,
         overlay_ptr);
+
+    // Particle rendering
+    if (particle_system_.active_count() > 0) {
+      particle_system_.upload(frame_index_);
+      pass_recorder().draw_particles(
+          command_buffer, frame_index_, particle_system_.active_count(),
+          pipelines_.pipeline(PipelineId::ParticleBillboard),
+          pipelines_.pipeline_layout_for_particles(),
+          scene.camera().view_projection_matrix(),
+          glm::vec3(scene.camera().right()), glm::vec3(scene.camera().up()),
+          0.15F, glm::vec4(1.0F, 1.0F, 1.0F, 0.8F));
+    }
 
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
@@ -726,6 +743,11 @@ private:
       buf_ptrs[i] = pt_shadow_buffers_[i] ? **pt_shadow_buffers_[i] : vk::Buffer{};
     descriptor_resources_.update_point_light_shadow_ssbo(device_.device(), buf_ptrs);
 
+    std::array<vk::Buffer, 2> particle_bufs{};
+    for (std::uint32_t i = 0; i < 2; ++i)
+      particle_bufs[i] = particle_system_.buffer(i);
+    descriptor_resources_.update_particle_ssbo(device_.device(), particle_bufs);
+
     allocate_skinned_descriptor_sets(texture_table_, skinned_count);
   }
 
@@ -771,6 +793,7 @@ private:
         ENGINE_SKINNED_SHADER_SPIRV,
         ENGINE_SKINNED_SHADOW_DEPTH_SPIRV,
         ENGINE_POINT_SHADOW_SPIRV,
+        ENGINE_PARTICLE_BILLBOARD_SPIRV,
         descriptor_resources_.frame_layout(),
         descriptor_resources_.material_layout(),
         descriptor_resources_.material_skinned_layout(),
@@ -964,6 +987,7 @@ private:
   std::array<std::optional<vk::raii::DeviceMemory>, k_pt_shadow_frames> pt_shadow_memories_{};
   std::array<GpuPointLightShadowData *, k_pt_shadow_frames> pt_shadow_mapped_{};
   std::uint32_t pt_shadow_max_lights_{0};
+  ParticleSystem particle_system_;
   TextureTable texture_table_;
   TextureArray texture_array_;
   std::vector<MeshGpu> mesh_gpus_;

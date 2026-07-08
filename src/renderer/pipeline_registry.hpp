@@ -25,6 +25,7 @@ public:
       std::string_view skinned_textured_spirv,
       std::string_view skinned_shadow_depth_spirv,
       std::string_view point_shadow_spirv,
+      std::string_view particle_billboard_spirv,
       vk::DescriptorSetLayout frame_layout,
       vk::DescriptorSetLayout material_layout,
       vk::DescriptorSetLayout material_skinned_layout,
@@ -44,6 +45,7 @@ public:
     skinned_textured_spirv_ = skinned_textured_spirv;
     skinned_shadow_depth_spirv_ = skinned_shadow_depth_spirv;
     point_shadow_spirv_ = point_shadow_spirv;
+    particle_billboard_spirv_ = particle_billboard_spirv;
     pipeline_cache_ = &pipeline_cache;
     profile_ = profile;
 
@@ -60,6 +62,10 @@ public:
 
   [[nodiscard]] auto layout_for(PipelineId id) const -> vk::PipelineLayout {
     return is_skinned_pipeline(id) ? *skinned_pipeline_layout_ : *pipeline_layout_;
+  }
+
+  [[nodiscard]] auto pipeline_layout_for_particles() const -> vk::PipelineLayout {
+    return *particle_pipeline_layout_;
   }
 
   [[nodiscard]] auto pipeline(PipelineId id) const -> vk::Pipeline {
@@ -203,8 +209,35 @@ private:
                .depth_bias_enable = true,
                .depth_bias_constant = k_shadow_depth_bias_constant,
                .depth_bias_slope = k_shadow_depth_bias_slope},
-              "vertMainSkinned", "fragMain", nullptr, 0b111111);
+                   "vertMainSkinned", "fragMain", nullptr, 0b111111);
     }
+
+    // Particle billboard: no vertex input, push constants (116 bytes)
+    const vk::PushConstantRange particle_pc{
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        .offset = 0,
+        .size = 128,
+    };
+    const std::array particle_set_layouts{frame_layout_};
+    particle_pipeline_layout_ = create_pipeline_layout(device, particle_set_layouts, particle_pc);
+
+    const vk::VertexInputBindingDescription empty_binding{};
+    pipelines_[static_cast<std::size_t>(PipelineId::ParticleBillboard)] =
+        create_graphics_pipeline(
+            device, color_format_, depth_format_,
+            particle_billboard_spirv_, particle_billboard_spirv_,
+            *particle_pipeline_layout_, sample_count_,
+            empty_binding, std::span<const vk::VertexInputAttributeDescription>{},
+            *pipeline_cache_,
+            {.cull_mode = vk::CullModeFlagBits::eNone,
+             .front_face = vk::FrontFace::eCounterClockwise,
+             .depth_test = false, .depth_write = false,
+             .blend_enable = true,
+             .src_color_blend = vk::BlendFactor::eSrcAlpha,
+             .dst_color_blend = vk::BlendFactor::eOne,
+             .src_alpha_blend = vk::BlendFactor::eOne,
+             .dst_alpha_blend = vk::BlendFactor::eOne},
+            "vertMain", "fragMain");
   }
 
   vk::DescriptorSetLayout frame_layout_{nullptr};
@@ -220,11 +253,13 @@ private:
   std::string_view skinned_textured_spirv_{};
   std::string_view skinned_shadow_depth_spirv_{};
   std::string_view point_shadow_spirv_{};
+  std::string_view particle_billboard_spirv_{};
   const vk::raii::PipelineCache *pipeline_cache_{nullptr};
   PipelineBuildProfile profile_{};
   vk::raii::PipelineLayout pipeline_layout_{nullptr};
   vk::raii::PipelineLayout skinned_pipeline_layout_{nullptr};
-  static constexpr auto k_pipeline_count = static_cast<std::size_t>(PipelineId::PointShadowDepthSkinned) + 1;
+  vk::raii::PipelineLayout particle_pipeline_layout_{nullptr};
+  static constexpr auto k_pipeline_count = static_cast<std::size_t>(PipelineId::ParticleBillboard) + 1;
   std::array<std::optional<vk::raii::Pipeline>, k_pipeline_count> pipelines_{};
 };
 

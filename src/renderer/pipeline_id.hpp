@@ -22,6 +22,7 @@ enum class PipelineId : std::uint8_t {
   ShadowDepthSkinned = 8,
   PointShadowDepth = 9,
   PointShadowDepthSkinned = 10,
+  ParticleBillboard = 11,
 };
 
 [[nodiscard]] constexpr auto textured_pipeline(MeshAlphaMode alpha_mode, bool skinned = false) -> PipelineId {

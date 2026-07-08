@@ -51,6 +51,18 @@ public:
     return far_plane_;
   }
 
+  [[nodiscard]] auto view_projection_matrix() const -> glm::mat4 {
+    return projection_matrix() * view_matrix();
+  }
+
+  [[nodiscard]] auto right() const -> glm::vec3 {
+    return glm::normalize(glm::cross(look_direction(), up_));
+  }
+
+  [[nodiscard]] auto up() const -> glm::vec3 {
+    return glm::normalize(glm::cross(right(), look_direction()));
+  }
+
   [[nodiscard]] auto view_matrix() const -> const glm::mat4 & {
     if (view_dirty_)
       rebuild_view();
