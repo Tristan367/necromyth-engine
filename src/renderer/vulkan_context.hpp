@@ -70,11 +70,12 @@ public:
     create_shadow_map(
         startup_shadow_map_resolution_,
         shadow_cascade_layer_count(scene.shadow_settings().cascade_mode));
-    light_buffer_.create(device_.physical_device(), device_.device(), 64);
+    light_buffer_.create(device_.physical_device(), device_.device(), config.max_total_lights);
     create_spot_atlas(startup_spot_atlas_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale));
-    create_point_cubemap(point_cube_face_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale), 10);
-    create_point_light_shadow_ssbo(10);
-    particle_system_.create(device_.physical_device(), device_.device(), 65536, 2);
+    create_point_cubemap(point_cube_face_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale),
+                         config.max_point_shadow_lights);
+    create_point_light_shadow_ssbo(config.max_point_shadow_lights);
+    particle_system_.create(device_.physical_device(), device_.device(), config.max_particles, 2);
     create_command_pool();
     engine::upload_scene_meshes(
         scene,
@@ -300,11 +301,11 @@ public:
         scene.directional_light(),
         shadow_settings);
 
-    // Compute spot shadow VP matrices (up to 4) for the UBO
-    std::array<glm::mat4, 4> spot_vps{};
+    // Compute spot shadow VP matrices for the UBO
+    std::array<glm::mat4, k_max_spot_shadow_lights> spot_vps{};
     std::size_t spot_vp_count = 0;
     for (const SpotLight &sl : scene.spot_lights()) {
-      if (sl.casts_shadow && spot_vp_count < 4) {
+      if (sl.casts_shadow && spot_vp_count < k_max_spot_shadow_lights) {
         // Depth pass VS needs clip-space VP (NO bias remap) for SV_Position.
         spot_vps[spot_vp_count] = LightStorageBuffer::compute_shadow_view_proj(sl);
         ++spot_vp_count;

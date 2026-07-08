@@ -20,6 +20,8 @@
 
 namespace engine {
 
+inline constexpr std::uint32_t k_max_spot_shadow_lights = 16;
+inline constexpr std::uint32_t k_max_point_shadow_lights = 64;
 inline constexpr float k_shadow_depth_bias_constant = 1.0F;
 inline constexpr float k_shadow_depth_bias_slope = 2.5F;
 // Practical split blend (GPU Gems / Sascha): 0 = uniform, 1 = logarithmic.

@@ -752,7 +752,7 @@ struct PassRecorder {
     for (std::uint32_t si = 0; si < scene.spot_lights().size(); ++si) {
       const SpotLight &sl = scene.spot_lights()[si];
       if (!sl.casts_shadow) continue;
-      if (light_idx >= 4) break; // spotLightViewProj UBO holds 4 matrices (see vulkan_context)
+      if (light_idx >= static_cast<int>(k_max_spot_shadow_lights)) break;
 
       // Sub-rect: each spotlight slot occupies a vertical strip of the atlas.
       // The sub-rect index matches the spotlight's index in the scene array,

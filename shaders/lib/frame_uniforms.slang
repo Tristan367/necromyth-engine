@@ -7,7 +7,7 @@ struct FrameUniforms {
     float4 lightDirection;
     float4 lightColor;
     float4x4 lightViewProj[2];     // 0-1 = directional cascades
-    float4x4 spotLightViewProj[4]; // 2-5 = spot lights
+    float4x4 spotLightViewProj[16]; // 2-17 = spot lights
     // Point light face_size for PCF offset (z component of pointLightParams)
     float4 pointLightParams;
     // x = split view-space Z (negative); y = blend half-width in view meters (0 = hard pick).
