@@ -51,6 +51,18 @@ public:
 
   void add_transition(AnimTransitionDef t) { transitions_.push_back(std::move(t)); }
 
+  // Speed-driven locomotion: idle ↔ walk based on a "speed" param.
+  // Internal: add_state x2 + add_transition x2 + start(idle).
+  void add_speed_driven_locomotion(const std::string &idle_name, std::uint32_t idle_clip,
+                                   const std::string &walk_name, std::uint32_t walk_clip,
+                                   float threshold = 0.01F, float blend_time = 0.25F) {
+    add_state({idle_name, idle_clip, true});
+    add_state({walk_name, walk_clip, true});
+    add_transition({idle_name, walk_name, "speed", AnimConditionOp::Greater, threshold, blend_time});
+    add_transition({walk_name, idle_name, "speed", AnimConditionOp::Less, threshold, blend_time});
+    start(idle_name);
+  }
+
   void set_param(const std::string &name, float v) { params_[name] = v; }
   void set_param(const std::string &name, bool v)  { params_[name] = v ? 1.0F : 0.0F; }
 

@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -94,7 +95,11 @@ public:
   }
 
   [[nodiscard]] auto add_texture(std::string path) -> std::uint32_t {
+    auto it = texture_path_index_.find(path);
+    if (it != texture_path_index_.end())
+      return it->second;
     const std::uint32_t index = static_cast<std::uint32_t>(texture_paths_.size());
+    texture_path_index_[path] = index;
     texture_paths_.push_back(std::move(path));
     return index;
   }
@@ -146,6 +151,7 @@ private:
   DirectionalLightShadowSettings shadow_settings_{};
   std::vector<MeshSource> meshes_;
   std::vector<std::string> texture_paths_;
+  std::unordered_map<std::string, std::uint32_t> texture_path_index_;
   std::vector<std::string> texture_array_layer_paths_;
   std::vector<MeshInstance> instances_;
   std::vector<SkeletonAsset> skeletons_;
