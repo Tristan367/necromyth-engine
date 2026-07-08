@@ -52,6 +52,7 @@ float sampleCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, uint 
     float3 receiverPos = worldPos + normalize(normal) * (kNormalOffsetScale * (1.0 - cosTheta));
 
     float4 shadowCoord = mul(biasMatrix, mul(ubo.lightViewProj[layer], float4(receiverPos, 1.0)));
+    if (shadowCoord.w <= 0.0) return 1.0;
     float3 projection = shadowCoord.xyz / shadowCoord.w;
     if (projection.x < 0.0 || projection.x > 1.0 || projection.y < 0.0 || projection.y > 1.0 ||
         projection.z < 0.0 || projection.z > 1.0)

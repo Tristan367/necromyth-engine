@@ -71,7 +71,8 @@ float3 calcPointLight(GpuPointLight l, uint lightIndex, float3 fragPos, float3 n
     float ndotl = max(dot(normal, lightDir), 0.0);
     float3 diffuse = l.colorIntensity.rgb * l.colorIntensity.w * ndotl;
 
-    float3 halfVec = normalize(lightDir + viewDir);
+    float3 halfVec = lightDir + viewDir;
+    halfVec = dot(halfVec, halfVec) > 0.000001 ? normalize(halfVec) : lightDir;
     float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
     float3 specular = l.colorIntensity.rgb * l.colorIntensity.w * spec * 0.3;
 
@@ -116,7 +117,7 @@ float samplePointShadowCubemap(float3 fragPos, float3 normal, float ndotl,
     float3 tangentY = cross(sampleDir, tangentX);
 
     // Resolution-aware texel offset: face_size is in the UBO (same for all lights)
-    const float dxy = 0.5 / ubo.pointLightParams.z;
+    const float dxy = 0.5 / max(ubo.pointLightParams.z, 1.0);
 
     float shadow = 0.0;
     for (int x = 0; x < 2; ++x) {
@@ -193,7 +194,8 @@ float3 calcSpotLight(GpuSpotLight l, float3 fragPos, float3 normal, float3 viewD
     float ndotl = max(dot(normal, lightDir), 0.0);
     float3 diffuse = l.colorIntensity.rgb * l.colorIntensity.w * ndotl;
 
-    float3 halfVec = normalize(lightDir + viewDir);
+    float3 halfVec = lightDir + viewDir;
+    halfVec = dot(halfVec, halfVec) > 0.000001 ? normalize(halfVec) : lightDir;
     float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
     float3 specular = l.colorIntensity.rgb * l.colorIntensity.w * spec * 0.3;
 

@@ -23,12 +23,7 @@ struct FrameUniformBufferObject {
   alignas(16) glm::vec4 light_color{};
   alignas(16) std::array<glm::mat4, k_max_shadow_cascades> light_view_proj{}; // 0-1 = directional, 2-5 = spot
   alignas(16) std::array<glm::mat4, 4> spot_light_vp{}; // indices 2-5 of the GLSL array
-  // Point light cubemap shadow (Sascha omni model). One shadow-casting
-  // point light. point_face_vp = perspective * rotated face view per face.
-  alignas(16) glm::mat4 point_light_view{1.0F};  // world -> light-local (translate -pos)
-  alignas(16) std::array<glm::mat4, 6> point_face_vp{}; // VP per cube face
-  alignas(16) glm::vec4 point_light_pos{};       // world-space light position
-  alignas(16) glm::vec4 point_light_params{};    // x = inv_radius, y = range, z = face_size, w = enabled
+  alignas(16) glm::vec4 point_light_params{};    // z = face_size for PCF offset
   alignas(16) glm::vec4 cascade_params{};
   alignas(16) glm::vec4 shadow_fade_width{};
 };
@@ -82,23 +77,6 @@ public:
 
   void write(std::uint32_t frame_index, const FrameUniformBufferObject &ubo) const {
     std::memcpy(mapped_[frame_index], &ubo, sizeof(FrameUniformBufferObject));
-  }
-
-  void write_point_light_data(
-      std::uint32_t frame_index,
-      const glm::mat4 &light_view,
-      const std::array<glm::mat4, 6> &face_vps,
-      const glm::vec4 &light_pos,
-      const glm::vec4 &light_params) const {
-    if (frame_index >= mapped_.size()) return;
-    constexpr auto offset = offsetof(FrameUniformBufferObject, point_light_view);
-    auto *ptr = static_cast<char *>(mapped_[frame_index]) + offset;
-    constexpr std::size_t mat_size = sizeof(glm::mat4);
-    constexpr std::size_t vec_size = sizeof(glm::vec4);
-    std::memcpy(ptr, &light_view, mat_size);
-    std::memcpy(ptr + mat_size, face_vps.data(), mat_size * 6);
-    std::memcpy(ptr + mat_size * 7, &light_pos, vec_size);
-    std::memcpy(ptr + mat_size * 7 + vec_size, &light_params, vec_size);
   }
 
   [[nodiscard]] auto buffer(std::uint32_t frame_index) const -> vk::Buffer {
