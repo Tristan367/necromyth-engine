@@ -2,6 +2,7 @@
 
 #include "renderer/model_loader.hpp"
 #include "scene/animation_types.hpp"
+#include "scene/scene.hpp"
 
 #define GLM_FORCE_RADIANS
 #include <glm/gtc/quaternion.hpp>
@@ -581,6 +582,54 @@ inline void load_animations(const tinygltf::Model &model, std::vector<AnimationC
 
   if (result.primitives.empty())
     throw std::runtime_error("glTF file contains no renderable mesh primitives");
+
+  return result;
+}
+
+struct GltfImportResult {
+  std::uint32_t first_instance{};
+  std::uint32_t instance_count{};
+  std::uint32_t skeleton_index{k_invalid_skin_index};
+};
+
+// Single-call glTF import: loads file, adds meshes/textures/instances/skeletons/animations,
+// wires skin_index, and returns handles. Caller can then set up pose layers, hitboxes, etc.
+[[nodiscard]] inline auto import_gltf(Scene &scene, const std::string &path,
+                                       glm::mat4 instance_transform = glm::mat4(1.0F))
+    -> GltfImportResult {
+  const LoadedGltfModel model = load_gltf_model(path);
+  GltfImportResult result;
+  if (model.primitives.empty()) return result;
+
+  const std::uint32_t before = static_cast<std::uint32_t>(scene.instances().size());
+
+  for (const LoadedGltfPrimitive &prim : model.primitives) {
+    const std::uint32_t mesh_idx = scene.add_mesh({prim.mesh.vertices, prim.mesh.indices});
+    const std::uint32_t tex_idx = prim.material.base_color_texture_path
+        ? scene.add_texture(*prim.material.base_color_texture_path)
+        : 0;
+    (void)scene.add_instance({
+        .mesh_index = mesh_idx,
+        .texture_index = tex_idx,
+        .texture_source = TextureSource::Table,
+        .model = instance_transform * prim.node_transform,
+        .layer = RenderLayer::Opaque,
+    });
+  }
+
+  result.first_instance = before;
+  result.instance_count = static_cast<std::uint32_t>(scene.instances().size()) - before;
+
+  if (!model.skeletons.empty()) {
+    SkeletonAsset skeleton = model.skeletons.front();
+    result.skeleton_index = scene.add_skeleton(std::move(skeleton));
+
+    for (const AnimationClip &anim : model.animations)
+      (void)scene.add_animation(anim);
+
+    for (std::uint32_t i = 0; i < result.instance_count; ++i)
+      scene.instance(result.first_instance + i).skin_index = result.skeleton_index;
+  }
 
   return result;
 }
