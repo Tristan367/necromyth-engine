@@ -51,24 +51,12 @@ float4 shadeAlphaToCoverageSingle(VSOutput vertIn, int filterMode) {
     float4 texColor = sampleBaseColor(vertIn.fragTexCoord);
     if (texColor.a <= 0.0)
         discard;
-
-    float3 baseColor = texColor.rgb * vertIn.fragColor;
-    float3 normal = normalize(vertIn.worldNormal);
-    float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
-    float3 lit = shadeDirectional(vertIn.worldPos, normal, filterMode, -1)
-               + evaluateAllLights(vertIn.worldPos, normal, viewDir);
-    return float4(baseColor * lit, texColor.a);
+    return shadeOpaqueSingle(vertIn, filterMode);
 }
 
 float4 shadeAlphaToCoverageDual(VSOutput vertIn, int filterMode) {
     float4 texColor = sampleBaseColor(vertIn.fragTexCoord);
     if (texColor.a <= 0.0)
         discard;
-
-    float3 baseColor = texColor.rgb * vertIn.fragColor;
-    float3 normal = normalize(vertIn.worldNormal);
-    float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
-    float3 lit = shadeDirectional(vertIn.worldPos, normal, -1, filterMode)
-               + evaluateAllLights(vertIn.worldPos, normal, viewDir);
-    return float4(baseColor * lit, texColor.a);
+    return shadeOpaqueDual(vertIn, filterMode);
 }

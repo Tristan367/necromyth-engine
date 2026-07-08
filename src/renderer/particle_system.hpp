@@ -23,6 +23,7 @@ public:
     float age{0.0F};
     bool alive{false};
     float lifetime{1.0F};
+    std::uint32_t emitted_by{};
   };
 
   struct Emitter {
@@ -85,10 +86,11 @@ public:
   }
 
   void update(float dt) {
-    for (auto &e : emitters_) {
+    for (std::size_t eidx = 0; eidx < emitters_.size(); ++eidx) {
+      auto &e = emitters_[eidx];
       if (e.on_update) {
         for (auto &p : particles_) {
-          if (!p.alive) continue;
+          if (!p.alive || p.emitted_by != eidx) continue;
           if (!e.on_update(p, dt)) {
             p.alive = false;
             free_list_.push_back(static_cast<std::uint32_t>(&p - particles_.data()));
@@ -108,6 +110,7 @@ public:
         p.vel = glm::vec3{};
         p.age = 0.0F;
         p.lifetime = 1.0F;
+        p.emitted_by = static_cast<std::uint32_t>(eidx);
         if (e.on_emit) e.on_emit(p);
         p.alive = true;
       }

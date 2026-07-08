@@ -221,17 +221,10 @@ struct PassRecorder {
         if (!test(p)) return;
     }
 
-    if (is_point) {
-      bind_pipeline(command_buffer, is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth, state);
-    } else if (is_skinned) {
-      bind_pipeline(command_buffer, PipelineId::ShadowDepthSkinned, state);
-    } else {
-      bind_pipeline(command_buffer, PipelineId::ShadowDepth, state);
-    }
-
     const PipelineId shadow_pipeline = is_point
         ? (is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth)
         : (is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth);
+    bind_pipeline(command_buffer, shadow_pipeline, state);
 
     if (is_skinned && draw.bone_instance_index != k_invalid_skin_index) {
       command_buffer.bindDescriptorSets(
@@ -791,7 +784,7 @@ struct PassRecorder {
       for (const DrawCommand &draw : draw_list) {
         if (draw.mesh_index >= mesh_gpus.size()) continue;
         const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
-        if (!sphere_intersects_light(mesh_gpus[draw.mesh_index].bounds(), draw.model, sl.position, sl.range)) continue;
+        if (!sphere_intersects_light(bounds, draw.model, sl.position, sl.range)) continue;
         draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, spot_vp, bind_state);
       }
 
@@ -837,8 +830,6 @@ struct PassRecorder {
           vk::ImageAspectFlagBits::eDepth, 0, 1, 0, VK_REMAINING_ARRAY_LAYERS);
       layouts.point_cube_layout = vk::ImageLayout::eDepthAttachmentOptimal;
     }
-
-    const auto &face_views = cubemap_face_views();
 
     for (std::uint32_t si = 0; si < scene.point_lights().size() && si < cube_face_views.size(); ++si) {
       const PointLight &pl = scene.point_lights()[si];

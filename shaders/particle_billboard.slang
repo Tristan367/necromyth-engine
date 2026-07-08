@@ -1,5 +1,5 @@
 // Ultra-minimal billboard particle shader.
-// Push constants: viewProj(64) + camRight(16) + camUp(16) + size(4) + color(16) = 116 bytes
+// Push constants: viewProj(64) + camRight(16) + camUp(16) + size(4) + pad(12) + color(16) = 128 bytes
 // SSBO (set 0, binding 7): StructuredBuffer<float4> — per-particle position (xyz, w=unused)
 // gl_VertexIndex (0,1,2) picks equilateral triangle corner; gl_InstanceIndex indexes particle.
 // No backface cull — billboards always face camera.

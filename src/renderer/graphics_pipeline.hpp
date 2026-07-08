@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "renderer/textured_push_constants.hpp"
-#include "renderer/vertex.hpp"
 
 namespace engine {
 
