@@ -49,7 +49,7 @@ Read this and `README.md` before large renderer changes.
 
 **Scene API:** `MeshInstance` has `skin_index`, `animation_index`, `animation_time`, `animation_speed`, `animation_loop`. Blending: `next_animation_index`, `blend_factor`, `blend_duration`. `Scene` stores `skeletons_` and `animations_` (add_skeleton/add_animation). `Scene::instance()` returns mutable ref for runtime control.
 
-**Pipeline:** 4 new `PipelineId` variants: `TexturedOpaqueSkinned`, `TexturedCutoutSkinned`, `TexturedAlphaToCoverageSkinned`, `ShadowDepthSkinned` (IDs 5-8). Skinned main pipelines use separate VS SPIR-V (`triangle_skinned.spv`, `vertMainSkinned`) + reuse fragment shaders from `triangle.spv`. Skinned shadow uses dedicated `shadow_depth_skinned.spv` with 3-attr vertex input (pos + joints, no normal/color/tex).
+**Pipeline:** 6 new `PipelineId` variants: `TexturedOpaqueSkinned`, `TexturedCutoutSkinned`, `TexturedAlphaToCoverageSkinned`, `ShadowDepthSkinned`, `PointShadowDepth`, `PointShadowDepthSkinned` (IDs 5-10). Skinned main pipelines use separate VS SPIR-V (`triangle_skinned.spv`, `vertMainSkinned`) + reuse fragment shaders from `triangle.spv`. Skinned shadow uses dedicated `shadow_depth_skinned.spv` with 3-attr vertex input (pos + joints, no normal/color/tex). Point shadow uses `point_shadow.spv` (non-skinned + skinned variants, both VS + FS, multiview).
 
 **Descriptor layouts:** `material_skinned_layout_` (set 1: sampler b=0 + SSBO b=1) for main pass skinned; shadow skinned reuses same layout (dummy sampler at b=0, SSBO at b=1). Non-skinned uses `material_layout_` (set 1: sampler b=0 only). Zero overhead for non-skinned scenes — `build_skinned` flag gates skinned pipeline creation.
 
@@ -115,16 +115,19 @@ Read this and `README.md` before large renderer changes.
 
 ## Roadmap (planned features, in priority order)
 
-1. **Point + spot lights** — forward shading with attenuation, optional cube-map shadow atlas
-2. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
-3. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
+1. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
+2. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
+
+## Implemented (formerly planned)
+
+- **Point + spot lights** — forward shading with attenuation, D32 depth cubemap shadow atlas with hardware PCF. 10 lights @ 190 FPS on RTX 3060.
+- **Audio engine** — miniaudio integration, positional 3D audio, looping music, multi-track.
 
 ## Known knowns (deferred, not urgent)
 
 1. Alpha-threshold shadow discard (optional; opaque silhouettes are fine for now).
 2. Split `vulkan_context.hpp` further if it grows again.
 3. Per-skin bone buffers instead of per-instance (shared skeletons).
-4. Cubic spline interpolation for glTF animations (rare in practice).
 5. Shared skeleton hitbox bodies (currently per-instance).
 
 ## Jolt CharacterVirtual — Critical Properties
