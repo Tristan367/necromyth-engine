@@ -17,6 +17,7 @@ class Scene;
 
 struct BoneAttachment {
   std::uint32_t joint_index{};
+  std::uint32_t target_instance{std::numeric_limits<std::uint32_t>::max()};
   glm::mat4 world_transform{1.0F};
 };
 

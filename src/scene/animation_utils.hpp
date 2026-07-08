@@ -291,8 +291,11 @@ inline void update_bone_attachments(
     compute_joint_matrices_for_instance(skel, instance, animations, joint_matrices, &bone_worlds);
 
     for (BoneAttachment &att : instance.bone_attachments) {
-      if (att.joint_index < bone_worlds.size())
+      if (att.joint_index < bone_worlds.size()) {
         att.world_transform = instance.model * bone_worlds[att.joint_index];
+        if (att.target_instance != k_invalid_skin_index && att.target_instance < instances.size())
+          instances[att.target_instance].model = att.world_transform;
+      }
     }
   }
 }
