@@ -77,10 +77,10 @@ public:
   }
 
   ~PhysicsWorld() {
-    for (const JPH::BodyID id : body_ids_)
+    for (const JPH::BodyID id : body_ids_) {
       body_interface_->RemoveBody(id);
-    for (const JPH::BodyID id : body_ids_)
       body_interface_->DestroyBody(id);
+    }
   }
 
   void step(float delta_time) {

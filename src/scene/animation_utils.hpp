@@ -31,6 +31,8 @@ inline auto find_keyframes(const AnimationSampler &sampler, float time, bool loo
   const std::size_t n = sampler.inputs.size();
   if (n == 0)
     throw std::runtime_error("Animation sampler has no keyframes");
+  if (sampler.outputs.size() < n)
+    throw std::runtime_error("Animation sampler has fewer output values than input keyframes");
 
   const float duration = sampler.inputs.back();
   if (duration <= 0.0F)
@@ -117,7 +119,8 @@ inline void build_world_matrices(
     out_bone_worlds->resize(joint_count);
 
   thread_local std::vector<std::uint32_t> s_chain;
-  s_chain.reserve(64);
+  if (s_chain.capacity() < 64)
+    s_chain.reserve(64);
 
   for (std::size_t i = 0; i < joint_count; ++i) {
     const std::uint32_t node_index = skeleton.joint_nodes[i];

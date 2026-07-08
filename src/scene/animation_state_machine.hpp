@@ -86,7 +86,7 @@ public:
                          float blend_time) {
     if (layer_index == 0 || layer_index >= layers_.size()) return;
     PoseLayer &l = layers_[layer_index];
-    if (l.clip_index >= k_invalid_clip) {  // was inactive: snap on
+    if (l.clip_index == k_invalid_clip) {  // was inactive: snap on
       l.clip_index = clip_index;
       l.time = 0.0F;
       l.xfade_index = k_invalid_clip;
@@ -251,12 +251,12 @@ private:
         if (l.weight == target) rate_it->second = 0.0F;
       }
 
-      if (l.clip_index >= k_invalid_clip) continue;  // inactive
+      if (l.clip_index == k_invalid_clip) continue;  // inactive
 
       l.time += delta;
       loop_time(l.time, l.clip_index, clips);
 
-      if (l.xfade_index >= k_invalid_clip) continue;
+      if (l.xfade_index == k_invalid_clip) continue;
 
       l.xfade_time += delta;
       loop_time(l.xfade_time, l.xfade_index, clips);

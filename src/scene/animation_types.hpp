@@ -23,7 +23,7 @@ enum class HitboxShape : std::uint8_t { Box, Sphere, Capsule };
 struct HitboxAttachment {
   std::string name;
   std::uint32_t joint_index{};  // index into joint_nodes (0..N-1)
-  HitboxShape shape;
+  HitboxShape shape{HitboxShape::Box};
   glm::vec3 offset{0.0F};
   glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
   glm::vec3 half_extent{0.3F};  // Box: xyz half-extent. Sphere/Capsule: x = radius

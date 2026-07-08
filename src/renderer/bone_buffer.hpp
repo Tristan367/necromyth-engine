@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -72,6 +73,9 @@ public:
   void write(std::uint32_t frame_index, std::span<const glm::mat4> joint_matrices) {
     if (frame_index >= mapped_.size())
       throw std::runtime_error("Bone SSBO write: frame_index out of range");
+    if (joint_matrices.size() > static_cast<std::size_t>(bone_count_))
+      std::cerr << "Warning: Bone SSBO write: " << joint_matrices.size()
+                << " matrices exceed bone_count " << bone_count_ << " — truncating\n";
     const std::size_t bytes = std::min(
         joint_matrices.size() * sizeof(glm::mat4),
         sizeof(glm::mat4) * static_cast<std::size_t>(bone_count_));

@@ -24,6 +24,7 @@ namespace engine {
 class LightStorageBuffer {
 public:
   static constexpr std::uint32_t k_frames_in_flight = 2;
+  static constexpr vk::DeviceSize k_header_size = 16;  // num_point + num_spot (2× u32), 8B pad
 
   struct GpuPointLight {
     float pos_range[4];
@@ -47,7 +48,7 @@ public:
       std::size_t max_lights) {
     max_lights_ = max_lights;
     const auto mem_props = physical_device.getMemoryProperties();
-    const vk::DeviceSize buf_size = 16 + max_lights * (sizeof(GpuPointLight) + sizeof(GpuSpotLight));
+    const vk::DeviceSize buf_size = k_header_size + max_lights * (sizeof(GpuPointLight) + sizeof(GpuSpotLight));
 
     for (std::size_t i = 0; i < k_frames_in_flight; ++i) {
       buffers_[i].emplace(device, vk::BufferCreateInfo{
@@ -96,7 +97,7 @@ public:
     header[0] = static_cast<std::uint32_t>(num_point);
     header[1] = static_cast<std::uint32_t>(num_spot);
 
-    auto *ptrs = reinterpret_cast<GpuPointLight *>(data + 16);
+    auto *ptrs = reinterpret_cast<GpuPointLight *>(data + k_header_size);
     for (std::size_t i = 0; i < num_point; ++i) {
       ptrs[i].pos_range[0] = point_lights[i].position.x;
       ptrs[i].pos_range[1] = point_lights[i].position.y;
@@ -123,7 +124,7 @@ public:
       }
     }
 
-    auto *sptr = reinterpret_cast<GpuSpotLight *>(data + 16 + num_point * sizeof(GpuPointLight));
+    auto *sptr = reinterpret_cast<GpuSpotLight *>(data + k_header_size + num_point * sizeof(GpuPointLight));
     for (std::size_t i = 0; i < num_spot; ++i) {
       sptr[i].pos_range[0] = spot_lights[i].position.x;
       sptr[i].pos_range[1] = spot_lights[i].position.y;

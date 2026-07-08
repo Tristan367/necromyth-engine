@@ -360,6 +360,7 @@ public:
           break;
 
         joint_matrices.clear();
+        bone_worlds.clear();
 
         compute_joint_matrices_for_instance(
             scene.skeletons()[instance.skin_index],
@@ -986,6 +987,8 @@ private:
     float _pad1{0.0F};
     float _pad2{0.0F};
   };
+  static_assert(sizeof(GpuPointLightShadowData) == 480,
+                "GpuPointLightShadowData must be 480 bytes to match Slang SSBO layout");
   static constexpr std::uint32_t k_pt_shadow_frames = 2;
   std::array<std::optional<vk::raii::Buffer>, k_pt_shadow_frames> pt_shadow_buffers_{};
   std::array<std::optional<vk::raii::DeviceMemory>, k_pt_shadow_frames> pt_shadow_memory_{};

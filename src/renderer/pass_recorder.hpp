@@ -757,8 +757,9 @@ struct PassRecorder {
       // Sub-rect: each spotlight slot occupies a vertical strip of the atlas.
       // The sub-rect index matches the spotlight's index in the scene array,
       // which is the same slot index used in the SSBO (atlas_rect UVs).
-      const int y_off = static_cast<int>(static_cast<float>(si) * region_h);
-      const std::uint32_t rh = static_cast<std::uint32_t>(region_h);
+      const std::uint32_t rh_int = static_cast<std::uint32_t>(region_h);
+      const int y_off = static_cast<int>(si * rh_int);
+      const std::uint32_t rh = rh_int;
       const vk::Rect2D sub_rect{{0, y_off}, {atlas_ext.width, rh}};
 
       vk::RenderingAttachmentInfo depth_attach{};
