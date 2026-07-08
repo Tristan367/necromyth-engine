@@ -16,6 +16,7 @@
 #pragma GCC diagnostic ignored "-Wcpp"
 #endif
 #include <tinygltf/tiny_gltf.h>
+#include <iostream>
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
@@ -545,7 +546,7 @@ inline void load_animations(const tinygltf::Model &model, std::vector<AnimationC
                           : loader.LoadASCIIFromFile(&model, &error, &warning, file_path);
 
   if (!warning.empty())
-    (void)warning;
+    std::cerr << "glTF warning: " << warning << '\n';
   if (!loaded)
     throw std::runtime_error("Failed to load glTF: " + error);
 

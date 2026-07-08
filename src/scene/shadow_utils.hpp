@@ -115,6 +115,7 @@ struct DirectionalShadowCascadeData {
   case ShadowCascadeMode::Dual:
     return "dual";
   }
+  return "unknown";
 }
 
 [[nodiscard]] inline auto shadow_filter_mode_name(ShadowFilterMode mode) -> const char * {
@@ -124,6 +125,7 @@ struct DirectionalShadowCascadeData {
   case ShadowFilterMode::Pcf3x3:
     return "pcf3x3";
   }
+  return "unknown";
 }
 
 namespace detail {
@@ -291,7 +293,7 @@ namespace detail {
     std::uint32_t cascade_count) -> float {
   const float near_clip = camera.near_plane();
   const float clip_range = std::max(shadow_far - near_clip, 0.001F);
-  const float min_z = near_clip;
+  const float min_z = std::max(near_clip, 0.001F);
   const float max_z = near_clip + clip_range;
   const float range = max_z - min_z;
   const float ratio = max_z / min_z;
@@ -333,6 +335,19 @@ namespace detail {
   result.split_view_z = -(near_clip + split_norm * clip_range);
 
   return result;
+}
+
+// Vulkan cubemap face rotation matrices — maps viewIndex 0-5 to +X, -X, +Y, -Y, +Z, -Z.
+[[nodiscard]] inline auto cubemap_face_views() -> const std::array<glm::mat4, 6> & {
+  static const std::array<glm::mat4, 6> views{{
+      glm::rotate(glm::rotate(glm::mat4(1.0F), glm::radians( 90.0F), glm::vec3(0,1,0)), glm::radians(180.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::rotate(glm::mat4(1.0F), glm::radians(-90.0F), glm::vec3(0,1,0)), glm::radians(180.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::mat4(1.0F), glm::radians(-90.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::mat4(1.0F), glm::radians( 90.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::mat4(1.0F), glm::radians(180.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::mat4(1.0F), glm::radians(180.0F), glm::vec3(0,0,1)),
+  }};
+  return views;
 }
 
 } // namespace engine

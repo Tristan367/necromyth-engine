@@ -423,11 +423,6 @@ public:
         overlay_ptr,
         std::move(post_geometry));
 
-    // Particle rendering
-    if (particle_system_.active_count() > 0) {
-      particle_system_.upload(frame_index_);
-    }
-
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
         .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -663,11 +658,11 @@ private:
       vk::MemoryAllocateInfo alloc{};
       alloc.allocationSize = reqs.size;
       alloc.memoryTypeIndex = mt;
-      pt_shadow_memories_[i] = vk::raii::DeviceMemory(device_.device(), alloc);
-      pt_shadow_buffers_[i]->bindMemory(**pt_shadow_memories_[i], 0);
+      pt_shadow_memory_[i] = vk::raii::DeviceMemory(device_.device(), alloc);
+      pt_shadow_buffers_[i]->bindMemory(**pt_shadow_memory_[i], 0);
 
       pt_shadow_mapped_[i] = static_cast<GpuPointLightShadowData *>(
-          pt_shadow_memories_[i]->mapMemory(0, buf_size));
+          pt_shadow_memory_[i]->mapMemory(0, buf_size));
     }
   }
 
@@ -676,17 +671,7 @@ private:
       return;
 
     const auto &lights = scene.point_lights();
-    static const std::array<glm::mat4, 6> face_views = [] {
-      using namespace glm;
-      return std::array<glm::mat4, 6>{{
-          rotate(rotate(mat4(1.0F), radians( 90.0F), vec3(0,1,0)), radians(180.0F), vec3(1,0,0)),
-          rotate(rotate(mat4(1.0F), radians(-90.0F), vec3(0,1,0)), radians(180.0F), vec3(1,0,0)),
-          rotate(mat4(1.0F), radians(-90.0F), vec3(1,0,0)),
-          rotate(mat4(1.0F), radians( 90.0F), vec3(1,0,0)),
-          rotate(mat4(1.0F), radians(180.0F), vec3(1,0,0)),
-          rotate(mat4(1.0F), radians(180.0F), vec3(0,0,1)),
-      }};
-    }();
+    const auto &face_views = cubemap_face_views();
 
     auto *ptr = pt_shadow_mapped_[frame_index];
     for (std::size_t i = 0; i < lights.size() && i < pt_shadow_max_lights_; ++i) {
@@ -993,7 +978,7 @@ private:
   };
   static constexpr std::uint32_t k_pt_shadow_frames = 2;
   std::array<std::optional<vk::raii::Buffer>, k_pt_shadow_frames> pt_shadow_buffers_{};
-  std::array<std::optional<vk::raii::DeviceMemory>, k_pt_shadow_frames> pt_shadow_memories_{};
+  std::array<std::optional<vk::raii::DeviceMemory>, k_pt_shadow_frames> pt_shadow_memory_{};
   std::array<GpuPointLightShadowData *, k_pt_shadow_frames> pt_shadow_mapped_{};
   std::uint32_t pt_shadow_max_lights_{0};
   ParticleSystem particle_system_;

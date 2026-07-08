@@ -76,6 +76,8 @@ public:
   }
 
   void write(std::uint32_t frame_index, const FrameUniformBufferObject &ubo) const {
+    if (frame_index >= mapped_.size())
+      throw std::runtime_error("UBO write: frame_index out of range");
     std::memcpy(mapped_[frame_index], &ubo, sizeof(FrameUniformBufferObject));
   }
 

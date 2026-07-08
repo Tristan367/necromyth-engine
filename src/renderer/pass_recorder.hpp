@@ -53,6 +53,19 @@ struct DrawBindState {
   std::uint32_t frame_index{};
 };
 
+// Returns true if the mesh's world-space bounding sphere intersects the light's range sphere.
+[[nodiscard]] inline auto sphere_intersects_light(const AABB &bounds, const glm::mat4 &model,
+                                                   glm::vec3 light_pos,
+                                                   float light_range) -> bool {
+  const float s0 = glm::length(glm::vec3(model[0]));
+  const float s1 = glm::length(glm::vec3(model[1]));
+  const float s2 = glm::length(glm::vec3(model[2]));
+  const float max_scale = std::max({s0, s1, s2});
+  const glm::vec3 world_center = glm::vec3(model * glm::vec4(bounds.center(), 1.0F));
+  const float r_sum = bounds.radius() * max_scale + light_range;
+  return glm::dot(world_center - light_pos, world_center - light_pos) <= r_sum * r_sum;
+}
+
 struct PassRecorder {
   const PipelineRegistry &pipelines;
   const DescriptorResources &descriptors;
@@ -778,15 +791,7 @@ struct PassRecorder {
       for (const DrawCommand &draw : draw_list) {
         if (draw.mesh_index >= mesh_gpus.size()) continue;
         const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
-        const float s0 = glm::length(glm::vec3(draw.model[0]));
-        const float s1 = glm::length(glm::vec3(draw.model[1]));
-        const float s2 = glm::length(glm::vec3(draw.model[2]));
-        const float max_scale = std::max({s0, s1, s2});
-        const float world_radius = bounds.radius() * max_scale;
-        const glm::vec3 world_center = glm::vec3(draw.model * glm::vec4(bounds.center(), 1.0F));
-        const glm::vec3 delta = world_center - sl.position;
-        const float r_sum = world_radius + sl.range;
-        if (glm::dot(delta, delta) > r_sum * r_sum) continue;
+        if (!sphere_intersects_light(mesh_gpus[draw.mesh_index].bounds(), draw.model, sl.position, sl.range)) continue;
         draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, spot_vp, bind_state);
       }
 
@@ -833,19 +838,7 @@ struct PassRecorder {
       layouts.point_cube_layout = vk::ImageLayout::eDepthAttachmentOptimal;
     }
 
-    // Sascha Willems face rotation matrices (positive X = first face).
-    // These match Vulkan's cubemap sampler convention.
-    static const std::array<glm::mat4, 6> face_views = [] {
-      using namespace glm;
-      return std::array<glm::mat4, 6>{{
-          rotate(rotate(mat4(1.0F), radians( 90.0F), vec3(0,1,0)), radians(180.0F), vec3(1,0,0)),
-          rotate(rotate(mat4(1.0F), radians(-90.0F), vec3(0,1,0)), radians(180.0F), vec3(1,0,0)),
-          rotate(mat4(1.0F), radians(-90.0F), vec3(1,0,0)),
-          rotate(mat4(1.0F), radians( 90.0F), vec3(1,0,0)),
-          rotate(mat4(1.0F), radians(180.0F), vec3(1,0,0)),
-          rotate(mat4(1.0F), radians(180.0F), vec3(0,0,1)),
-      }};
-    }();
+    const auto &face_views = cubemap_face_views();
 
     for (std::uint32_t si = 0; si < scene.point_lights().size() && si < cube_face_views.size(); ++si) {
       const PointLight &pl = scene.point_lights()[si];
@@ -875,19 +868,7 @@ struct PassRecorder {
 
       for (const DrawCommand &draw : draw_list) {
         if (draw.mesh_index >= mesh_gpus.size()) continue;
-        // Per-light sphere culling: skip meshes whose world-space bounding
-        // sphere doesn't intersect this light's range sphere.
-        const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
-        const float s0 = glm::length(glm::vec3(draw.model[0]));
-        const float s1 = glm::length(glm::vec3(draw.model[1]));
-        const float s2 = glm::length(glm::vec3(draw.model[2]));
-        const float max_scale = std::max({s0, s1, s2});
-        const float world_radius = bounds.radius() * max_scale;
-        const glm::vec3 world_center = glm::vec3(draw.model * glm::vec4(bounds.center(), 1.0F));
-        const glm::vec3 delta = world_center - pl.position;
-        const float r_sum = world_radius + pl.range;
-        if (glm::dot(delta, delta) > r_sum * r_sum) continue;
-
+        if (!sphere_intersects_light(mesh_gpus[draw.mesh_index].bounds(), draw.model, pl.position, pl.range)) continue;
         draw_shadow_mesh(command_buffer, draw, 10, frame_index, glm::mat4(1.0F), bind_state, si);
       }
 
