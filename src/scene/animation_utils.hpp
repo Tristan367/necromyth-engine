@@ -245,11 +245,8 @@ inline void evaluate_pose_layers(
 
     if (joint_overrides) {
       const auto it = joint_overrides->find(static_cast<std::uint32_t>(i));
-      if (it != joint_overrides->end()) {
-        if (it->second.rotation != glm::quat{1, 0, 0, 0}) accum.rotation = it->second.rotation;
-        if (it->second.translation != glm::vec3{0}) accum.translation = it->second.translation;
-        if (it->second.scale != glm::vec3{1}) accum.scale = it->second.scale;
-      }
+      if (it != joint_overrides->end())
+        accum = it->second;
     }
 
     node_anim[node_index] = trs_to_mat4(accum);

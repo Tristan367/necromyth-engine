@@ -578,6 +578,8 @@ private:
     vk::SamplerCreateInfo samp_info{};
     samp_info.magFilter = vk::Filter::eLinear;
     samp_info.minFilter = vk::Filter::eLinear;
+    samp_info.compareEnable = VK_TRUE;
+    samp_info.compareOp = vk::CompareOp::eLessOrEqual;
     spot_atlas_sampler_ = vk::raii::Sampler(device_.device(), samp_info);
   }
 
@@ -902,6 +904,7 @@ private:
     bone_buffers_.clear();
     skinned_texture_indices_.clear();
     for (const MeshInstance &instance : scene.instances()) {
+      if (!instance.alive) continue;
       if (instance.skin_index == k_invalid_skin_index)
         continue;
 

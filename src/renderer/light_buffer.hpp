@@ -2,6 +2,7 @@
 
 #include "renderer/buffer.hpp"
 #include "scene/point_light.hpp"
+#include "scene/shadow_utils.hpp"
 #include "scene/spot_light.hpp"
 
 #define GLM_FORCE_RADIANS
@@ -145,7 +146,7 @@ public:
       if (spot_lights[i].casts_shadow) {
         const glm::mat4 sm = glm::transpose(compute_shadow_matrix(spot_lights[i]));
         std::memcpy(sptr[i].shadow_matrix, &sm[0][0], sizeof(sm));
-        const float region_h = atlas_size / static_cast<float>(num_spot);
+        const float region_h = atlas_size / static_cast<float>(k_max_spot_shadow_lights);
         const float uv_x = 0.0F;
         const float uv_y = static_cast<float>(i) * region_h / atlas_size;
         const float uv_w = 1.0F;
