@@ -40,6 +40,7 @@ struct MeshInstance {
   const std::vector<PoseLayer> *pose_layers{nullptr};
 
   std::vector<BoneAttachment> bone_attachments;
+  bool alive{true};
 };
 
 constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();

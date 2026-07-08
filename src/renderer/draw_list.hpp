@@ -28,6 +28,8 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
 
   std::uint32_t bone_instance_count = 0;
   for (const MeshInstance &instance : scene.instances()) {
+    if (!instance.alive) continue;
+
     const bool has_valid_skin = instance.skin_index != k_invalid_skin_index
         && instance.skin_index < scene.skeletons().size()
         && !scene.skeletons()[instance.skin_index].joint_nodes.empty();

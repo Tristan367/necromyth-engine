@@ -73,10 +73,19 @@ public:
   [[nodiscard]] auto skeletons() const -> const std::vector<SkeletonAsset> & {
     return skeletons_;
   }
+  [[nodiscard]] auto skeletons() -> std::vector<SkeletonAsset> & {
+    return skeletons_;
+  }
 
   [[nodiscard]] auto animations() const -> const std::vector<AnimationClip> & {
     return animations_;
   }
+  [[nodiscard]] auto animations() -> std::vector<AnimationClip> & {
+    return animations_;
+  }
+
+  [[nodiscard]] auto instance_count() const -> std::size_t { return instances_.size(); }
+  [[nodiscard]] auto mesh_count() const -> std::size_t { return meshes_.size(); }
 
   [[nodiscard]] auto add_mesh(MeshSource mesh) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(meshes_.size());
@@ -99,6 +108,23 @@ public:
   [[nodiscard]] auto add_instance(MeshInstance instance) -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(instances_.size());
     instances_.push_back(std::move(instance));
+    return index;
+  }
+
+  void remove_instance(std::uint32_t index) {
+    if (index < instances_.size())
+      instances_[index].alive = false;
+  }
+
+  [[nodiscard]] auto add_point_light(PointLight light) -> std::uint32_t {
+    const std::uint32_t index = static_cast<std::uint32_t>(point_lights_.size());
+    point_lights_.push_back(std::move(light));
+    return index;
+  }
+
+  [[nodiscard]] auto add_spot_light(SpotLight light) -> std::uint32_t {
+    const std::uint32_t index = static_cast<std::uint32_t>(spot_lights_.size());
+    spot_lights_.push_back(std::move(light));
     return index;
   }
 

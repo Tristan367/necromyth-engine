@@ -87,6 +87,14 @@ public:
     physics_system_.Update(delta_time, 1, temp_allocator_.get(), job_system_.get());
   }
 
+  void remove_body(JPH::BodyID body_id) {
+    const auto it = std::ranges::find(body_ids_, body_id);
+    if (it == body_ids_.end()) return;
+    body_interface_->RemoveBody(body_id);
+    body_interface_->DestroyBody(body_id);
+    body_ids_.erase(it);
+  }
+
   [[nodiscard]] auto create_box(const glm::vec3 &half_extent, const glm::vec3 &position,
                                  JPH::EMotionType motion_type, JPH::ObjectLayer layer,
                                  const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F),
@@ -218,8 +226,10 @@ public:
   }
 
   void sync_body_to_instance(JPH::BodyID body_id, engine::MeshInstance &instance) const {
-    const JPH::Vec3 pos = body_interface_->GetPosition(body_id);
-    const JPH::Quat rot = body_interface_->GetRotation(body_id);
+    JPH::BodyLockRead lock(physics_system_.GetBodyLockInterface(), body_id);
+    if (!lock.Succeeded()) return;
+    const JPH::Vec3 pos = lock.GetBody().GetPosition();
+    const JPH::Quat rot = lock.GetBody().GetRotation();
 
     glm::mat4 model(1.0F);
     model = glm::translate(model, glm::vec3(pos.GetX(), pos.GetY(), pos.GetZ()));
@@ -230,6 +240,18 @@ public:
   [[nodiscard]] auto body_interface() -> JPH::BodyInterface & { return *body_interface_; }
   [[nodiscard]] auto physics_system() -> JPH::PhysicsSystem & { return physics_system_; }
   [[nodiscard]] auto temp_allocator() -> JPH::TempAllocator & { return *temp_allocator_; }
+
+  void set_body_user_data(JPH::BodyID id, std::uint64_t data) {
+    JPH::BodyLockWrite lock(physics_system_.GetBodyLockInterface(), id);
+    if (lock.Succeeded())
+      lock.GetBody().SetUserData(data);
+  }
+
+  [[nodiscard]] auto get_body_user_data(JPH::BodyID id) const -> std::uint64_t {
+    JPH::BodyLockRead lock(physics_system_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return 0;
+    return lock.GetBody().GetUserData();
+  }
 
   [[nodiscard]] auto shape_center_of_mass(JPH::BodyID body_id) const -> JPH::Vec3 {
     JPH::BodyLockRead lock(physics_system_.GetBodyLockInterface(), body_id);
