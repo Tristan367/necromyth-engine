@@ -54,7 +54,6 @@ struct LoadedGltfModel {
   std::vector<LoadedGltfPrimitive> primitives;
   std::vector<SkeletonAsset> skeletons;
   std::vector<AnimationClip> animations;
-  std::vector<std::uint32_t> node_parents;
 };
 
 namespace detail {
@@ -566,16 +565,16 @@ inline void load_animations(const tinygltf::Model &model, std::vector<AnimationC
   for (int node_index : scene.nodes)
     detail::load_node(model, node_index, glm::mat4(1.0F), result.base_directory, result.primitives);
 
-  result.node_parents.assign(model.nodes.size(), std::numeric_limits<std::uint32_t>::max());
+  std::vector<std::uint32_t> node_parents(model.nodes.size(), std::numeric_limits<std::uint32_t>::max());
   for (std::size_t i = 0; i < model.nodes.size(); ++i) {
     for (int child : model.nodes[i].children) {
-      if (child < 0 || static_cast<std::size_t>(child) >= result.node_parents.size()) continue;
-      result.node_parents[static_cast<std::size_t>(child)] = static_cast<std::uint32_t>(i);
+      if (child < 0 || static_cast<std::size_t>(child) >= node_parents.size()) continue;
+      node_parents[static_cast<std::size_t>(child)] = static_cast<std::uint32_t>(i);
     }
   }
 
   if (!model.skins.empty())
-    detail::load_skeletons(model, result.skeletons, result.node_parents);
+    detail::load_skeletons(model, result.skeletons, node_parents);
 
   if (!model.animations.empty())
     detail::load_animations(model, result.animations);

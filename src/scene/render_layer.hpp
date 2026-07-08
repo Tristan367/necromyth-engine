@@ -8,7 +8,6 @@ enum class RenderLayer : std::uint8_t {
   Background = 0,
   Opaque = 1,
   AlphaTested = 2,
-  Overlay = 3,
 };
 
 } // namespace engine
