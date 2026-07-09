@@ -328,8 +328,15 @@ struct PassRecorder {
   }
 
   void transition_msaa_to_color_attachment(vk::raii::CommandBuffer &command_buffer, PassLayoutState &layouts) const {
-    if (layouts.msaa_color_layout == vk::ImageLayout::eColorAttachmentOptimal)
+    if (layouts.msaa_color_layout == vk::ImageLayout::eColorAttachmentOptimal) {
+      // Self-barrier to order frame N's writes vs frame N+1's writes on shared image
+      transition_image_layout(
+          command_buffer, msaa_color_image.image(),
+          vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+          vk::AccessFlagBits2::eColorAttachmentWrite, vk::AccessFlagBits2::eColorAttachmentWrite,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
       return;
+    }
 
     transition_image_layout(
         command_buffer,
@@ -748,6 +755,14 @@ struct PassRecorder {
       command_buffer.endRendering();
     }
 
+    // Barrier: clear writes → first light reads
+    transition_image_layout(command_buffer, atlas_image,
+        vk::ImageLayout::eDepthAttachmentOptimal, vk::ImageLayout::eDepthAttachmentOptimal,
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::PipelineStageFlagBits2::eLateFragmentTests, vk::PipelineStageFlagBits2::eEarlyFragmentTests,
+        vk::ImageAspectFlagBits::eDepth);
+
     std::uint32_t light_idx = 0;
     for (std::uint32_t si = 0; si < scene.spot_lights().size(); ++si) {
       const SpotLight &sl = scene.spot_lights()[si];
@@ -791,6 +806,13 @@ struct PassRecorder {
 
       command_buffer.endRendering();
       ++light_idx;
+      if (si + 1 < scene.spot_lights().size())
+        transition_image_layout(command_buffer, atlas_image,
+            vk::ImageLayout::eDepthAttachmentOptimal, vk::ImageLayout::eDepthAttachmentOptimal,
+            vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+            vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+            vk::PipelineStageFlagBits2::eLateFragmentTests, vk::PipelineStageFlagBits2::eEarlyFragmentTests,
+            vk::ImageAspectFlagBits::eDepth);
     }
 
     // Barrier: depth attachment → shader read (skip if already correct)
@@ -954,8 +976,15 @@ struct PassRecorder {
       }
     }
 
-    if (overlay != nullptr && *overlay)
+    if (overlay != nullptr && *overlay) {
+      // Self-barrier: main-pass color writes → overlay load on same swapchain image
+      transition_image_layout(command_buffer, swapchain.images()[image_index],
+          vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+          vk::AccessFlagBits2::eColorAttachmentWrite,
+          vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
       record_overlay_pass(command_buffer, frame_index, image_index, *overlay);
+    }
 
     finish_main_pass(command_buffer, image_index, layouts);
   }

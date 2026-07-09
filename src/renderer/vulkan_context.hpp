@@ -442,7 +442,7 @@ public:
     };
     const vk::SemaphoreSubmitInfo signal_semaphore_info{
         .semaphore = *render_finished_semaphores_[image_index],
-        .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
     };
     const vk::SubmitInfo2 submit_info{
         .waitSemaphoreInfoCount = 1,
