@@ -358,13 +358,11 @@ private:
     vk::StructureChain<
         vk::PhysicalDeviceFeatures2,
         vk::PhysicalDeviceVulkan11Features,
-        vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> feature_chain{
+        vk::PhysicalDeviceVulkan13Features> feature_chain{
         {},
         // multiview: single-pass 6-face point-shadow cubemap rendering.
         {.multiview = vk::True, .shaderDrawParameters = vk::True},
         {.synchronization2 = vk::True, .dynamicRendering = vk::True},
-        {.extendedDynamicState = vk::True},
     };
 
     const vk::PhysicalDeviceFeatures available_features = physical_device_.getFeatures();
@@ -459,8 +457,7 @@ private:
     const auto features = device.getFeatures2<
         vk::PhysicalDeviceFeatures2,
         vk::PhysicalDeviceVulkan11Features,
-        vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+        vk::PhysicalDeviceVulkan13Features>();
 
     // Multiview drives the single-pass point-shadow cubemap. Vulkan 1.1
     // guarantees maxMultiviewViewCount >= 6; assert it against the device.
@@ -473,8 +470,7 @@ private:
            features.get<vk::PhysicalDeviceVulkan11Features>().multiview == vk::True &&
            mv_props.maxMultiviewViewCount >= 6 &&
            features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering == vk::True &&
-           features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 == vk::True &&
-           features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState == vk::True;
+           features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 == vk::True;
   }
 
   [[nodiscard]] auto is_device_suitable(const vk::raii::PhysicalDevice &device) const -> bool {
