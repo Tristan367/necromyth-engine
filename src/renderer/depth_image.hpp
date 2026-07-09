@@ -75,7 +75,9 @@ private:
     image_.bindMemory(*memory_, 0);
 
     aspect_mask_ = vk::ImageAspectFlagBits::eDepth;
-    if (format_ >= vk::Format::eD16UnormS8Uint)
+    if (format_ == vk::Format::eD16UnormS8Uint ||
+        format_ == vk::Format::eD24UnormS8Uint ||
+        format_ == vk::Format::eD32SfloatS8Uint)
       aspect_mask_ |= vk::ImageAspectFlagBits::eStencil;
 
     const vk::ImageViewCreateInfo view_info{

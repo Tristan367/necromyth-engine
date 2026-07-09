@@ -418,7 +418,7 @@ public:
             pipelines_.pipeline_layout_for_particles(),
             scene.camera().view_projection_matrix(),
             glm::vec3(scene.camera().right()), glm::vec3(scene.camera().up()),
-            0.15F, glm::vec4(1.0F, 1.0F, 1.0F, 1.0F));
+            0.08F, glm::vec4(1.0F, 1.0F, 1.0F, 1.0F));
       };
     }
 
