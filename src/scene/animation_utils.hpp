@@ -280,9 +280,10 @@ inline void compute_joint_matrices_for_instance(
                        out_joint_matrices, out_bone_worlds);
 }
 
-inline void update_bone_attachments(
+inline   void update_bone_attachments(
     std::vector<MeshInstance> &instances) {
   for (MeshInstance &instance : instances) {
+    if (!instance.alive) continue;
     if (instance.bone_attachments.empty()) continue;
     if (instance.cached_bone_worlds.empty()) continue;
 

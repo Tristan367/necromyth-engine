@@ -248,7 +248,7 @@ private:
           l.weight = std::min(target, l.weight + step);
         else
           l.weight = std::max(target, l.weight - step);
-        if (l.weight == target) rate_it->second = 0.0F;
+        if (std::abs(l.weight - target) < 1e-6F) rate_it->second = 0.0F;
       }
 
       if (l.clip_index == k_invalid_clip) continue;  // inactive
