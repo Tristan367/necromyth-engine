@@ -175,11 +175,15 @@ inline void read_float_accessor(
     int accessor_index,
     std::uint32_t components,
     std::vector<float> &out) {
-  if (accessor_index < 0)
+  if (accessor_index < 0 || static_cast<std::size_t>(accessor_index) >= model.accessors.size())
     throw std::runtime_error("Missing glTF accessor");
 
   const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(accessor_index)];
+  if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
   const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+  if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
   const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
 
   if (accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT)
@@ -200,11 +204,15 @@ inline void read_joint_accessor(
     int accessor_index,
     std::uint32_t components,
     std::vector<std::uint16_t> &out) {
-  if (accessor_index < 0)
+  if (accessor_index < 0 || static_cast<std::size_t>(accessor_index) >= model.accessors.size())
     throw std::runtime_error("Missing glTF accessor");
 
   const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(accessor_index)];
+  if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
   const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+  if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
   const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
 
   const std::size_t stride = accessor.ByteStride(view);
@@ -234,7 +242,11 @@ inline void read_indices(
     std::uint32_t vertex_offset,
     std::vector<std::uint32_t> &out) {
   const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(accessor_index)];
+  if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
   const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+  if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
   const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
   const std::size_t stride = accessor.ByteStride(view);
   const std::uint8_t *base = buffer.data.data() + accessor.byteOffset + view.byteOffset;
@@ -457,8 +469,12 @@ inline void load_skeletons(
 
     if (gltf_skin.inverseBindMatrices >= 0) {
       const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(gltf_skin.inverseBindMatrices)];
-      const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
-      const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+      if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
+  const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+      if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
+  const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
 
       skeleton.inverse_bind_matrices.resize(accessor.count);
       const std::size_t stride = accessor.ByteStride(view);
@@ -491,8 +507,12 @@ inline void load_animations(const tinygltf::Model &model, std::vector<AnimationC
       {
         const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(gltf_sampler.input)];
         sampler.inputs.resize(accessor.count);
-        const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
-        const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+        if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
+  const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+        if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
+  const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
         const std::size_t stride = accessor.ByteStride(view);
         for (std::size_t i = 0; i < accessor.count; ++i) {
           const std::size_t offset = static_cast<std::size_t>(accessor.byteOffset + view.byteOffset + i * (stride == 0 ? sizeof(float) : stride));
@@ -505,8 +525,12 @@ inline void load_animations(const tinygltf::Model &model, std::vector<AnimationC
       {
         const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(gltf_sampler.output)];
         sampler.outputs.resize(accessor.count);
-        const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
-        const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+        if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
+  const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+        if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
+  const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
         const std::size_t stride = accessor.ByteStride(view);
         const std::size_t component_count = accessor.type == TINYGLTF_TYPE_VEC3 ? 3U : 4U;
         const std::size_t element_bytes = component_count * sizeof(float);
