@@ -78,7 +78,7 @@ public:
         object_vs_object_layer_filter_);
 
     body_interface_ = &physics_system_.GetBodyInterface();
-    physics_system_.SetContactListener(&weapon_contact_tracker_);
+    physics_system_.SetContactListener(&sensor_contact_tracker_);
   }
 
   ~PhysicsWorld() noexcept {
@@ -271,22 +271,6 @@ public:
     return JPH::Vec3::sZero();
   }
 
-  [[nodiscard]] auto add_sensor_body(const JPH::ShapeSettings &shape_settings,
-                                      const glm::vec3 &position,
-                                      JPH::ObjectLayer layer = Layers::kHitbox) -> JPH::BodyID {
-    JPH::ShapeRefC shape = shape_settings.Create().Get();
-    JPH::BodyCreationSettings settings(
-        shape,
-        JPH::RVec3(position.x, position.y, position.z),
-        JPH::Quat::sIdentity(),
-        JPH::EMotionType::Kinematic,
-        layer);
-    settings.mIsSensor = true;
-    JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::DontActivate);
-    body_ids_.push_back(id);
-    return id;
-  }
-
   void set_sensor_transform(JPH::BodyID body_id, const glm::vec3 &pos, const glm::quat &rot) {
     body_interface_->SetPositionAndRotation(
         body_id,
@@ -296,7 +280,7 @@ public:
   }
 
   [[nodiscard]] auto get_sensor_overlaps(JPH::BodyID body_id) const -> std::vector<JPH::BodyID> {
-    return weapon_contact_tracker_.get_overlaps(body_id);
+    return sensor_contact_tracker_.get_overlaps(body_id);
   }
 
 private:
@@ -354,7 +338,7 @@ private:
     }
   };
 
-  class WeaponContactTracker : public JPH::ContactListener {
+  class SensorContactTracker : public JPH::ContactListener {
   public:
     void OnContactAdded(const JPH::Body &body1, const JPH::Body &body2,
                         const JPH::ContactManifold &, JPH::ContactSettings &) override {
@@ -398,7 +382,7 @@ private:
   BPLayerInterfaceImpl broad_phase_layer_interface_{};
   ObjectVsBroadPhaseLayerFilterImpl object_vs_broadphase_layer_filter_{};
   ObjectLayerPairFilterImpl object_vs_object_layer_filter_{};
-  WeaponContactTracker weapon_contact_tracker_{};
+  SensorContactTracker sensor_contact_tracker_{};
 };
 
 class Character {

@@ -39,10 +39,8 @@ public:
   }
 
   void add_hitboxes_from_json(const engine::SkeletonAsset &skeleton) {
-    for (const engine::HitboxAttachment &hb : skeleton.hitboxes) {
-      const std::uint32_t idx = add_hitbox(hb.name, hb);
-      (void)idx;
-    }
+    for (const engine::HitboxAttachment &hb : skeleton.hitboxes)
+      add_hitbox(hb.name, hb);
   }
 
   auto add_hitbox(const std::string &name, const engine::HitboxAttachment &hb,
