@@ -26,6 +26,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -157,6 +158,7 @@ public:
 
     for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
       auto idx = [&](std::uint32_t vi) -> std::uint32_t {
+        if (vi >= mesh.vertices.size()) return 0;  // corrupt mesh guard
         const MeshVertex &v = mesh.vertices[vi];
         return pos_map.at(hash(glm::vec3{v.pos[0], v.pos[1], v.pos[2]}));
       };
@@ -166,7 +168,10 @@ public:
 
     JPH::MeshShapeSettings shape_settings(welded_vertices, welded_triangles);
     shape_settings.SetEmbedded();
-    JPH::ShapeRefC shape = shape_settings.Create().Get();
+    const auto create_result = shape_settings.Create();
+    if (create_result.HasError())
+      return {};  // degenerate mesh — return invalid BodyID
+    JPH::ShapeRefC shape = create_result.Get();
 
     JPH::BodyCreationSettings settings(
         shape,
