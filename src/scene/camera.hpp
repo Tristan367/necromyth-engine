@@ -35,12 +35,21 @@ public:
     return position_;
   }
 
+  void set_position(const glm::vec3 &p) {
+    const glm::vec3 offset = p - position_;
+    position_ = p;
+    target_ += offset;
+    view_dirty_ = true;
+  }
+
   [[nodiscard]] auto target() const -> const glm::vec3 & {
     return target_;
   }
 
   [[nodiscard]] auto look_direction() const -> glm::vec3 {
-    return glm::normalize(target_ - position_);
+    const glm::vec3 diff = target_ - position_;
+    const float len2 = glm::dot(diff, diff);
+    return len2 > 1e-12F ? diff / std::sqrt(len2) : glm::vec3(0.0F, 0.0F, -1.0F);
   }
 
   [[nodiscard]] auto near_plane() const -> float {
@@ -49,6 +58,40 @@ public:
 
   [[nodiscard]] auto far_plane() const -> float {
     return far_plane_;
+  }
+
+  [[nodiscard]] auto view_projection_matrix() const -> glm::mat4 {
+    return projection_matrix() * view_matrix();
+  }
+
+  [[nodiscard]] auto right() const -> glm::vec3 {
+    const glm::vec3 raw = glm::cross(look_direction(), up_);
+    const float len2 = glm::dot(raw, raw);
+    return len2 > 1e-12F ? raw / std::sqrt(len2) : glm::vec3(1.0F, 0.0F, 0.0F);
+  }
+
+  // Camera follows a world-space target at a fixed elevation offset.
+  void follow(const glm::vec3 &target, const glm::vec3 &look_direction, float elevation = 1.5F) {
+    const glm::vec3 eye{target.x, target.y + elevation, target.z};
+    look_at(eye, eye + look_direction);
+  }
+
+  // Horizontal (XZ-plane) basis from the camera's look direction.
+  // Forward is the horizontal component, right is the cross product.
+  // Returns {forward, right} — handles straight-up/down edge case.
+  [[nodiscard]] auto horizontal_basis() const -> std::pair<glm::vec3, glm::vec3> {
+    const glm::vec3 look = look_direction();
+    const glm::vec3 horiz = glm::vec3(look.x, 0.0F, look.z);
+    const float len2 = glm::dot(horiz, horiz);
+    const glm::vec3 fwd = len2 > 1e-10F ? glm::normalize(horiz) : glm::vec3(0.0F, 0.0F, -1.0F);
+    const glm::vec3 rgt = glm::normalize(glm::cross(fwd, glm::vec3(0.0F, 1.0F, 0.0F)));
+    return {fwd, rgt};
+  }
+
+  [[nodiscard]] auto up() const -> glm::vec3 {
+    const glm::vec3 raw = glm::cross(right(), look_direction());
+    const float len2 = glm::dot(raw, raw);
+    return len2 > 1e-12F ? raw / std::sqrt(len2) : glm::vec3(0.0F, 1.0F, 0.0F);
   }
 
   [[nodiscard]] auto view_matrix() const -> const glm::mat4 & {
@@ -78,7 +121,7 @@ private:
   glm::vec3 position_{2.0F, 2.0F, 2.0F};
   glm::vec3 target_{};
   glm::vec3 up_{0.0F, 1.0F, 0.0F};
-  float fov_y_degrees_{45.0F};
+  float fov_y_degrees_{70.0F};
   float near_plane_{0.05F};
   float far_plane_{2000.0F};
   float aspect_{1.0F};

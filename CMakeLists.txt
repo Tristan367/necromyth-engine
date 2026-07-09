@@ -46,6 +46,12 @@ set(SHADER_SPIRV_OUTPUTS "")
 set(VCE_SHADER_SPIRV "")
 set(VCE_SKY_SHADER_SPIRV "")
 set(VCE_SHADOW_DEPTH_SPIRV "")
+set(VCE_SKINNED_SHADER_SPIRV "")
+set(VCE_SKINNED_SHADOW_DEPTH_SPIRV "")
+set(VCE_DEBUG_LINE_SPIRV "")
+set(VCE_POINT_SHADOW_SPIRV "")
+set(VCE_NO_POINT_SHADER_SPIRV "")
+set(VCE_PARTICLE_BILLBOARD_SPIRV "")
 
 foreach(SHADER_SOURCE ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME_WE)
@@ -82,6 +88,33 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -entry vertMain
                 -entry fragOpaqueHard
                 -entry fragCutoutHard
+                -entry fragA2CHard
+                -entry fragOpaquePcf
+                -entry fragCutoutPcf
+                -entry fragA2CPcf
+                -entry fragOpaqueHardCsm2
+                -entry fragCutoutHardCsm2
+                -entry fragA2CHardCsm2
+                -entry fragOpaquePcfCsm2
+                -entry fragCutoutPcfCsm2
+                -entry fragA2CPcfCsm2
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    elseif(SHADER_NAME STREQUAL "triangle_nopt")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMain
                 -entry fragOpaqueHard
                 -entry fragCutoutHard
                 -entry fragA2CHard
@@ -94,6 +127,59 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -entry fragOpaquePcfCsm2
                 -entry fragCutoutPcfCsm2
                 -entry fragA2CPcfCsm2
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    elseif(SHADER_NAME STREQUAL "triangle_skinned")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMainSkinned
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    elseif(SHADER_NAME STREQUAL "shadow_depth_skinned")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMainSkinned
+                -o "${SHADER_SPIRV}"
+            DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
+            COMMENT "Compiling ${SHADER_NAME}.slang"
+            VERBATIM
+        )
+    elseif(SHADER_NAME STREQUAL "point_shadow")
+        add_custom_command(
+            OUTPUT "${SHADER_SPIRV}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
+            COMMAND "${SLANGC_EXECUTABLE}"
+                "${SHADER_SOURCE}"
+                -I "${SHADER_SOURCE_DIR}"
+                -target spirv
+                -profile spirv_1_4
+                -emit-spirv-directly
+                -fvk-use-entrypoint-name
+                -entry vertMain
+                -entry vertMainSkinned
+                -entry fragMain
                 -o "${SHADER_SPIRV}"
             DEPENDS "${SHADER_SOURCE}" ${SHADER_LIB_SOURCES}
             COMMENT "Compiling ${SHADER_NAME}.slang"
@@ -122,10 +208,22 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
     list(APPEND SHADER_SPIRV_OUTPUTS "${SHADER_SPIRV}")
     if(SHADER_NAME STREQUAL "triangle")
         set(VCE_SHADER_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "triangle_nopt")
+        set(VCE_NO_POINT_SHADER_SPIRV "${SHADER_SPIRV}")
     elseif(SHADER_NAME STREQUAL "sky")
         set(VCE_SKY_SHADER_SPIRV "${SHADER_SPIRV}")
     elseif(SHADER_NAME STREQUAL "shadow_depth")
         set(VCE_SHADOW_DEPTH_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "triangle_skinned")
+        set(VCE_SKINNED_SHADER_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "shadow_depth_skinned")
+        set(VCE_SKINNED_SHADOW_DEPTH_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "debug_line")
+        set(VCE_DEBUG_LINE_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "point_shadow")
+        set(VCE_POINT_SHADOW_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "particle_billboard")
+        set(VCE_PARTICLE_BILLBOARD_SPIRV "${SHADER_SPIRV}")
     endif()
 endforeach()
 
@@ -154,37 +252,74 @@ add_library(vce_stb STATIC src/renderer/texture_image_stb.cpp)
 target_include_directories(vce_stb SYSTEM PRIVATE "${STB_INCLUDE_DIR}")
 target_compile_features(vce_stb PRIVATE cxx_std_23)
 
-add_library(vce_engine INTERFACE)
-add_library(VCE::Engine ALIAS vce_engine)
+# miniaudio audio engine (compiled TU, single-header library)
+add_library(vce_audio STATIC src/audio/audio_engine_impl.cpp)
+target_include_directories(vce_audio SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio")
+target_include_directories(vce_audio PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(vce_audio PRIVATE cxx_std_23)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(vce_audio PRIVATE dl pthread m)
+endif()
 
-target_compile_features(vce_engine INTERFACE cxx_std_23)
+# Jolt Physics (third-party, built as static library)
+set(JOLT_DIR "$ENV{HOME}/opt/JoltPhysics")
+if(NOT EXISTS "${JOLT_DIR}")
+    message(FATAL_ERROR "Jolt Physics not found at ${JOLT_DIR}. Clone it: git clone https://github.com/jrouwe/JoltPhysics.git ${JOLT_DIR}")
+endif()
+add_subdirectory("${JOLT_DIR}/Build" "${CMAKE_BINARY_DIR}/jolt" EXCLUDE_FROM_ALL)
 
-target_compile_definitions(vce_engine INTERFACE
-    VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-    VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-    ENGINE_SHADER_SPIRV="${VCE_SHADER_SPIRV}"
-    ENGINE_SKY_SHADER_SPIRV="${VCE_SKY_SHADER_SPIRV}"
-    ENGINE_SHADOW_DEPTH_SPIRV="${VCE_SHADOW_DEPTH_SPIRV}"
-)
+add_library(vce_core INTERFACE)
+add_library(VCE::Core ALIAS vce_core)
 
-target_include_directories(vce_engine SYSTEM INTERFACE
+target_compile_features(vce_core INTERFACE cxx_std_23)
+
+target_include_directories(vce_core SYSTEM INTERFACE
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>"
     "$<BUILD_INTERFACE:${STB_INCLUDE_DIR}>"
 )
 
-target_link_libraries(vce_engine INTERFACE
-    SDL3::SDL3
-    Vulkan::Vulkan
+target_link_libraries(vce_core INTERFACE
     glm::glm
+    Jolt::Jolt
     vce_gltf_impl
     vce_stb
+    vce_audio
 )
 
-add_dependencies(vce_engine vce_shaders)
-
 if(MSVC)
-    target_compile_options(vce_engine INTERFACE /W4 /permissive-)
+    target_compile_options(vce_core INTERFACE /W4 /permissive-)
 else()
-    target_compile_options(vce_engine INTERFACE -Wall -Wextra -Wpedantic)
+    target_compile_options(vce_core INTERFACE -Wall -Wextra -Wpedantic)
 endif()
+
+add_library(vce_renderer INTERFACE)
+add_library(VCE::Renderer ALIAS vce_renderer)
+
+target_compile_definitions(vce_renderer INTERFACE
+    VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+    VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+    VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS=1
+    ENGINE_SHADER_SPIRV="${VCE_SHADER_SPIRV}"
+    ENGINE_SKY_SHADER_SPIRV="${VCE_SKY_SHADER_SPIRV}"
+    ENGINE_SHADOW_DEPTH_SPIRV="${VCE_SHADOW_DEPTH_SPIRV}"
+    ENGINE_SKINNED_SHADER_SPIRV="${VCE_SKINNED_SHADER_SPIRV}"
+    ENGINE_SKINNED_SHADOW_DEPTH_SPIRV="${VCE_SKINNED_SHADOW_DEPTH_SPIRV}"
+    ENGINE_POINT_SHADOW_SPIRV="${VCE_POINT_SHADOW_SPIRV}"
+    ENGINE_NO_POINT_SHADER_SPIRV="${VCE_NO_POINT_SHADER_SPIRV}"
+    ENGINE_DEBUG_LINE_SPIRV="${VCE_DEBUG_LINE_SPIRV}"
+    ENGINE_PARTICLE_BILLBOARD_SPIRV="${VCE_PARTICLE_BILLBOARD_SPIRV}"
+)
+
+target_link_libraries(vce_renderer INTERFACE
+    vce_core
+    SDL3::SDL3
+    Vulkan::Vulkan
+)
+
+add_dependencies(vce_renderer vce_shaders)
+
+# Backward compatibility alias
+add_library(vce_engine INTERFACE)
+add_library(VCE::Engine ALIAS vce_engine)
+target_link_libraries(vce_engine INTERFACE vce_renderer)

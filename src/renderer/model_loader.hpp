@@ -2,7 +2,6 @@
 
 #include "renderer/vertex.hpp"
 
-#define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
 #include <cstdint>
@@ -69,8 +68,13 @@ struct LoadedMesh {
         vertex.normal[2] = 0.0F;
       }
 
-      vertex.tex_coord[0] = attrib.texcoords[2 * index.texcoord_index + 0];
-      vertex.tex_coord[1] = 1.0F - attrib.texcoords[2 * index.texcoord_index + 1];
+      if (index.texcoord_index >= 0) {
+        vertex.tex_coord[0] = attrib.texcoords[2 * index.texcoord_index + 0];
+        vertex.tex_coord[1] = 1.0F - attrib.texcoords[2 * index.texcoord_index + 1];
+      } else {
+        vertex.tex_coord[0] = 0.0F;
+        vertex.tex_coord[1] = 0.0F;
+      }
 
       vertex.color[0] = 1.0F;
       vertex.color[1] = 1.0F;

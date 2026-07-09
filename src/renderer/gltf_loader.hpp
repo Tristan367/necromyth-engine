@@ -1,6 +1,8 @@
 #pragma once
 
 #include "renderer/model_loader.hpp"
+#include "scene/animation_types.hpp"
+#include "scene/scene.hpp"
 
 #define GLM_FORCE_RADIANS
 #include <glm/gtc/quaternion.hpp>
@@ -15,6 +17,7 @@
 #pragma GCC diagnostic ignored "-Wcpp"
 #endif
 #include <tinygltf/tiny_gltf.h>
+#include <iostream>
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
@@ -43,11 +46,14 @@ struct LoadedGltfPrimitive {
   LoadedMesh mesh;
   LoadedGltfMaterial material;
   glm::mat4 node_transform{1.0F};
+  std::int32_t skin_index{-1};
 };
 
 struct LoadedGltfModel {
   std::string base_directory;
   std::vector<LoadedGltfPrimitive> primitives;
+  std::vector<SkeletonAsset> skeletons;
+  std::vector<AnimationClip> animations;
 };
 
 namespace detail {
@@ -169,11 +175,15 @@ inline void read_float_accessor(
     int accessor_index,
     std::uint32_t components,
     std::vector<float> &out) {
-  if (accessor_index < 0)
+  if (accessor_index < 0 || static_cast<std::size_t>(accessor_index) >= model.accessors.size())
     throw std::runtime_error("Missing glTF accessor");
 
   const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(accessor_index)];
+  if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
   const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+  if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
   const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
 
   if (accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT)
@@ -189,13 +199,54 @@ inline void read_float_accessor(
   }
 }
 
+inline void read_joint_accessor(
+    const tinygltf::Model &model,
+    int accessor_index,
+    std::uint32_t components,
+    std::vector<std::uint16_t> &out) {
+  if (accessor_index < 0 || static_cast<std::size_t>(accessor_index) >= model.accessors.size())
+    throw std::runtime_error("Missing glTF accessor");
+
+  const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(accessor_index)];
+  if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
+  const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+  if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
+  const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+
+  const std::size_t stride = accessor.ByteStride(view);
+  out.resize(accessor.count * components);
+
+  for (std::size_t index = 0; index < accessor.count; ++index) {
+    const std::size_t offset = static_cast<std::size_t>(accessor.byteOffset + view.byteOffset + index * stride);
+    for (std::uint32_t c = 0; c < components; ++c) {
+      if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+        const std::uint8_t value = *reinterpret_cast<const std::uint8_t *>(
+            buffer.data.data() + offset + c * sizeof(std::uint8_t));
+        out[index * components + c] = static_cast<std::uint16_t>(value);
+      } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+        std::memcpy(&out[index * components + c],
+                    buffer.data.data() + offset + c * sizeof(std::uint16_t),
+                    sizeof(std::uint16_t));
+      } else {
+        throw std::runtime_error("Expected unsigned byte or short accessor data in glTF joints");
+      }
+    }
+  }
+}
+
 inline void read_indices(
     const tinygltf::Model &model,
     int accessor_index,
     std::uint32_t vertex_offset,
     std::vector<std::uint32_t> &out) {
   const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(accessor_index)];
+  if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
   const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+  if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
   const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
   const std::size_t stride = accessor.ByteStride(view);
   const std::uint8_t *base = buffer.data.data() + accessor.byteOffset + view.byteOffset;
@@ -212,11 +263,14 @@ inline void read_indices(
     std::uint32_t value{};
     switch (accessor.componentType) {
     case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-      value = *reinterpret_cast<const std::uint32_t *>(element);
+      std::memcpy(&value, element, sizeof(std::uint32_t));
       break;
-    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-      value = *reinterpret_cast<const std::uint16_t *>(element);
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
+      std::uint16_t tmp;
+      std::memcpy(&tmp, element, sizeof(tmp));
+      value = tmp;
       break;
+    }
     case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
       value = *reinterpret_cast<const std::uint8_t *>(element);
       break;
@@ -259,6 +313,7 @@ inline void load_primitive(
     const tinygltf::Model &model,
     const tinygltf::Primitive &primitive,
     const glm::mat4 &node_transform,
+    std::int32_t skin_index,
     std::string_view base_directory,
     std::vector<LoadedGltfPrimitive> &out) {
   const auto position_it = primitive.attributes.find("POSITION");
@@ -287,13 +342,25 @@ inline void load_primitive(
     read_float_accessor(model, color_it->second, color_components, colors);
   }
 
+    std::vector<std::uint16_t> joints;
+    if (const auto joint_it = primitive.attributes.find("JOINTS_0"); joint_it != primitive.attributes.end())
+      read_joint_accessor(model, joint_it->second, 4, joints);
+
+  std::vector<float> weights;
+  if (const auto weight_it = primitive.attributes.find("WEIGHTS_0"); weight_it != primitive.attributes.end())
+    read_float_accessor(model, weight_it->second, 4, weights);
+
   LoadedGltfPrimitive loaded{
       .mesh = {},
       .material = material_for_primitive(model, primitive.material, base_directory),
       .node_transform = node_transform,
+      .skin_index = skin_index,
   };
   loaded.mesh.vertices.reserve(vertex_count);
   loaded.mesh.indices.clear();
+
+  const bool has_joints = joints.size() >= vertex_count * 4;
+  const bool has_weights = weights.size() >= vertex_count * 4;
 
   for (std::uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index) {
     MeshVertex vertex{};
@@ -330,6 +397,20 @@ inline void load_primitive(
       vertex.color[2] = 1.0F;
     }
 
+    if (has_joints) {
+      vertex.joint_indices[0] = static_cast<float>(joints[vertex_index * 4 + 0]);
+      vertex.joint_indices[1] = static_cast<float>(joints[vertex_index * 4 + 1]);
+      vertex.joint_indices[2] = static_cast<float>(joints[vertex_index * 4 + 2]);
+      vertex.joint_indices[3] = static_cast<float>(joints[vertex_index * 4 + 3]);
+    }
+
+    if (has_weights) {
+      vertex.joint_weights[0] = weights[vertex_index * 4 + 0];
+      vertex.joint_weights[1] = weights[vertex_index * 4 + 1];
+      vertex.joint_weights[2] = weights[vertex_index * 4 + 2];
+      vertex.joint_weights[3] = weights[vertex_index * 4 + 3];
+    }
+
     loaded.mesh.vertices.push_back(vertex);
   }
 
@@ -354,13 +435,127 @@ inline void load_node(
   const glm::mat4 world_transform = parent_transform * node_local_matrix(node);
 
   if (node.mesh >= 0) {
+    const std::int32_t skin_index = node.skin;
+    // Skinned meshes: don't bake the accumulated world transform — bone matrices handle placement.
+    const glm::mat4 transform_for_primitive = skin_index >= 0 ? glm::mat4(1.0F) : world_transform;
     const tinygltf::Mesh &mesh = model.meshes[static_cast<std::size_t>(node.mesh)];
     for (const tinygltf::Primitive &primitive : mesh.primitives)
-      load_primitive(model, primitive, world_transform, base_directory, out);
+      load_primitive(model, primitive, transform_for_primitive, skin_index, base_directory, out);
   }
 
   for (int child_index : node.children)
     load_node(model, child_index, world_transform, base_directory, out);
+}
+
+inline void load_skeletons(
+    const tinygltf::Model &model,
+    std::vector<SkeletonAsset> &out_skeletons,
+    const std::vector<std::uint32_t> &node_parents) {
+  out_skeletons.clear();
+  out_skeletons.reserve(model.skins.size());
+
+  for (const tinygltf::Skin &gltf_skin : model.skins) {
+    SkeletonAsset skeleton{};
+    skeleton.joint_nodes.reserve(gltf_skin.joints.size());
+    for (const int joint_index : gltf_skin.joints) {
+      skeleton.joint_nodes.push_back(static_cast<std::uint32_t>(joint_index));
+      const std::size_t ni = static_cast<std::size_t>(joint_index);
+      skeleton.joint_names.push_back(ni < model.nodes.size() ? model.nodes[ni].name : "");
+    }
+    skeleton.skeleton_root = gltf_skin.skeleton >= 0
+        ? static_cast<std::uint32_t>(gltf_skin.skeleton)
+        : std::numeric_limits<std::uint32_t>::max();
+    skeleton.node_parents = node_parents;
+
+    if (gltf_skin.inverseBindMatrices >= 0) {
+      const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(gltf_skin.inverseBindMatrices)];
+      if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
+  const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+      if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
+  const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+
+      skeleton.inverse_bind_matrices.resize(accessor.count);
+      const std::size_t stride = accessor.ByteStride(view);
+      constexpr std::size_t k_mat4_bytes = sizeof(glm::mat4);
+
+      for (std::size_t i = 0; i < accessor.count; ++i) {
+        const std::size_t offset =
+            static_cast<std::size_t>(accessor.byteOffset + view.byteOffset + i * (stride == 0 ? k_mat4_bytes : stride));
+        std::memcpy(&skeleton.inverse_bind_matrices[i], buffer.data.data() + offset, k_mat4_bytes);
+      }
+    }
+
+    out_skeletons.push_back(std::move(skeleton));
+  }
+}
+
+inline void load_animations(const tinygltf::Model &model, std::vector<AnimationClip> &out_animations) {
+  out_animations.clear();
+  out_animations.reserve(model.animations.size());
+
+  for (const tinygltf::Animation &gltf_anim : model.animations) {
+    AnimationClip clip{};
+    clip.name = gltf_anim.name;
+
+    clip.samplers.reserve(gltf_anim.samplers.size());
+    for (const tinygltf::AnimationSampler &gltf_sampler : gltf_anim.samplers) {
+      AnimationSampler sampler{};
+      sampler.interpolation = gltf_sampler.interpolation;
+
+      {
+        const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(gltf_sampler.input)];
+        sampler.inputs.resize(accessor.count);
+        if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
+  const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+        if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
+  const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+        const std::size_t stride = accessor.ByteStride(view);
+        for (std::size_t i = 0; i < accessor.count; ++i) {
+          const std::size_t offset = static_cast<std::size_t>(accessor.byteOffset + view.byteOffset + i * (stride == 0 ? sizeof(float) : stride));
+          std::memcpy(&sampler.inputs[i], buffer.data.data() + offset, sizeof(float));
+        }
+        if (!sampler.inputs.empty())
+          clip.duration = std::max(clip.duration, sampler.inputs.back());
+      }
+
+      {
+        const tinygltf::Accessor &accessor = model.accessors[static_cast<std::size_t>(gltf_sampler.output)];
+        sampler.outputs.resize(accessor.count);
+        if (accessor.bufferView < 0 || static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
+    throw std::runtime_error("Invalid glTF bufferView");
+  const tinygltf::BufferView &view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+        if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
+    throw std::runtime_error("Invalid glTF buffer");
+  const tinygltf::Buffer &buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+        const std::size_t stride = accessor.ByteStride(view);
+        const std::size_t component_count = accessor.type == TINYGLTF_TYPE_VEC3 ? 3U : 4U;
+        const std::size_t element_bytes = component_count * sizeof(float);
+
+        for (std::size_t i = 0; i < accessor.count; ++i) {
+          const std::size_t offset = static_cast<std::size_t>(accessor.byteOffset + view.byteOffset + i * (stride == 0 ? element_bytes : stride));
+          glm::vec4 value(0.0F, 0.0F, 0.0F, 1.0F);
+          std::memcpy(glm::value_ptr(value), buffer.data.data() + offset, element_bytes);
+          sampler.outputs[i] = value;
+        }
+      }
+
+      clip.samplers.push_back(std::move(sampler));
+    }
+
+    for (const tinygltf::AnimationChannel &gltf_channel : gltf_anim.channels) {
+      AnimationChannel channel{};
+      channel.node_index = static_cast<std::uint32_t>(gltf_channel.target_node);
+      channel.path = gltf_channel.target_path;
+      channel.sampler_index = static_cast<std::uint32_t>(gltf_channel.sampler);
+      clip.channels.push_back(channel);
+    }
+
+    out_animations.push_back(std::move(clip));
+  }
 }
 
 } // namespace detail
@@ -378,7 +573,7 @@ inline void load_node(
                           : loader.LoadASCIIFromFile(&model, &error, &warning, file_path);
 
   if (!warning.empty())
-    (void)warning;
+    std::cerr << "glTF warning: " << warning << '\n';
   if (!loaded)
     throw std::runtime_error("Failed to load glTF: " + error);
 
@@ -397,8 +592,70 @@ inline void load_node(
   for (int node_index : scene.nodes)
     detail::load_node(model, node_index, glm::mat4(1.0F), result.base_directory, result.primitives);
 
+  std::vector<std::uint32_t> node_parents(model.nodes.size(), std::numeric_limits<std::uint32_t>::max());
+  for (std::size_t i = 0; i < model.nodes.size(); ++i) {
+    for (int child : model.nodes[i].children) {
+      if (child < 0 || static_cast<std::size_t>(child) >= node_parents.size()) continue;
+      node_parents[static_cast<std::size_t>(child)] = static_cast<std::uint32_t>(i);
+    }
+  }
+
+  if (!model.skins.empty())
+    detail::load_skeletons(model, result.skeletons, node_parents);
+
+  if (!model.animations.empty())
+    detail::load_animations(model, result.animations);
+
   if (result.primitives.empty())
     throw std::runtime_error("glTF file contains no renderable mesh primitives");
+
+  return result;
+}
+
+struct GltfImportResult {
+  std::uint32_t first_instance{};
+  std::uint32_t instance_count{};
+  std::uint32_t skeleton_index{k_invalid_skin_index};
+};
+
+// Single-call glTF import: loads file, adds meshes/textures/instances/skeletons/animations,
+// wires skin_index, and returns handles. Caller can then set up pose layers, hitboxes, etc.
+[[nodiscard]] inline auto import_gltf(Scene &scene, const std::string &path,
+                                       glm::mat4 instance_transform = glm::mat4(1.0F))
+    -> GltfImportResult {
+  const LoadedGltfModel model = load_gltf_model(path);
+  GltfImportResult result;
+  if (model.primitives.empty()) return result;
+
+  const std::uint32_t before = static_cast<std::uint32_t>(scene.instances().size());
+
+  for (const LoadedGltfPrimitive &prim : model.primitives) {
+    const std::uint32_t mesh_idx = scene.add_mesh({prim.mesh.vertices, prim.mesh.indices});
+    const std::uint32_t tex_idx = prim.material.base_color_texture_path
+        ? scene.add_texture(*prim.material.base_color_texture_path)
+        : 0;
+    (void)scene.add_instance({
+        .mesh_index = mesh_idx,
+        .texture_index = tex_idx,
+        .texture_source = TextureSource::Table,
+        .model = instance_transform * prim.node_transform,
+        .layer = RenderLayer::Opaque,
+    });
+  }
+
+  result.first_instance = before;
+  result.instance_count = static_cast<std::uint32_t>(scene.instances().size()) - before;
+
+  if (!model.skeletons.empty()) {
+    SkeletonAsset skeleton = model.skeletons.front();
+    result.skeleton_index = scene.add_skeleton(std::move(skeleton));
+
+    for (const AnimationClip &anim : model.animations)
+      (void)scene.add_animation(anim);
+
+    for (std::uint32_t i = 0; i < result.instance_count; ++i)
+      scene.instance(result.first_instance + i).skin_index = result.skeleton_index;
+  }
 
   return result;
 }

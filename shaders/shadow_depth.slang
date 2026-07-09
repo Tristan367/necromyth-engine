@@ -1,10 +1,24 @@
 #include "lib/frame_uniforms.slang"
-#include "lib/mesh_types.slang"
+#include "lib/shadow_vp.slang"
 #include "lib/textured_push_constants.slang"
 
-// Depth-only pass (VS): cutout/A2C cast opaque silhouettes until alpha-tested shadow FS exists.
+struct VSInputPosition {
+    float3 inPosition;
+};
+
+struct VSOutput {
+    float4 position : SV_Position;
+};
+
+// Depth-only pass (VS):
+//   cascade 0-1 = directional cascades (perspective/ortho VP)
+//   cascade 2-5 = spot lights (perspective VP)
 [shader("vertex")]
-float4 vertMain(VSInput input) : SV_Position {
+VSOutput vertMain(VSInputPosition input) {
+    VSOutput output;
     uint cascade = pushConstants.shadowCascadeIndex;
-    return mul(ubo.lightViewProj[cascade], mul(pushConstants.model, float4(input.inPosition, 1.0)));
+
+    float4x4 vp = selectShadowVP(cascade);
+    output.position = mul(vp, mul(pushConstants.model, float4(input.inPosition, 1.0)));
+    return output;
 }

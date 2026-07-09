@@ -1,7 +1,6 @@
 #pragma once
 
 #include "renderer/texture_image.hpp"
-#include "renderer/texture_array.hpp"
 #include "renderer/uniform_buffer.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -37,6 +36,36 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 3,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 4,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 5,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 6,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 7,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex,
+        },
     };
 
     const std::array material_bindings{
@@ -45,6 +74,21 @@ public:
             .descriptorType = vk::DescriptorType::eCombinedImageSampler,
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
+    };
+
+    const std::array material_skinned_bindings{
+        vk::DescriptorSetLayoutBinding{
+            .binding = 0,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 1,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex,
         },
     };
 
@@ -61,9 +105,20 @@ public:
             .bindingCount = static_cast<std::uint32_t>(material_bindings.size()),
             .pBindings = material_bindings.data(),
         });
+
+    material_skinned_layout_ = vk::raii::DescriptorSetLayout(
+        device,
+        vk::DescriptorSetLayoutCreateInfo{
+            .bindingCount = static_cast<std::uint32_t>(material_skinned_bindings.size()),
+            .pBindings = material_skinned_bindings.data(),
+        });
   }
 
-  void create_pool(vk::raii::Device &device, std::uint32_t frame_count, std::uint32_t texture_count) {
+  void create_pool(
+      vk::raii::Device &device,
+      std::uint32_t frame_count,
+      std::uint32_t texture_count,
+      std::uint32_t skinned_instance_count = 0) {
     if (texture_count == 0)
       throw std::runtime_error("At least one texture is required for descriptor allocation");
 
@@ -77,15 +132,21 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = frame_count * 2 + texture_count,
+            .descriptorCount = frame_count * 4 + texture_count + skinned_instance_count * 4,
+        },
+        vk::DescriptorPoolSize{
+            .type = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = frame_count * 3 + skinned_instance_count * 4,
         },
     };
+
+    const std::uint32_t max_sets = frame_count + texture_count + skinned_instance_count * 4;
 
     descriptor_pool_ = vk::raii::DescriptorPool(
         device,
         vk::DescriptorPoolCreateInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-            .maxSets = frame_count + texture_count,
+            .maxSets = max_sets,
             .poolSizeCount = static_cast<std::uint32_t>(pool_sizes.size()),
             .pPoolSizes = pool_sizes.data(),
         });
@@ -201,8 +262,16 @@ public:
     return *material_layout_;
   }
 
+  [[nodiscard]] auto material_skinned_layout() const -> vk::DescriptorSetLayout {
+    return *material_skinned_layout_;
+  }
+
   [[nodiscard]] auto pipeline_set_layouts() const -> std::array<vk::DescriptorSetLayout, 2> {
     return {*frame_layout_, *material_layout_};
+  }
+
+  [[nodiscard]] auto skinned_pipeline_set_layouts() const -> std::array<vk::DescriptorSetLayout, 2> {
+    return {*frame_layout_, *material_skinned_layout_};
   }
 
   [[nodiscard]] auto frame_set(std::uint32_t frame_index) const -> vk::DescriptorSet {
@@ -213,14 +282,211 @@ public:
     return material_sets_.at(texture_index);
   }
 
+  [[nodiscard]] auto skinned_set(std::uint32_t instance, std::uint32_t frame) const -> vk::DescriptorSet {
+    return skinned_sets_.at(static_cast<std::size_t>(instance) * 2 + frame);
+  }
+
+  [[nodiscard]] auto shadow_bone_set(std::uint32_t instance, std::uint32_t frame) const -> vk::DescriptorSet {
+    return shadow_bone_sets_.at(static_cast<std::size_t>(instance) * 2 + frame);
+  }
+
+  void update_light_buffers(vk::raii::Device &device, const std::array<vk::Buffer, 2> &light_buffers) {
+    for (std::uint32_t i = 0; i < frame_count_ && i < 2; ++i) {
+      const vk::DescriptorBufferInfo light_info{
+          .buffer = light_buffers[i],
+          .offset = 0,
+          .range = vk::WholeSize,
+      };
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = frame_sets_[i],
+              .dstBinding = 3,
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eStorageBuffer,
+              .pBufferInfo = &light_info,
+          },
+          nullptr);
+    }
+  }
+
+  void allocate_skinned_sets(
+      vk::raii::Device &device,
+      std::span<const vk::Buffer> bone_buffers,
+      std::span<const TextureImage *const> textures,
+      std::span<const std::uint32_t> texture_indices) {
+    if (bone_buffers.empty())
+      return;
+
+    const std::uint32_t instance_count = static_cast<std::uint32_t>(bone_buffers.size()) / 2;
+    skinned_sets_.clear();
+    shadow_bone_sets_.clear();
+    skinned_sets_.reserve(instance_count * 2);
+    shadow_bone_sets_.reserve(instance_count * 2);
+
+    for (std::uint32_t i = 0; i < instance_count; ++i) {
+      const std::uint32_t tex_idx = i < texture_indices.size()
+          ? texture_indices[i]
+          : 0U;
+
+      const vk::DescriptorImageInfo table_image_info{
+          .sampler = textures[tex_idx % textures.size()]->sampler(),
+          .imageView = textures[tex_idx % textures.size()]->view(),
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+      };
+
+      for (std::uint32_t frame = 0; frame < 2; ++frame) {
+        const vk::DescriptorBufferInfo bone_info{
+            .buffer = bone_buffers[i * 2 + frame],
+            .offset = 0,
+            .range = vk::WholeSize,
+        };
+
+        // Main pass skinned set (texture + bone SSBO)
+        {
+          const vk::DescriptorSetLayout layout = *material_skinned_layout_;
+          const vk::DescriptorSetAllocateInfo allocate{
+              .descriptorPool = *descriptor_pool_,
+              .descriptorSetCount = 1,
+              .pSetLayouts = &layout,
+          };
+          skinned_sets_.push_back(std::move(device.allocateDescriptorSets(allocate).front()));
+
+          const std::array writes{
+              vk::WriteDescriptorSet{
+                  .dstSet = skinned_sets_.back(),
+                  .dstBinding = 0,
+                  .descriptorCount = 1,
+                  .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                  .pImageInfo = &table_image_info,
+              },
+              vk::WriteDescriptorSet{
+                  .dstSet = skinned_sets_.back(),
+                  .dstBinding = 1,
+                  .descriptorCount = 1,
+                  .descriptorType = vk::DescriptorType::eStorageBuffer,
+                  .pBufferInfo = &bone_info,
+              },
+          };
+          device.updateDescriptorSets(writes, nullptr);
+        }
+
+        // Shadow pass skinned set (dummy texture + bone SSBO)
+        {
+          const vk::DescriptorSetLayout layout = *material_skinned_layout_;
+          const vk::DescriptorSetAllocateInfo allocate{
+              .descriptorPool = *descriptor_pool_,
+              .descriptorSetCount = 1,
+              .pSetLayouts = &layout,
+          };
+          shadow_bone_sets_.push_back(std::move(device.allocateDescriptorSets(allocate).front()));
+
+          const vk::DescriptorImageInfo dummy_sampler_info{
+              .sampler = textures[0]->sampler(),
+              .imageView = textures[0]->view(),
+              .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+          };
+
+          const std::array writes{
+              vk::WriteDescriptorSet{
+                  .dstSet = shadow_bone_sets_.back(),
+                  .dstBinding = 0,
+                  .descriptorCount = 1,
+                  .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                  .pImageInfo = &dummy_sampler_info,
+              },
+              vk::WriteDescriptorSet{
+                  .dstSet = shadow_bone_sets_.back(),
+                  .dstBinding = 1,
+                  .descriptorCount = 1,
+                  .descriptorType = vk::DescriptorType::eStorageBuffer,
+                  .pBufferInfo = &bone_info,
+              },
+          };
+          device.updateDescriptorSets(writes, nullptr);
+        }
+      }
+    }
+  }
+
+  void update_spot_shadow_sampler(vk::raii::Device &device, vk::Sampler sampler, vk::ImageView view) {
+    const vk::DescriptorImageInfo info{
+        .sampler = sampler,
+        .imageView = view,
+        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+    };
+    for (const vk::DescriptorSet &set : frame_sets_) {
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = set, .dstBinding = 4, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &info,
+          },
+          nullptr);
+    }
+  }
+
+  void update_point_cube_sampler(vk::raii::Device &device, vk::Sampler sampler, vk::ImageView view) {
+    const vk::DescriptorImageInfo info{
+        .sampler = sampler,
+        .imageView = view,
+        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+    };
+    for (const vk::DescriptorSet &set : frame_sets_) {
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = set, .dstBinding = 5, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &info,
+          },
+          nullptr);
+    }
+  }
+
+  void update_point_light_shadow_ssbo(
+      vk::raii::Device &device,
+      std::span<const vk::Buffer> buffers) {
+    for (std::size_t i = 0; i < frame_sets_.size() && i < buffers.size(); ++i) {
+      const vk::DescriptorBufferInfo info{
+          .buffer = buffers[i],
+          .offset = 0,
+          .range = vk::WholeSize,
+      };
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = *frame_sets_[i], .dstBinding = 6, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eStorageBuffer,
+              .pBufferInfo = &info,
+          },
+          nullptr);
+    }
+  }
+
+  void update_particle_ssbo(vk::raii::Device &device,
+                            std::span<const vk::Buffer> buffers) {
+    for (std::size_t i = 0; i < frame_sets_.size() && i < buffers.size(); ++i) {
+      const vk::DescriptorBufferInfo info{
+          .buffer = buffers[i], .offset = 0, .range = vk::WholeSize};
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = *frame_sets_[i], .dstBinding = 7, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eStorageBuffer,
+              .pBufferInfo = &info,
+          },
+          nullptr);
+    }
+  }
+
 private:
   std::uint32_t frame_count_{};
   std::uint32_t texture_count_{};
   vk::raii::DescriptorSetLayout frame_layout_{nullptr};
   vk::raii::DescriptorSetLayout material_layout_{nullptr};
+  vk::raii::DescriptorSetLayout material_skinned_layout_{nullptr};
   vk::raii::DescriptorPool descriptor_pool_{nullptr};
   std::vector<vk::raii::DescriptorSet> frame_sets_;
   std::vector<vk::raii::DescriptorSet> material_sets_;
+  std::vector<vk::raii::DescriptorSet> skinned_sets_;
+  std::vector<vk::raii::DescriptorSet> shadow_bone_sets_;
 };
 
 } // namespace engine

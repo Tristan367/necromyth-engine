@@ -4,7 +4,6 @@
 #include "renderer/image_barrier.hpp"
 
 #include <stb/stb_image.h>
-#include <stb/stb_image_write.h>
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -84,20 +83,6 @@ struct RgbaImageData {
   };
   stbi_image_free(pixels);
   return data;
-}
-
-inline void write_rgba_png(std::string_view path, const stbi_uc *pixels, std::int32_t width, std::int32_t height) {
-  if (pixels == nullptr || width <= 0 || height <= 0)
-    throw std::runtime_error("Cannot write empty image to PNG");
-
-  if (stbi_write_png(
-          std::string(path).c_str(),
-          width,
-          height,
-          4,
-          pixels,
-          width * 4) == 0)
-    throw std::runtime_error(std::string("Failed to write PNG: ") + std::string(path));
 }
 
 } // namespace detail
@@ -324,23 +309,7 @@ private:
   }
 
   void create_sampler(const vk::raii::PhysicalDevice &physical_device) {
-    const vk::PhysicalDeviceProperties properties = physical_device.getProperties();
-    const vk::PhysicalDeviceFeatures features = physical_device.getFeatures();
-    const bool anisotropy_supported = features.samplerAnisotropy == vk::True;
-
-    sampler_ = vk::raii::Sampler(
-        *device_,
-        vk::SamplerCreateInfo{
-            .magFilter = vk::Filter::eLinear,
-            .minFilter = vk::Filter::eLinear,
-            .mipmapMode = vk::SamplerMipmapMode::eLinear,
-            .addressModeU = vk::SamplerAddressMode::eRepeat,
-            .addressModeV = vk::SamplerAddressMode::eRepeat,
-            .addressModeW = vk::SamplerAddressMode::eRepeat,
-            .anisotropyEnable = anisotropy_supported ? vk::True : vk::False,
-            .maxAnisotropy = anisotropy_supported ? properties.limits.maxSamplerAnisotropy : 1.0F,
-            .maxLod = static_cast<float>(mip_levels_),
-        });
+    sampler_ = detail::create_mipmapped_sampler(*device_, physical_device, mip_levels_);
   }
 
   const vk::raii::PhysicalDevice *physical_device_{nullptr};

@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/buffer.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -69,7 +70,7 @@ private:
         *device_,
         vk::MemoryAllocateInfo{
             .allocationSize = memory_requirements.size,
-            .memoryTypeIndex = find_memory_type(
+            .memoryTypeIndex = detail::find_memory_type(
                 physical_device_->getMemoryProperties(),
                 memory_requirements.memoryTypeBits,
                 vk::MemoryPropertyFlagBits::eDeviceLocal),
@@ -90,19 +91,6 @@ private:
                 .layerCount = 1,
             },
         });
-  }
-
-  [[nodiscard]] static auto find_memory_type(
-      vk::PhysicalDeviceMemoryProperties memory_properties,
-      std::uint32_t type_filter,
-      vk::MemoryPropertyFlags properties) -> std::uint32_t {
-    for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-      if ((type_filter & (1U << i)) &&
-          (memory_properties.memoryTypes[i].propertyFlags & properties) == properties)
-        return i;
-    }
-
-    throw std::runtime_error("Failed to find suitable memory type for render color image");
   }
 
   const vk::raii::PhysicalDevice *physical_device_{};

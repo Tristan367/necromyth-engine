@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/buffer.hpp"
+
 #include <vulkan/vulkan_raii.hpp>
 
 #include <array>
@@ -65,7 +67,7 @@ private:
     const vk::MemoryRequirements memory_requirements = image_.getMemoryRequirements();
     const vk::MemoryAllocateInfo allocate_info{
         .allocationSize = memory_requirements.size,
-        .memoryTypeIndex = find_memory_type(
+        .memoryTypeIndex = detail::find_memory_type(
             physical_device_->getMemoryProperties(),
             memory_requirements.memoryTypeBits,
             vk::MemoryPropertyFlagBits::eDeviceLocal),
@@ -75,7 +77,9 @@ private:
     image_.bindMemory(*memory_, 0);
 
     aspect_mask_ = vk::ImageAspectFlagBits::eDepth;
-    if (format_ >= vk::Format::eD16UnormS8Uint)
+    if (format_ == vk::Format::eD16UnormS8Uint ||
+        format_ == vk::Format::eD24UnormS8Uint ||
+        format_ == vk::Format::eD32SfloatS8Uint)
       aspect_mask_ |= vk::ImageAspectFlagBits::eStencil;
 
     const vk::ImageViewCreateInfo view_info{
@@ -117,19 +121,6 @@ private:
     }
 
     throw std::runtime_error("No supported depth format found");
-  }
-
-  [[nodiscard]] static auto find_memory_type(
-      vk::PhysicalDeviceMemoryProperties memory_properties,
-      std::uint32_t type_filter,
-      vk::MemoryPropertyFlags properties) -> std::uint32_t {
-    for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-      if ((type_filter & (1U << i)) &&
-          (memory_properties.memoryTypes[i].propertyFlags & properties) == properties)
-        return i;
-    }
-
-    throw std::runtime_error("Failed to find suitable memory type for depth image");
   }
 
   const vk::raii::PhysicalDevice *physical_device_{};

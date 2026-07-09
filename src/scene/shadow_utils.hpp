@@ -20,6 +20,8 @@
 
 namespace engine {
 
+inline constexpr std::uint32_t k_max_spot_shadow_lights = 16;
+inline constexpr std::uint32_t k_max_point_shadow_lights = 64;
 inline constexpr float k_shadow_depth_bias_constant = 1.0F;
 inline constexpr float k_shadow_depth_bias_slope = 2.5F;
 // Practical split blend (GPU Gems / Sascha): 0 = uniform, 1 = logarithmic.
@@ -72,8 +74,6 @@ struct DirectionalLightShadowSettings {
   // Dual mode only: view-depth range used to place the near/far cascade split.
   float max_distance{100.0F};
   std::uint32_t map_resolution{k_default_shadow_map_resolution};
-  // Footprint center Y when the ground is not at world Y=0.
-  float footprint_focus_y{0.0F};
   // Single-cascade footprint half-extent (meters); also scales the dual near cascade.
   float ortho_half_extent{64.0F};
   ShadowFilterMode filter_mode{ShadowFilterMode::Pcf3x3};
@@ -265,16 +265,18 @@ namespace detail {
 
 } // namespace detail
 
-// Camera footprint: ortho box centered on camera XZ, stable when rotating (no view-frustum fit).
+// Camera footprint: ortho box centered on camera position.
+// The ortho half-extent (64m near, 127m far) covers the surrounding area.
+// Texel-snapping keeps the center stable when rotating.
 [[nodiscard]] inline auto directional_light_footprint_projection(
     const Camera &camera,
     const DirectionalLight &light,
     const DirectionalLightShadowSettings &settings,
     float ortho_half_extent) -> glm::mat4 {
-  const glm::vec3 position = camera.position();
-  const glm::vec3 focus_center{position.x, settings.footprint_focus_y, position.z};
+  const glm::vec3 focus_center = camera.position();
   const float radius = std::max(ortho_half_extent, 1.0F);
-  return detail::directional_light_view_projection_from_bounds(light, settings, focus_center, radius);
+  return detail::directional_light_view_projection_from_bounds(light, settings, focus_center,
+                                                               radius);
 }
 
 [[nodiscard]] inline auto directional_light_view_projection(
@@ -293,7 +295,7 @@ namespace detail {
     std::uint32_t cascade_count) -> float {
   const float near_clip = camera.near_plane();
   const float clip_range = std::max(shadow_far - near_clip, 0.001F);
-  const float min_z = near_clip;
+  const float min_z = std::max(near_clip, 0.001F);
   const float max_z = near_clip + clip_range;
   const float range = max_z - min_z;
   const float ratio = max_z / min_z;
@@ -335,6 +337,19 @@ namespace detail {
   result.split_view_z = -(near_clip + split_norm * clip_range);
 
   return result;
+}
+
+// Vulkan cubemap face rotation matrices — maps viewIndex 0-5 to +X, -X, +Y, -Y, +Z, -Z.
+[[nodiscard]] inline auto cubemap_face_views() -> const std::array<glm::mat4, 6> & {
+  static const std::array<glm::mat4, 6> views{{
+      glm::rotate(glm::rotate(glm::mat4(1.0F), glm::radians( 90.0F), glm::vec3(0,1,0)), glm::radians(180.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::rotate(glm::mat4(1.0F), glm::radians(-90.0F), glm::vec3(0,1,0)), glm::radians(180.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::mat4(1.0F), glm::radians(-90.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::mat4(1.0F), glm::radians( 90.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::mat4(1.0F), glm::radians(180.0F), glm::vec3(1,0,0)),
+      glm::rotate(glm::mat4(1.0F), glm::radians(180.0F), glm::vec3(0,0,1)),
+  }};
+  return views;
 }
 
 } // namespace engine

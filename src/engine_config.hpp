@@ -18,6 +18,10 @@ struct EngineConfig {
   std::uint32_t shadow_scale{1};
   PresentModePreference present_mode{PresentModePreference::Fifo};
   std::optional<std::uint32_t> gpu_device_index{};
+  std::uint32_t max_point_shadow_lights{64};
+  std::uint32_t max_spot_shadow_lights{16};
+  std::uint32_t max_total_lights{256};
+  std::uint32_t max_particles{65536};
 };
 
 [[nodiscard]] inline auto engine_config_from_environment() -> EngineConfig {

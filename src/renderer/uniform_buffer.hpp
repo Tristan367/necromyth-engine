@@ -22,6 +22,8 @@ struct FrameUniformBufferObject {
   alignas(16) glm::vec4 light_direction{};
   alignas(16) glm::vec4 light_color{};
   alignas(16) std::array<glm::mat4, k_max_shadow_cascades> light_view_proj{};
+  alignas(16) std::array<glm::mat4, k_max_spot_shadow_lights> spot_light_vp{};
+  alignas(16) glm::vec4 point_light_params{};    // z = face_size for PCF offset
   alignas(16) glm::vec4 cascade_params{};
   alignas(16) glm::vec4 shadow_fade_width{};
 };
@@ -74,6 +76,8 @@ public:
   }
 
   void write(std::uint32_t frame_index, const FrameUniformBufferObject &ubo) const {
+    if (frame_index >= mapped_.size())
+      throw std::runtime_error("UBO write: frame_index out of range");
     std::memcpy(mapped_[frame_index], &ubo, sizeof(FrameUniformBufferObject));
   }
 

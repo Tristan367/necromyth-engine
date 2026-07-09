@@ -7,7 +7,7 @@ namespace engine {
 struct DirectionalLight {
   // Unit vector from a surface point toward the sun (same vector for shading: N·L, sky disc, shadows).
   // Some engines expose the opposite (direction light rays travel, e.g. Godot -Z, Sascha -lightPos); negate to convert.
-  glm::vec3 direction_toward_light{0.4F, 1.0F, 0.3F};
+  glm::vec3 direction_toward_light{0.371F, 0.928F, 0.278F};  // unit vector toward sun
   glm::vec3 color{1.0F, 0.98F, 0.92F};
   float intensity{1.0F};
   float ambient{0.18F};

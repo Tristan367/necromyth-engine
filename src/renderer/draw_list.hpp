@@ -18,16 +18,26 @@ struct DrawCommand {
   glm::mat4 model{1.0F};
   RenderLayer layer{RenderLayer::Opaque};
   PipelineId pipeline{PipelineId::TexturedOpaque};
+  std::uint32_t skin_index{k_invalid_skin_index};
+  std::uint32_t bone_instance_index{k_invalid_skin_index};
 };
 
 inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
   out.clear();
   out.reserve(scene.instances().size());
 
+  std::uint32_t bone_instance_count = 0;
   for (const MeshInstance &instance : scene.instances()) {
+    if (!instance.alive) continue;
+
+    const bool has_valid_skin = instance.skin_index != k_invalid_skin_index
+        && instance.skin_index < scene.skeletons().size()
+        && !scene.skeletons()[instance.skin_index].joint_nodes.empty();
     const PipelineId pipeline = instance.layer == RenderLayer::Background
         ? PipelineId::Background
-        : textured_pipeline(instance.alpha_mode);
+        : textured_pipeline(instance.alpha_mode, has_valid_skin);
+
+    const std::uint32_t bone_index = has_valid_skin ? bone_instance_count : k_invalid_skin_index;
 
     out.push_back({
         .mesh_index = instance.mesh_index,
@@ -36,7 +46,12 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
         .model = instance.model,
         .layer = instance.layer,
         .pipeline = pipeline,
+        .skin_index = instance.skin_index,
+        .bone_instance_index = bone_index,
     });
+
+    if (has_valid_skin)
+      ++bone_instance_count;
   }
 
   std::ranges::sort(out, [](const DrawCommand &a, const DrawCommand &b) {
@@ -48,6 +63,8 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
       return a.texture_source < b.texture_source;
     if (a.texture_index != b.texture_index)
       return a.texture_index < b.texture_index;
+    if (a.bone_instance_index != b.bone_instance_index)
+      return a.bone_instance_index < b.bone_instance_index;
     return a.mesh_index < b.mesh_index;
   });
 }

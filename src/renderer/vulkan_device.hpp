@@ -358,17 +358,22 @@ private:
     vk::StructureChain<
         vk::PhysicalDeviceFeatures2,
         vk::PhysicalDeviceVulkan11Features,
-        vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> feature_chain{
+        vk::PhysicalDeviceVulkan13Features> feature_chain{
         {},
-        {.shaderDrawParameters = vk::True},
+        // multiview: single-pass 6-face point-shadow cubemap rendering.
+        {.multiview = vk::True, .shaderDrawParameters = vk::True},
         {.synchronization2 = vk::True, .dynamicRendering = vk::True},
-        {.extendedDynamicState = vk::True},
     };
 
     const vk::PhysicalDeviceFeatures available_features = physical_device_.getFeatures();
     if (available_features.samplerAnisotropy == vk::True)
       feature_chain.get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy = vk::True;
+    // Required for dual-paraboloid point shadows: the depth VS writes
+    // SV_ClipDistance0 to discard the far paraboloid hemisphere.
+    if (available_features.shaderClipDistance == vk::True)
+      feature_chain.get<vk::PhysicalDeviceFeatures2>().features.shaderClipDistance = vk::True;
+    if (available_features.imageCubeArray == vk::True)
+      feature_chain.get<vk::PhysicalDeviceFeatures2>().features.imageCubeArray = vk::True;
 
     std::vector<const char *> device_extensions{vk::KHRSwapchainExtensionName};
     const auto available_device_extensions = physical_device_.enumerateDeviceExtensionProperties();
@@ -452,13 +457,20 @@ private:
     const auto features = device.getFeatures2<
         vk::PhysicalDeviceFeatures2,
         vk::PhysicalDeviceVulkan11Features,
-        vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+        vk::PhysicalDeviceVulkan13Features>();
+
+    // Multiview drives the single-pass point-shadow cubemap. Vulkan 1.1
+    // guarantees maxMultiviewViewCount >= 6; assert it against the device.
+    const auto mv_props = device.getProperties2<
+        vk::PhysicalDeviceProperties2,
+        vk::PhysicalDeviceMultiviewProperties>()
+        .get<vk::PhysicalDeviceMultiviewProperties>();
 
     return features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters == vk::True &&
+           features.get<vk::PhysicalDeviceVulkan11Features>().multiview == vk::True &&
+           mv_props.maxMultiviewViewCount >= 6 &&
            features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering == vk::True &&
-           features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 == vk::True &&
-           features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState == vk::True;
+           features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 == vk::True;
   }
 
   [[nodiscard]] auto is_device_suitable(const vk::raii::PhysicalDevice &device) const -> bool {

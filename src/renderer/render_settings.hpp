@@ -26,16 +26,6 @@ enum class PresentModePreference {
   return PresentModePreference::Fifo;
 }
 
-[[nodiscard]] inline auto present_mode_name(PresentModePreference preference) -> const char * {
-  switch (preference) {
-  case PresentModePreference::Fifo:
-    return "fifo";
-  case PresentModePreference::Mailbox:
-    return "mailbox";
-  }
-  return "unknown";
-}
-
 [[nodiscard]] inline auto present_mode_name(vk::PresentModeKHR mode) -> const char * {
   switch (mode) {
   case vk::PresentModeKHR::eFifo:

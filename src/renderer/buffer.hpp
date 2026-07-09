@@ -24,6 +24,28 @@ namespace detail {
   throw std::runtime_error("Failed to find suitable memory type for buffer");
 }
 
+[[nodiscard]] inline auto create_mipmapped_sampler(
+    const vk::raii::Device &device,
+    const vk::raii::PhysicalDevice &physical_device,
+    std::uint32_t mip_levels) -> vk::raii::Sampler {
+  const vk::PhysicalDeviceProperties properties = physical_device.getProperties();
+  const vk::PhysicalDeviceFeatures features = physical_device.getFeatures();
+  const bool anisotropy = features.samplerAnisotropy == vk::True;
+  return vk::raii::Sampler(
+      device,
+      vk::SamplerCreateInfo{
+          .magFilter = vk::Filter::eLinear,
+          .minFilter = vk::Filter::eLinear,
+          .mipmapMode = vk::SamplerMipmapMode::eLinear,
+          .addressModeU = vk::SamplerAddressMode::eRepeat,
+          .addressModeV = vk::SamplerAddressMode::eRepeat,
+          .addressModeW = vk::SamplerAddressMode::eRepeat,
+          .anisotropyEnable = anisotropy ? vk::True : vk::False,
+          .maxAnisotropy = anisotropy ? properties.limits.maxSamplerAnisotropy : 1.0F,
+          .maxLod = static_cast<float>(mip_levels),
+      });
+}
+
 inline void copy_buffer(
     vk::raii::Device &device,
     vk::raii::CommandPool &command_pool,

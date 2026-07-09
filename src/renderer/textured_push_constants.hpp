@@ -16,6 +16,8 @@ struct TexturedPushConstants {
   std::uint32_t texture_array_layer{0};
   std::uint32_t sample_texture_array{0};
   std::uint32_t shadow_cascade_index{0};
+  std::uint32_t point_light_index{0};
+  float _pad[3]{};
 };
 
 } // namespace engine
