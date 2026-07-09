@@ -863,7 +863,12 @@ private:
       if (width > 0 && height > 0)
         return;
 
-      SDL_WaitEvent(nullptr);
+      SDL_Event e;
+      while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_EVENT_QUIT)
+          throw std::runtime_error("Quit requested while waiting for window extent");
+      }
+      SDL_Delay(16);
     }
   }
 
@@ -968,12 +973,12 @@ private:
   DepthImage depth_image_;
   ShadowMap shadow_map_;
   LightStorageBuffer light_buffer_;
-  vk::raii::Image spot_atlas_{nullptr};
   vk::raii::DeviceMemory spot_atlas_mem_{nullptr};
+  vk::raii::Image spot_atlas_{nullptr};
   vk::raii::ImageView spot_atlas_view_{nullptr};
   vk::raii::Sampler spot_atlas_sampler_{nullptr};
-  vk::raii::Image point_cube_{nullptr};
   vk::raii::DeviceMemory point_cube_mem_{nullptr};
+  vk::raii::Image point_cube_{nullptr};
   std::vector<vk::raii::ImageView> point_cube_face_views_;
   vk::raii::ImageView point_cube_array_view_{nullptr};
   vk::raii::Sampler point_cube_sampler_{nullptr};
