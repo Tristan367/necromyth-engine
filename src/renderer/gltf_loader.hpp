@@ -251,11 +251,14 @@ inline void read_indices(
     std::uint32_t value{};
     switch (accessor.componentType) {
     case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-      value = *reinterpret_cast<const std::uint32_t *>(element);
+      std::memcpy(&value, element, sizeof(std::uint32_t));
       break;
-    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-      value = *reinterpret_cast<const std::uint16_t *>(element);
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
+      std::uint16_t tmp;
+      std::memcpy(&tmp, element, sizeof(tmp));
+      value = tmp;
       break;
+    }
     case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
       value = *reinterpret_cast<const std::uint8_t *>(element);
       break;

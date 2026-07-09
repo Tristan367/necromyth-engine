@@ -279,6 +279,8 @@ public:
     } submit_guard{this};
 
     const vk::Extent2D internal_extent = render_extent();
+    if (internal_extent.height == 0 || internal_extent.width == 0)
+      return;
     const float aspect = static_cast<float>(internal_extent.width) /
                          static_cast<float>(internal_extent.height);
     scene.camera().set_aspect(aspect);
