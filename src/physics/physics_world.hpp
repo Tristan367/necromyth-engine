@@ -32,6 +32,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace engine {
@@ -42,15 +43,17 @@ JPH_SUPPRESS_WARNINGS
 namespace Layers {
 static constexpr JPH::ObjectLayer kNonMoving = 0;
 static constexpr JPH::ObjectLayer kMoving = 1;
-static constexpr JPH::ObjectLayer kHitbox = 2;  // sensor-only hitbox bodies
-static constexpr JPH::ObjectLayer kNumLayers = 3;
+static constexpr JPH::ObjectLayer kHitbox = 2;  // sensor-only body-part hitbox
+static constexpr JPH::ObjectLayer kWeapon = 3;  // sensor-only weapon hitbox, overlaps kHitbox
+static constexpr JPH::ObjectLayer kNumLayers = 4;
 } // namespace Layers
 
 namespace BroadPhaseLayers {
 static constexpr JPH::BroadPhaseLayer kNonMoving(0);
 static constexpr JPH::BroadPhaseLayer kMoving(1);
 static constexpr JPH::BroadPhaseLayer kHitbox(2);
-static constexpr std::uint32_t kNumLayers = 3;
+static constexpr JPH::BroadPhaseLayer kWeapon(3);
+static constexpr std::uint32_t kNumLayers = 4;
 } // namespace BroadPhaseLayers
 
 class PhysicsWorld {
@@ -75,6 +78,7 @@ public:
         object_vs_object_layer_filter_);
 
     body_interface_ = &physics_system_.GetBodyInterface();
+    physics_system_.SetContactListener(&weapon_contact_tracker_);
   }
 
   ~PhysicsWorld() noexcept {
@@ -268,14 +272,15 @@ public:
   }
 
   [[nodiscard]] auto add_sensor_body(const JPH::ShapeSettings &shape_settings,
-                                      const glm::vec3 &position) -> JPH::BodyID {
+                                      const glm::vec3 &position,
+                                      JPH::ObjectLayer layer = Layers::kHitbox) -> JPH::BodyID {
     JPH::ShapeRefC shape = shape_settings.Create().Get();
     JPH::BodyCreationSettings settings(
         shape,
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat::sIdentity(),
         JPH::EMotionType::Kinematic,
-        Layers::kHitbox);
+        layer);
     settings.mIsSensor = true;
     JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::DontActivate);
     body_ids_.push_back(id);
@@ -288,6 +293,10 @@ public:
         JPH::RVec3(pos.x, pos.y, pos.z),
         JPH::Quat(rot.x, rot.y, rot.z, rot.w),
         JPH::EActivation::DontActivate);
+  }
+
+  [[nodiscard]] auto get_sensor_overlaps(JPH::BodyID body_id) const -> std::vector<JPH::BodyID> {
+    return weapon_contact_tracker_.get_overlaps(body_id);
   }
 
 private:
@@ -303,6 +312,7 @@ private:
       mObjectToBroadPhase[Layers::kNonMoving] = BroadPhaseLayers::kNonMoving;
       mObjectToBroadPhase[Layers::kMoving] = BroadPhaseLayers::kMoving;
       mObjectToBroadPhase[Layers::kHitbox] = BroadPhaseLayers::kHitbox;
+      mObjectToBroadPhase[Layers::kWeapon] = BroadPhaseLayers::kWeapon;
     }
     std::uint32_t GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::kNumLayers; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override {
@@ -314,6 +324,7 @@ private:
       if (layer == BroadPhaseLayers::kNonMoving) return "NON_MOVING";
       if (layer == BroadPhaseLayers::kMoving) return "MOVING";
       if (layer == BroadPhaseLayers::kHitbox) return "HITBOX";
+      if (layer == BroadPhaseLayers::kWeapon) return "WEAPON";
       return "";
     }
 #endif
@@ -324,7 +335,10 @@ private:
   class ObjectVsBroadPhaseLayerFilterImpl final : public JPH::ObjectVsBroadPhaseLayerFilter {
   public:
     bool ShouldCollide(JPH::ObjectLayer inLayer, JPH::BroadPhaseLayer inBroadPhase) const override {
-      if (inLayer == Layers::kHitbox) return false;  // hitboxes never collide
+      if (inLayer == Layers::kHitbox)
+        return inBroadPhase == BroadPhaseLayers::kWeapon;  // hitbox ↔ weapon only
+      if (inLayer == Layers::kWeapon)
+        return inBroadPhase == BroadPhaseLayers::kHitbox;  // weapon ↔ hitbox only
       return true;
     }
   };
@@ -332,14 +346,59 @@ private:
   class ObjectLayerPairFilterImpl final : public JPH::ObjectLayerPairFilter {
   public:
     bool ShouldCollide(JPH::ObjectLayer inLayer1, JPH::ObjectLayer inLayer2) const override {
+      if (inLayer1 == Layers::kWeapon && inLayer2 == Layers::kHitbox) return true;
+      if (inLayer1 == Layers::kHitbox && inLayer2 == Layers::kWeapon) return true;
       if (inLayer1 == Layers::kHitbox || inLayer2 == Layers::kHitbox) return false;
+      if (inLayer1 == Layers::kWeapon || inLayer2 == Layers::kWeapon) return false;
       return true;
     }
+  };
+
+  class WeaponContactTracker : public JPH::ContactListener {
+  public:
+    void OnContactAdded(const JPH::Body &body1, const JPH::Body &body2,
+                        const JPH::ContactManifold &, JPH::ContactSettings &) override {
+      if (body1.IsSensor() && body2.IsSensor())
+        add_pair(body1.GetID(), body2.GetID());
+    }
+    void OnContactPersisted(const JPH::Body &, const JPH::Body &,
+                            const JPH::ContactManifold &, JPH::ContactSettings &) override {}
+    void OnContactRemoved(const JPH::SubShapeIDPair &pair) override {
+      remove_pair(pair.GetBody1ID(), pair.GetBody2ID());
+    }
+
+    [[nodiscard]] auto get_overlaps(JPH::BodyID body) const -> std::vector<JPH::BodyID> {
+      std::vector<JPH::BodyID> result;
+      auto it = overlaps_.find(body.GetIndexAndSequenceNumber());
+      if (it == overlaps_.end()) return result;
+      for (std::uint32_t raw : it->second)
+        result.push_back(JPH::BodyID(raw));
+      return result;
+    }
+
+  private:
+    void add_pair(JPH::BodyID a, JPH::BodyID b) {
+      const auto ka = a.GetIndexAndSequenceNumber();
+      const auto kb = b.GetIndexAndSequenceNumber();
+      overlaps_[ka].insert(kb);
+      overlaps_[kb].insert(ka);
+    }
+    void remove_pair(JPH::BodyID a, JPH::BodyID b) {
+      const auto ka = a.GetIndexAndSequenceNumber();
+      const auto kb = b.GetIndexAndSequenceNumber();
+      if (auto it = overlaps_.find(ka); it != overlaps_.end())
+        it->second.erase(kb);
+      if (auto it = overlaps_.find(kb); it != overlaps_.end())
+        it->second.erase(ka);
+    }
+
+    std::unordered_map<std::uint32_t, std::unordered_set<std::uint32_t>> overlaps_;
   };
 
   BPLayerInterfaceImpl broad_phase_layer_interface_{};
   ObjectVsBroadPhaseLayerFilterImpl object_vs_broadphase_layer_filter_{};
   ObjectLayerPairFilterImpl object_vs_object_layer_filter_{};
+  WeaponContactTracker weapon_contact_tracker_{};
 };
 
 class Character {
