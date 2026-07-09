@@ -113,6 +113,7 @@ public:
       // TextureCubeArray.  Non-shadow-casting lights skip the shadow pass entirely;
       // the shader ignores them (shadow_matrix sentinel is zero).
       if (point_lights[i].casts_shadow) {
+        std::memset(ptrs[i].shadow_matrix, 0, sizeof(ptrs[i].shadow_matrix));
         ptrs[i].shadow_matrix[0] = 1.0f;
         ptrs[i].atlas_rect[0] = 0.0f;
         ptrs[i].atlas_rect[1] = 0.0f;

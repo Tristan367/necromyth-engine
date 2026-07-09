@@ -662,6 +662,7 @@ private:
 
   void create_point_light_shadow_ssbo(std::uint32_t max_lights) {
     pt_shadow_max_lights_ = max_lights;
+    if (max_lights == 0) return;
     const vk::DeviceSize buf_size = max_lights * sizeof(GpuPointLightShadowData);
 
     for (std::uint32_t i = 0; i < k_pt_shadow_frames; ++i) {
