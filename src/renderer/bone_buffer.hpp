@@ -61,7 +61,7 @@ public:
 
       buffers_.back().bindMemory(*memory_.back(), 0);
       void *ptr = memory_.back().mapMemory(0, buffer_size);
-      // Zero-initialize with identity matrices to avoid uninitialized GPU reads
+      // Initialize with identity matrices to avoid uninitialized GPU reads
       // for skinned instances that haven't been animated yet (no pose_layers).
       auto *matrices = static_cast<glm::mat4 *>(ptr);
       for (std::uint32_t j = 0; j < bone_count; ++j)

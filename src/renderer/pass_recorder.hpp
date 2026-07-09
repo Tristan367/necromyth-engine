@@ -899,7 +899,9 @@ struct PassRecorder {
           vk::ImageAspectFlagBits::eDepth, 0, 1, 0, VK_REMAINING_ARRAY_LAYERS);
       layouts.point_cube_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
     }
-  }  void finish_main_pass(
+  }
+
+  void finish_main_pass(
       vk::raii::CommandBuffer &command_buffer,
       std::uint32_t image_index,
       PassLayoutState &layouts) const {

@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/buffer.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
 

@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/buffer.hpp"
 
 #include "renderer/render_settings.hpp"
 
