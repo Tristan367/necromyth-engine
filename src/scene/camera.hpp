@@ -47,7 +47,9 @@ public:
   }
 
   [[nodiscard]] auto look_direction() const -> glm::vec3 {
-    return glm::normalize(target_ - position_);
+    const glm::vec3 diff = target_ - position_;
+    const float len2 = glm::dot(diff, diff);
+    return len2 > 1e-12F ? diff / std::sqrt(len2) : glm::vec3(0.0F, 0.0F, -1.0F);
   }
 
   [[nodiscard]] auto near_plane() const -> float {
@@ -63,7 +65,9 @@ public:
   }
 
   [[nodiscard]] auto right() const -> glm::vec3 {
-    return glm::normalize(glm::cross(look_direction(), up_));
+    const glm::vec3 raw = glm::cross(look_direction(), up_);
+    const float len2 = glm::dot(raw, raw);
+    return len2 > 1e-12F ? raw / std::sqrt(len2) : glm::vec3(1.0F, 0.0F, 0.0F);
   }
 
   // Camera follows a world-space target at a fixed elevation offset.
@@ -85,7 +89,9 @@ public:
   }
 
   [[nodiscard]] auto up() const -> glm::vec3 {
-    return glm::normalize(glm::cross(right(), look_direction()));
+    const glm::vec3 raw = glm::cross(right(), look_direction());
+    const float len2 = glm::dot(raw, raw);
+    return len2 > 1e-12F ? raw / std::sqrt(len2) : glm::vec3(0.0F, 1.0F, 0.0F);
   }
 
   [[nodiscard]] auto view_matrix() const -> const glm::mat4 & {

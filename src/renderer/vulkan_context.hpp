@@ -496,9 +496,18 @@ private:
     return scaled_render_extent(swapchain_.extent(), startup_render_scale_);
   }
 
-  void submit_empty_frame() {
-    const vk::SubmitInfo2 submit_info{};
-    device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
+  void submit_empty_frame() noexcept {
+    try {
+      const vk::SemaphoreSubmitInfo wait_info{
+          .semaphore = *image_available_semaphores_[frame_index_],
+          .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
+      };
+      const vk::SubmitInfo2 submit_info{
+          .waitSemaphoreInfoCount = 1,
+          .pWaitSemaphoreInfos = &wait_info,
+      };
+      device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
+    } catch (...) { /* device lost — no recovery */ }
   }
 
   void create_pipeline_cache() {
@@ -536,9 +545,9 @@ private:
   }
 
   void recreate_render_targets() {
+    depth_image_.recreate(render_extent());
     create_msaa_color_image();
     recreate_render_color_image();
-    depth_image_.recreate(render_extent());
   }
 
   void create_shadow_map(std::uint32_t resolution, std::uint32_t layer_count) {
@@ -877,12 +886,12 @@ private:
   void recreate_swapchain() {
     wait_for_nonzero_extent();
     device_.wait_idle();
+    frame_index_ = 0;
     swapchain_.recreate();
     recreate_render_targets();
     pipelines_.recreate(device_.device(), swapchain_.image_format(), depth_image_.format());
     create_sync_objects();
     reset_image_layout_tracking();
-    frame_index_ = 0;
   }
 
   [[nodiscard]] static auto count_skinned_instances(const std::vector<MeshInstance> &instances,
@@ -909,8 +918,8 @@ private:
   }
 
   void create_bone_buffers(const Scene &scene) {
-    bone_buffers_.clear();
-    skinned_texture_indices_.clear();
+    std::vector<BoneStorageBufferSet> new_buffers;
+    std::vector<std::uint32_t> new_indices;
     for (const MeshInstance &instance : scene.instances()) {
       if (!instance.alive) continue;
       if (instance.skin_index == k_invalid_skin_index)
@@ -930,9 +939,11 @@ private:
           device_.device(),
           bone_count,
           detail::max_frames_in_flight);
-      bone_buffers_.push_back(std::move(bone_set));
-      skinned_texture_indices_.push_back(instance.texture_index);
+      new_buffers.push_back(std::move(bone_set));
+      new_indices.push_back(instance.texture_index);
     }
+    bone_buffers_ = std::move(new_buffers);
+    skinned_texture_indices_ = std::move(new_indices);
   }
 
   void allocate_skinned_descriptor_sets(const TextureTable &texture_table, std::uint32_t skinned_count) {

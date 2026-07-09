@@ -76,10 +76,12 @@ public:
     body_interface_ = &physics_system_.GetBodyInterface();
   }
 
-  ~PhysicsWorld() {
+  ~PhysicsWorld() noexcept {
     for (const JPH::BodyID id : body_ids_) {
-      body_interface_->RemoveBody(id);
-      body_interface_->DestroyBody(id);
+      try {
+        body_interface_->RemoveBody(id);
+        body_interface_->DestroyBody(id);
+      } catch (...) {}
     }
   }
 

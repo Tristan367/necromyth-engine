@@ -39,8 +39,12 @@ inline auto find_keyframes(const AnimationSampler &sampler, float time, bool loo
     return {0, 0, 0.0F};
 
   float t = time;
-  if (loop && t > duration)
+  if (loop) {
     t = std::fmod(t, duration);
+    if (t < 0.0F) t += duration;
+  } else if (t > duration) {
+    t = duration;
+  }
 
   if (t <= sampler.inputs.front())
     return {0, 0, 0.0F};
