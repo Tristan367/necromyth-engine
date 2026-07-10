@@ -398,6 +398,8 @@ public:
       pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
                                                 shadow_draw_list_, *spot_atlas_, *spot_atlas_view_,
                                                 startup_spot_atlas_size_);
+    else
+      ensure_shadow_sampler_readable(command_buffer, *spot_atlas_, pass_layouts_.spot_atlas_layout, 1);
 
     // Point shadow cubemap pass (Sascha omni model)
     if (has_point_shadows) {
@@ -406,6 +408,9 @@ public:
                                                 shadow_draw_list_, *point_cube_,
                                                 point_cube_face_views_,
                                                 point_cube_face_size_);
+    } else {
+      ensure_shadow_sampler_readable(command_buffer, *point_cube_, pass_layouts_.point_cube_layout,
+                                     point_cube_layer_count_);
     }
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
@@ -597,6 +602,7 @@ private:
 
   void create_point_cubemap(std::uint32_t face_size = 1024, std::uint32_t max_point_lights = 1) {
     const std::uint32_t total_layers = max_point_lights * 6;
+    point_cube_layer_count_ = total_layers;
 
     // D32 depth cubemap array. Depth-only rendering (SV_Depth fragment output).
     // Sampled via comparison sampler in main pass for hardware PCF.
@@ -858,6 +864,31 @@ private:
     }
   }
 
+  // When a shadow pass is skipped (no lights of that type), the depth image is
+  // never transitioned out of UNDEFINED, yet the main-pass fragment shader still
+  // samples its descriptor (written as DEPTH_STENCIL_READ_ONLY_OPTIMAL). Transition
+  // it once so the sampled layout matches the descriptor. Tracked so it fires only
+  // on the first frame (or after a layout reset).
+  void ensure_shadow_sampler_readable(vk::raii::CommandBuffer &command_buffer, vk::Image image,
+                                      vk::ImageLayout &tracked_layout,
+                                      std::uint32_t layer_count) const {
+    if (tracked_layout == vk::ImageLayout::eDepthStencilReadOnlyOptimal)
+      return;
+
+    transition_image_layout(
+        command_buffer, image,
+        tracked_layout, vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+        tracked_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{}
+                                                      : vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::AccessFlagBits2::eShaderRead,
+        tracked_layout == vk::ImageLayout::eUndefined
+            ? vk::PipelineStageFlagBits2::eTopOfPipe
+            : vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+        vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::ImageAspectFlagBits::eDepth, 0, 1, 0, layer_count);
+    tracked_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+  }
+
   void reset_image_layout_tracking() {
     pass_layouts_.swapchain_image_layouts.assign(swapchain_.image_count(), vk::ImageLayout::eUndefined);
     pass_layouts_.depth_image_layout = vk::ImageLayout::eUndefined;
@@ -1013,6 +1044,7 @@ private:
   std::array<std::optional<vk::raii::DeviceMemory>, k_pt_shadow_frames> pt_shadow_memory_{};
   std::array<GpuPointLightShadowData *, k_pt_shadow_frames> pt_shadow_mapped_{};
   std::uint32_t pt_shadow_max_lights_{0};
+  std::uint32_t point_cube_layer_count_{0};
   ParticleSystem particle_system_;
   TextureTable texture_table_;
   TextureArray texture_array_;

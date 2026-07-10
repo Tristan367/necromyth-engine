@@ -325,9 +325,11 @@ namespace detail {
       compute_cascade_split_normalized(camera, settings, shadow_far, 0, k_max_shadow_cascades);
 
   // Near cascade: smaller footprint → higher texel density close to the camera.
+  // Clamp prevents the near half-extent from shrinking too far below the
+  // far cascade, which would cause cascade-blend coverage holes.
   const float near_half = std::max(
-      settings.ortho_half_extent * std::clamp(split_norm * 2.0F, 0.25F, 0.55F),
-      16.0F);
+      settings.ortho_half_extent * std::clamp(split_norm * 2.0F, 0.40F, 1.0F),
+      settings.ortho_half_extent * 0.40F);
   const float far_half = std::max(settings.dual_far_ortho_half_extent, 1.0F);
 
   result.light_view_proj[0] =

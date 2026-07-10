@@ -47,22 +47,35 @@ float applyCoverageFade(float shadow, float2 projectionXY) {
     return lerp(1.0, shadow, fade);
 }
 
-float sampleCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, uint layer, int filterMode) {
-    float cosTheta = clamp(dot(normalize(normal), lightDir), 0.0, 1.0);
-    float3 receiverPos = worldPos + normalize(normal) * (kNormalOffsetScale * (1.0 - cosTheta));
+// Projects a world-space position into a cascade's shadow-map UVZ.
+// Returns false if the projection falls outside [0,1] or behind the camera.
+bool projectCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, uint layer,
+                          out float3 outProjection, out float outCosTheta) {
+    float3 n = normalize(normal);
+    outCosTheta = clamp(dot(n, lightDir), 0.0, 1.0);
+    float3 receiverPos = worldPos + n * (kNormalOffsetScale * (1.0 - outCosTheta));
 
     float4 shadowCoord = mul(biasMatrix, mul(ubo.lightViewProj[layer], float4(receiverPos, 1.0)));
-    if (shadowCoord.w <= 0.0) return 1.0;
-    float3 projection = shadowCoord.xyz / shadowCoord.w;
-    if (projection.x < 0.0 || projection.x > 1.0 || projection.y < 0.0 || projection.y > 1.0 ||
-        projection.z < 0.0 || projection.z > 1.0)
-        return 1.0;
+    if (shadowCoord.w <= 0.0) return false;
+    outProjection = shadowCoord.xyz / shadowCoord.w;
+    return all(outProjection >= 0.0) && all(outProjection <= 1.0);
+}
 
+// Samples the shadow map at a pre-computed projection.
+float sampleFromProjection(float3 projection, uint layer, int filterMode, float cosTheta) {
     float bias = shadowDepthBias(cosTheta);
     float shadow = filterMode == 1
         ? filterPCF(projection, layer, bias)
         : textureProj(projection, layer, float2(0.0, 0.0), bias);
     return applyCoverageFade(shadow, projection.xy);
+}
+
+float sampleCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, uint layer, int filterMode) {
+    float3 projection;
+    float cosTheta;
+    if (!projectCascadeShadow(worldPos, normal, lightDir, layer, projection, cosTheta))
+        return 1.0;
+    return sampleFromProjection(projection, layer, filterMode, cosTheta);
 }
 
 float shadowVisibilitySingle(float3 worldPos, float3 normal, float3 lightDir, int filterMode) {
@@ -84,8 +97,30 @@ float shadowVisibilityDual(float3 worldPos, float3 normal, float3 lightDir, int 
     if (abs(distFromSplit) >= blendRange)
         return sampleCascadeShadow(worldPos, normal, lightDir, primary, filterMode);
 
-    const float shadowNear = sampleCascadeShadow(worldPos, normal, lightDir, cascadeNear, filterMode);
-    const float shadowFar = sampleCascadeShadow(worldPos, normal, lightDir, cascadeFar, filterMode);
+    // Blend zone: if one cascade doesn't cover this fragment,
+    // smoothly transition to the other instead of a hard switch.
+    float3 projNear, projFar;
+    float cosNear, cosFar;
+    bool nearOk = projectCascadeShadow(worldPos, normal, lightDir, cascadeNear, projNear, cosNear);
+    bool farOk  = projectCascadeShadow(worldPos, normal, lightDir, cascadeFar,  projFar,  cosFar);
+
+    // Coverage confidence for the near cascade: 0 at UV edge, 1 well inside.
+    // This mirrors the existing coverage fade so the transition is invisible.
+    float nearConfidence = 0.0;
+    if (nearOk) {
+        float2 nearDist = min(projNear.xy, 1.0 - projNear.xy);
+        float nearEdge = min(nearDist.x, nearDist.y);
+        nearConfidence = smoothstep(0.0, 0.05, nearEdge);
+    }
+
+    const float shadowNear = nearOk
+        ? sampleFromProjection(projNear, cascadeNear, filterMode, cosNear) : 1.0;
+    const float shadowFar  = farOk
+        ? sampleFromProjection(projFar, cascadeFar, filterMode, cosFar)   : 1.0;
+
     const float blend = smoothstep(split - blendRange, split + blendRange, viewZ);
-    return lerp(shadowFar, shadowNear, blend);
+    const float blendedResult = lerp(shadowFar, shadowNear, blend);
+
+    // Fade from blended (both) to far-only as near coverage drops.
+    return lerp(shadowFar, blendedResult, nearConfidence);
 }

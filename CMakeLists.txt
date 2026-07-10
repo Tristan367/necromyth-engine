@@ -273,6 +273,16 @@ add_library(VCE::Core ALIAS vce_core)
 
 target_compile_features(vce_core INTERFACE cxx_std_23)
 
+# GLM latches its clip-control convention on its first include per translation
+# unit (setup.hpp uses a one-time include guard). Individual headers that
+# #define GLM_FORCE_DEPTH_ZERO_TO_ONE are ineffective if any glm header is
+# included first without it. Define globally so every TU uses Vulkan 0..1 depth
+# regardless of include order.
+target_compile_definitions(vce_core INTERFACE
+    GLM_FORCE_RADIANS
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
 target_include_directories(vce_core SYSTEM INTERFACE
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>"

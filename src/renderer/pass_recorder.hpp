@@ -214,7 +214,7 @@ struct PassRecorder {
       auto norm = [](glm::vec4 p) { return p / glm::length(glm::vec3(p)); };
       const glm::vec4 planes[6] = {
           norm(r3 + r0), norm(r3 - r0), norm(r3 + r1),
-          norm(r3 - r1), norm(r3 + r2), norm(r3 - r2)};
+          norm(r3 - r1), norm(r2), norm(r3 - r2)};
 
       auto test = [&](const glm::vec4 &p) { return glm::dot(glm::vec3(p), center) + p.w > -world_radius; };
       for (const glm::vec4 &p : planes)
