@@ -28,7 +28,7 @@
 namespace engine {
 
 struct PassLayoutState {
-  mutable vk::ImageLayout shadow_image_layout{vk::ImageLayout::eDepthStencilReadOnlyOptimal};
+  mutable vk::ImageLayout shadow_image_layout{vk::ImageLayout::eUndefined};
   mutable vk::ImageLayout spot_atlas_layout{vk::ImageLayout::eUndefined};
   mutable vk::ImageLayout point_cube_layout{vk::ImageLayout::eUndefined};
   mutable std::vector<vk::ImageLayout> swapchain_image_layouts;
