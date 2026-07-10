@@ -625,16 +625,14 @@ struct PassRecorder {
     // Always transition from Undefined → DepthAttachment on first encounter.
     if (layouts.shadow_image_layout == vk::ImageLayout::eUndefined) {
       const vk::ImageMemoryBarrier2 barrier{
-          vk::PipelineStageFlagBits2::eTopOfPipe,
-          {},
-          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          vk::ImageLayout::eUndefined,
-          vk::ImageLayout::eDepthAttachmentOptimal,
-          VK_QUEUE_FAMILY_IGNORED,
-          VK_QUEUE_FAMILY_IGNORED,
-          shadow_map.image(),
-          {shadow_map.aspect_mask(), 0, 1, 0, shadow_map.layer_count()},
+          .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+          .srcAccessMask = {},
+          .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          .oldLayout = vk::ImageLayout::eUndefined,
+          .newLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+          .image = shadow_map.image(),
+          .subresourceRange = {shadow_map.aspect_mask(), 0, 1, 0, shadow_map.layer_count()},
       };
       command_buffer.pipelineBarrier2({
           .imageMemoryBarrierCount = 1,
@@ -709,16 +707,14 @@ struct PassRecorder {
 
     if (layouts.shadow_image_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
       const vk::ImageMemoryBarrier2 barrier{
-          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          vk::PipelineStageFlagBits2::eFragmentShader,
-          vk::AccessFlagBits2::eShaderRead,
-          vk::ImageLayout::eDepthAttachmentOptimal,
-          vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-          VK_QUEUE_FAMILY_IGNORED,
-          VK_QUEUE_FAMILY_IGNORED,
-          shadow_map.image(),
-          {shadow_map.aspect_mask(), 0, 1, 0, shadow_map.layer_count()},
+          .srcStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          .srcAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+          .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+          .oldLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+          .newLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+          .image = shadow_map.image(),
+          .subresourceRange = {shadow_map.aspect_mask(), 0, 1, 0, shadow_map.layer_count()},
       };
       command_buffer.pipelineBarrier2({
           .imageMemoryBarrierCount = 1,
