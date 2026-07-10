@@ -105,7 +105,6 @@ private:
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
         .sharingMode = vk::SharingMode::eExclusive,
-        .initialLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
     };
 
     image_ = vk::raii::Image(*device_, image_info);
