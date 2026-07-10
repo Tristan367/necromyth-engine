@@ -402,6 +402,23 @@ public:
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
     command_buffer.begin({});
+    
+    // Transition shadow image to ReadOnly on first frame (diagnostic)
+    if (pass_layouts_.shadow_image_layout == vk::ImageLayout::eUndefined) {
+      const vk::ImageMemoryBarrier2 barrier{
+          .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+          .srcAccessMask = {},
+          .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+          .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+          .oldLayout = vk::ImageLayout::eUndefined,
+          .newLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+          .image = shadow_map_.image(),
+          .subresourceRange = {shadow_map_.aspect_mask(), 0, 1, 0, shadow_map_.layer_count()},
+      };
+      command_buffer.pipelineBarrier2({1, &barrier});
+      pass_layouts_.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+    }
+
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, shadow_draw_list_,
                                          cascades.light_view_proj);
 
