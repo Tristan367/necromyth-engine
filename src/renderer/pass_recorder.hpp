@@ -622,7 +622,23 @@ struct PassRecorder {
        PassLayoutState &layouts,
        const std::vector<DrawCommand> &shadow_draws,
        const std::array<glm::mat4, k_max_shadow_cascades> &cascade_vps) const {
-    if (layouts.shadow_image_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
+    // Always transition from Undefined → DepthAttachment on first encounter.
+    // Layout tracking alone can desync if barriers from previous frames are stale.
+    if (layouts.shadow_image_layout == vk::ImageLayout::eUndefined) {
+      transition_image_layout(
+          command_buffer,
+          shadow_map.image(),
+          vk::ImageLayout::eUndefined,
+          vk::ImageLayout::eDepthAttachmentOptimal,
+          {},
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          vk::PipelineStageFlagBits2::eTopOfPipe,
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          shadow_map.aspect_mask(),
+          0, 1,
+          0, shadow_map.layer_count());
+      layouts.shadow_image_layout = vk::ImageLayout::eDepthAttachmentOptimal;
+    } else if (layouts.shadow_image_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
       const vk::ImageLayout previous_layout = layouts.shadow_image_layout;
       const vk::AccessFlags2 previous_access =
           previous_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead;
