@@ -926,6 +926,29 @@ struct PassRecorder {
       const std::vector<DrawCommand> &draw_list,
       const FrameOverlayCallback *overlay = nullptr,
       std::function<void(vk::raii::CommandBuffer &)> post_geometry = {}) const {
+    // Ensure shadow map is in ReadOnly before sampling — guard against stale init state.
+    if (layouts.shadow_image_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
+      transition_image_layout(
+          command_buffer,
+          shadow_map.image(),
+          layouts.shadow_image_layout == vk::ImageLayout::eUndefined
+              ? vk::ImageLayout::eUndefined
+              : vk::ImageLayout::eDepthAttachmentOptimal,
+          vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+          layouts.shadow_image_layout == vk::ImageLayout::eUndefined
+              ? vk::AccessFlagBits2{}
+              : vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          vk::AccessFlagBits2::eShaderRead,
+          layouts.shadow_image_layout == vk::ImageLayout::eUndefined
+              ? vk::PipelineStageFlagBits2::eTopOfPipe
+              : vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          vk::PipelineStageFlagBits2::eFragmentShader,
+          shadow_map.aspect_mask(),
+          0, 1,
+          0, shadow_map.layer_count());
+      layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+    }
+
     if (uses_render_scale())
       transition_render_color_to_color_attachment(command_buffer, layouts);
     else
