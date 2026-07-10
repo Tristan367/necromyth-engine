@@ -623,20 +623,23 @@ struct PassRecorder {
        const std::vector<DrawCommand> &shadow_draws,
        const std::array<glm::mat4, k_max_shadow_cascades> &cascade_vps) const {
     // Always transition from Undefined → DepthAttachment on first encounter.
-    // Layout tracking alone can desync if barriers from previous frames are stale.
     if (layouts.shadow_image_layout == vk::ImageLayout::eUndefined) {
-      transition_image_layout(
-          command_buffer,
-          shadow_map.image(),
+      const vk::ImageMemoryBarrier2 barrier{
+          vk::PipelineStageFlagBits2::eTopOfPipe,
+          {},
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
           vk::ImageLayout::eUndefined,
           vk::ImageLayout::eDepthAttachmentOptimal,
-          {},
-          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          vk::PipelineStageFlagBits2::eTopOfPipe,
-          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          shadow_map.aspect_mask(),
-          0, 1,
-          0, shadow_map.layer_count());
+          VK_QUEUE_FAMILY_IGNORED,
+          VK_QUEUE_FAMILY_IGNORED,
+          shadow_map.image(),
+          {shadow_map.aspect_mask(), 0, 1, 0, shadow_map.layer_count()},
+      };
+      command_buffer.pipelineBarrier2({
+          .imageMemoryBarrierCount = 1,
+          .pImageMemoryBarriers = &barrier,
+      });
       layouts.shadow_image_layout = vk::ImageLayout::eDepthAttachmentOptimal;
     } else if (layouts.shadow_image_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
       const vk::ImageLayout previous_layout = layouts.shadow_image_layout;
@@ -705,21 +708,22 @@ struct PassRecorder {
     }
 
     if (layouts.shadow_image_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
-      transition_image_layout(
-          command_buffer,
-          shadow_map.image(),
+      const vk::ImageMemoryBarrier2 barrier{
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          vk::PipelineStageFlagBits2::eFragmentShader,
+          vk::AccessFlagBits2::eShaderRead,
           vk::ImageLayout::eDepthAttachmentOptimal,
           vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          vk::AccessFlagBits2::eShaderRead,
-          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          vk::PipelineStageFlagBits2::eFragmentShader,
-          shadow_map.aspect_mask(),
-          0,
-          1,
-          0,
-          shadow_map.layer_count());
-
+          VK_QUEUE_FAMILY_IGNORED,
+          VK_QUEUE_FAMILY_IGNORED,
+          shadow_map.image(),
+          {shadow_map.aspect_mask(), 0, 1, 0, shadow_map.layer_count()},
+      };
+      command_buffer.pipelineBarrier2({
+          .imageMemoryBarrierCount = 1,
+          .pImageMemoryBarriers = &barrier,
+      });
       layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
     }
   }
