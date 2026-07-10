@@ -28,7 +28,7 @@
 namespace engine {
 
 struct PassLayoutState {
-  mutable vk::ImageLayout shadow_image_layout{vk::ImageLayout::eDepthStencilReadOnlyOptimal};
+  mutable vk::ImageLayout shadow_image_layout{vk::ImageLayout::eUndefined};
   mutable vk::ImageLayout spot_atlas_layout{vk::ImageLayout::eUndefined};
   mutable vk::ImageLayout point_cube_layout{vk::ImageLayout::eUndefined};
   mutable std::vector<vk::ImageLayout> swapchain_image_layouts;
@@ -622,24 +622,7 @@ struct PassRecorder {
        PassLayoutState &layouts,
        const std::vector<DrawCommand> &shadow_draws,
        const std::array<glm::mat4, k_max_shadow_cascades> &cascade_vps) const {
-    // Always transition from Undefined → DepthAttachment on first encounter.
-    if (layouts.shadow_image_layout == vk::ImageLayout::eUndefined) {
-      const vk::ImageMemoryBarrier2 barrier{
-          .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
-          .srcAccessMask = {},
-          .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          .oldLayout = vk::ImageLayout::eUndefined,
-          .newLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-          .image = shadow_map.image(),
-          .subresourceRange = {shadow_map.aspect_mask(), 0, 1, 0, shadow_map.layer_count()},
-      };
-      command_buffer.pipelineBarrier2({
-          .imageMemoryBarrierCount = 1,
-          .pImageMemoryBarriers = &barrier,
-      });
-      layouts.shadow_image_layout = vk::ImageLayout::eDepthAttachmentOptimal;
-    } else if (layouts.shadow_image_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
+    if (layouts.shadow_image_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
       const vk::ImageLayout previous_layout = layouts.shadow_image_layout;
       const vk::AccessFlags2 previous_access =
           previous_layout == vk::ImageLayout::eUndefined ? vk::AccessFlagBits2{} : vk::AccessFlagBits2::eShaderRead;
@@ -705,22 +688,22 @@ struct PassRecorder {
       command_buffer.endRendering();
     }
 
-    // Unconditionally transition to ReadOnly after shadow rendering.
-    {
-      const vk::ImageMemoryBarrier2 barrier{
-          .srcStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          .srcAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
-          .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
-          .oldLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-          .newLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-          .image = shadow_map.image(),
-          .subresourceRange = {shadow_map.aspect_mask(), 0, 1, 0, shadow_map.layer_count()},
-      };
-      command_buffer.pipelineBarrier2({
-          .imageMemoryBarrierCount = 1,
-          .pImageMemoryBarriers = &barrier,
-      });
+    if (layouts.shadow_image_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
+      transition_image_layout(
+          command_buffer,
+          shadow_map.image(),
+          vk::ImageLayout::eDepthAttachmentOptimal,
+          vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+          vk::AccessFlagBits2::eShaderRead,
+          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+          vk::PipelineStageFlagBits2::eFragmentShader,
+          shadow_map.aspect_mask(),
+          0,
+          1,
+          0,
+          shadow_map.layer_count());
+
       layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
     }
   }
@@ -943,29 +926,6 @@ struct PassRecorder {
       const std::vector<DrawCommand> &draw_list,
       const FrameOverlayCallback *overlay = nullptr,
       std::function<void(vk::raii::CommandBuffer &)> post_geometry = {}) const {
-    // Ensure shadow map is in ReadOnly before sampling — guard against stale init state.
-    if (layouts.shadow_image_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
-      transition_image_layout(
-          command_buffer,
-          shadow_map.image(),
-          layouts.shadow_image_layout == vk::ImageLayout::eUndefined
-              ? vk::ImageLayout::eUndefined
-              : vk::ImageLayout::eDepthAttachmentOptimal,
-          vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-          layouts.shadow_image_layout == vk::ImageLayout::eUndefined
-              ? vk::AccessFlagBits2{}
-              : vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-          vk::AccessFlagBits2::eShaderRead,
-          layouts.shadow_image_layout == vk::ImageLayout::eUndefined
-              ? vk::PipelineStageFlagBits2::eTopOfPipe
-              : vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-          vk::PipelineStageFlagBits2::eFragmentShader,
-          shadow_map.aspect_mask(),
-          0, 1,
-          0, shadow_map.layer_count());
-      layouts.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-    }
-
     if (uses_render_scale())
       transition_render_color_to_color_attachment(command_buffer, layouts);
     else
