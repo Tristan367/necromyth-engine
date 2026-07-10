@@ -415,7 +415,10 @@ public:
           .image = shadow_map_.image(),
           .subresourceRange = {shadow_map_.aspect_mask(), 0, 1, 0, shadow_map_.layer_count()},
       };
-      command_buffer.pipelineBarrier2({1, &barrier});
+      command_buffer.pipelineBarrier2(vk::DependencyInfo{
+          .imageMemoryBarrierCount = 1,
+          .pImageMemoryBarriers = &barrier,
+      });
       pass_layouts_.shadow_image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
     }
 
