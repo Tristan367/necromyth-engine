@@ -705,7 +705,8 @@ struct PassRecorder {
       command_buffer.endRendering();
     }
 
-    if (layouts.shadow_image_layout != vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
+    // Unconditionally transition to ReadOnly after shadow rendering.
+    {
       const vk::ImageMemoryBarrier2 barrier{
           .srcStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
           .srcAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
