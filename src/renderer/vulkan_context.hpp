@@ -98,24 +98,6 @@ public:
         command_pool_,
         device_.graphics_queue(),
         texture_array_);
-    // One-time transition: shadow image Undefined → ReadOnlyOptimal.
-    // Ensures the image is in a valid sampled layout before any descriptor write.
-    detail::execute_one_time_commands(
-        device_.device(), command_pool_, device_.graphics_queue(),
-        [&](vk::raii::CommandBuffer &cmd) {
-          transition_image_layout(
-              cmd,
-              shadow_map_.image(),
-              vk::ImageLayout::eUndefined,
-              vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-              {},
-              vk::AccessFlagBits2::eShaderRead,
-              vk::PipelineStageFlagBits2::eTopOfPipe,
-              vk::PipelineStageFlagBits2::eFragmentShader,
-              shadow_map_.aspect_mask(),
-              0, 1,
-              0, shadow_map_.layer_count());
-        });
     create_descriptor_set_layout();
     create_uniform_buffers();
     create_bone_buffers(scene);
