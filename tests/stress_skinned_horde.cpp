@@ -57,20 +57,23 @@ auto main(int argc, char **argv) -> int {
   for (const engine::AnimationClip &clip : model.animations)
     clips.push_back(scene.add_animation(clip));
 
-  // One state machine per character, so each owns its own pose stack. Held by
-  // pointer because MeshInstance::pose_layers is a raw pointer into it -- a
-  // vector that reallocates would dangle every one of them.
-  std::vector<std::unique_ptr<engine::AnimStateMachine>> minds;
+  // One state machine per character, in a plain vector that reallocates as the
+  // horde grows. That is deliberate: MeshInstance::pose_layers shares ownership
+  // of the pose stack, so relocating the state machines moves only the pointers
+  // and every instance keeps working. Back when pose_layers was a raw pointer
+  // into the state machine, this vector had to be a vector of unique_ptr or
+  // every character would have been reading freed memory after the first regrow.
+  std::vector<engine::AnimStateMachine> minds;
   std::vector<engine::InstanceHandle> instances;
 
   const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(horde_size))));
   for (int i = 0; i < horde_size; ++i) {
-    auto mind = std::make_unique<engine::AnimStateMachine>();
-    mind->add_state({"move", clips[0], true});
-    mind->start("move");
+    engine::AnimStateMachine mind;
+    mind.add_state({"move", clips[0], true});
+    mind.start("move");
     // Stagger the phase: identical poses would hide slice aliasing entirely.
     for (int step = 0; step < i % 37; ++step)
-      mind->tick(1.0F / 60.0F, scene.animations());
+      mind.tick(1.0F / 60.0F, scene.animations());
 
     glm::mat4 xform(1.0F);
     xform[3] = glm::vec4(static_cast<float>(i % side) * 2.0F - static_cast<float>(side),
@@ -84,7 +87,7 @@ auto main(int argc, char **argv) -> int {
         .model = xform,
         .skin_index = skin,
     });
-    scene.instance(handle).pose_layers = &mind->layers();
+    scene.instance(handle).pose_layers = mind.shared_layers();
     minds.push_back(std::move(mind));
     instances.push_back(handle);
   }
@@ -101,8 +104,8 @@ auto main(int argc, char **argv) -> int {
   std::size_t respawned = 0;
 
   for (int frame = 0; frame < frames && !engine::EngineRuntime::quit_requested(); ++frame) {
-    for (auto &mind : minds)
-      mind->tick(1.0F / 60.0F, scene.animations());
+    for (engine::AnimStateMachine &mind : minds)
+      mind.tick(1.0F / 60.0F, scene.animations());
 
     // Churn the horde: despawn and respawn characters mid-list so the bone slot
     // assignment shifts under the renderer every frame. This is what used to
@@ -113,15 +116,15 @@ auto main(int argc, char **argv) -> int {
       ++despawned;
     }
     if (frame % 30 == 25) {
-      auto mind = std::make_unique<engine::AnimStateMachine>();
-      mind->add_state({"move", clips[0], true});
-      mind->start("move");
+      engine::AnimStateMachine mind;
+      mind.add_state({"move", clips[0], true});
+      mind.start("move");
       const engine::InstanceHandle handle = scene.add_instance({
           .mesh_index = mesh,
           .texture_index = texture,
           .skin_index = skin,
       });
-      scene.instance(handle).pose_layers = &mind->layers();
+      scene.instance(handle).pose_layers = mind.shared_layers();
       minds.push_back(std::move(mind));
       instances.push_back(handle);
       ++respawned;

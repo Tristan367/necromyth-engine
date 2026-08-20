@@ -8,6 +8,7 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <memory>
 #include <vector>
 
 namespace engine {
@@ -40,7 +41,7 @@ struct AnimTransitionDef {
 class AnimStateMachine {
 public:
   AnimStateMachine() {
-    layers_.resize(1);  // layer 0 = base locomotion (full body)
+    layers_->resize(1);  // layer 0 = base locomotion (full body)
   }
 
   void add_state(AnimStateDef s) {
@@ -67,7 +68,14 @@ public:
   void set_param(const std::string &name, bool v)  { params_[name] = v ? 1.0F : 0.0F; }
 
   // The pose-layer stack. Assign to MeshInstance::pose_layers once at setup.
-  [[nodiscard]] auto layers() const -> const std::vector<PoseLayer> & { return layers_; }
+  [[nodiscard]] auto layers() const -> const std::vector<PoseLayer> & { return *layers_; }
+
+  // Hand this to MeshInstance::pose_layers. Shared ownership, so the instance
+  // keeps working if this state machine is moved, and freezes rather than
+  // crashes if it is destroyed.
+  [[nodiscard]] auto shared_layers() const -> std::shared_ptr<const std::vector<PoseLayer>> {
+    return layers_;
+  }
 
   // Register a masked override layer (e.g. upper body). Returns its layer index.
   // mask is joint indices the layer affects; weight is its blend over the base.
@@ -77,15 +85,15 @@ public:
     layer.mask = mask;
     layer.weight = weight;
     layer.clip_index = std::numeric_limits<std::uint32_t>::max();  // inactive until set
-    layers_.push_back(layer);
-    return layers_.size() - 1;
+    layers_->push_back(layer);
+    return layers_->size() - 1;
   }
 
   // Directly drive an override layer's clip (with its own internal crossfade).
   void set_override_clip(std::size_t layer_index, std::uint32_t clip_index,
                          float blend_time) {
-    if (layer_index == 0 || layer_index >= layers_.size()) return;
-    PoseLayer &l = layers_[layer_index];
+    if (layer_index == 0 || layer_index >= layers_->size()) return;
+    PoseLayer &l = (*layers_)[layer_index];
     if (l.clip_index == k_invalid_clip) {  // was inactive: snap on
       l.clip_index = clip_index;
       l.time = 0.0F;
@@ -103,15 +111,15 @@ public:
   // Smoothly fade an override layer's compositing weight toward `weight` over
   // `fade_time` seconds. Use fade_time <= 0 for an instant set.
   void set_override_weight(std::size_t layer_index, float weight, float fade_time = 0.2F) {
-    if (layer_index == 0 || layer_index >= layers_.size()) return;
+    if (layer_index == 0 || layer_index >= layers_->size()) return;
     const float target = std::clamp(weight, 0.0F, 1.0F);
     override_target_weight_[layer_index] = target;
     if (fade_time <= 0.0F) {
-      layers_[layer_index].weight = target;
+      (*layers_)[layer_index].weight = target;
       override_weight_rate_[layer_index] = 0.0F;
     } else {
       override_weight_rate_[layer_index] =
-          std::abs(target - layers_[layer_index].weight) / fade_time;
+          std::abs(target - (*layers_)[layer_index].weight) / fade_time;
     }
   }
 
@@ -121,7 +129,7 @@ public:
     if (idx == k_invalid) return;
     current_index_ = idx;
     transitioning_ = false;
-    PoseLayer &base = layers_[0];
+    PoseLayer &base = (*layers_)[0];
     base.clip_index = states_[idx].clip_index;
     base.time = 0.0F;
     base.xfade_index = k_invalid_clip;
@@ -172,7 +180,9 @@ private:
   static constexpr std::uint32_t k_invalid_clip = std::numeric_limits<std::uint32_t>::max();
   static inline const std::string empty_{};
 
-  std::vector<PoseLayer> layers_;
+  // Heap-owned so MeshInstance can share it. Moving an AnimStateMachine moves
+  // the pointer, never the pose stack, so instances referencing it stay valid.
+  std::shared_ptr<std::vector<PoseLayer>> layers_ = std::make_shared<std::vector<PoseLayer>>();
   std::unordered_map<std::size_t, float> override_xfade_dur_;
   std::unordered_map<std::size_t, float> override_target_weight_;
   std::unordered_map<std::size_t, float> override_weight_rate_;
@@ -204,14 +214,14 @@ private:
     transition_duration_ = std::max(blend_time, 0.001F);
     transitioning_ = true;
 
-    PoseLayer &base = layers_[0];
+    PoseLayer &base = (*layers_)[0];
     base.xfade_index = states_[to_idx].clip_index;
     base.xfade_time = 0.0F;
     base.xfade_weight = 0.0F;
   }
 
   void advance_base_layer(float delta, const std::vector<AnimationClip> &clips) {
-    PoseLayer &base = layers_[0];
+    PoseLayer &base = (*layers_)[0];
     const bool looping = states_[current_index_].looping;
 
     base.time += delta;
@@ -235,8 +245,8 @@ private:
   }
 
   void advance_override_layers(float delta, const std::vector<AnimationClip> &clips) {
-    for (std::size_t li = 1; li < layers_.size(); ++li) {
-      PoseLayer &l = layers_[li];
+    for (std::size_t li = 1; li < layers_->size(); ++li) {
+      PoseLayer &l = (*layers_)[li];
 
       // Fade layer weight toward its target.
       auto rate_it = override_weight_rate_.find(li);
@@ -274,7 +284,7 @@ private:
 
   void check_conditions(const std::vector<AnimationClip> &clips) {
     const AnimStateDef &state = states_[current_index_];
-    const PoseLayer &base = layers_[0];
+    const PoseLayer &base = (*layers_)[0];
     const AnimTransitionDef *firing = nullptr;
     for (const AnimTransitionDef &t : transitions_) {
       if (t.from_state != "*" && t.from_state != state.name) continue;

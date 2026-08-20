@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -55,8 +56,16 @@ struct MeshInstance {
 
   std::uint32_t skin_index{std::numeric_limits<std::uint32_t>::max()};
 
-  const std::unordered_map<std::uint32_t, BoneTRS> *joint_overrides{nullptr};
-  const std::vector<PoseLayer> *pose_layers{nullptr};
+  // Shared, not raw pointers into caller storage. These used to point straight
+  // into an AnimStateMachine the game owned, so anything that relocated it -- a
+  // std::vector of them growing, an entity being moved between containers --
+  // left every instance referencing freed memory, silently.
+  //
+  // Sharing the pose stack instead means the state machine can move freely (the
+  // pointee does not) and, if it is destroyed outright, the character freezes in
+  // its last pose rather than reading dead memory.
+  std::shared_ptr<const std::unordered_map<std::uint32_t, BoneTRS>> joint_overrides;
+  std::shared_ptr<const std::vector<PoseLayer>> pose_layers;
 
   std::vector<BoneAttachment> bone_attachments;
   std::vector<glm::mat4> cached_bone_worlds;

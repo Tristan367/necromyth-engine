@@ -9,12 +9,14 @@
 #include "renderer/draw_list.hpp"
 #include "renderer/frustum.hpp"
 #include "scene/camera.hpp"
+#include "scene/animation_state_machine.hpp"
 #include "scene/animation_utils.hpp"
 #include "scene/shadow_assignment.hpp"
 #include "scene/scene.hpp"
 
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -66,7 +68,7 @@ void test_bone_slot_indices_are_dense_and_ordered() {
   const std::uint32_t skin_b = scene.add_skeleton(make_skeleton(7));
   const std::uint32_t skin_empty = scene.add_skeleton(make_skeleton(0));
 
-  std::vector<engine::PoseLayer> layers(1);
+  const auto layers = std::make_shared<std::vector<engine::PoseLayer>>(1);
 
   // A deliberately awkward mix: skinned and unskinned, alive and dead, with and
   // without a pose stack, plus a skeleton that carries no joints at all.
@@ -80,8 +82,8 @@ void test_bone_slot_indices_are_dense_and_ordered() {
 
   // Only some skinned instances get a pose stack. The ones without must still
   // own a slot — skipping them was the original off-by-N.
-  scene.instance(inst_skinned_0).pose_layers = &layers;
-  scene.instance(inst_skinned_last).pose_layers = &layers;
+  scene.instance(inst_skinned_0).pose_layers = layers;
+  scene.instance(inst_skinned_last).pose_layers = layers;
   scene.instance(inst_no_layers).pose_layers = nullptr;
   scene.remove_instance(inst_dead);
 
@@ -147,12 +149,12 @@ void test_same_texture_skinned_instances_stay_distinct() {
   engine::Scene scene;
   (void)scene.add_mesh(engine::MeshSource{});
   const std::uint32_t skin = scene.add_skeleton(make_skeleton(5));
-  std::vector<engine::PoseLayer> layers(1);
+  const auto layers = std::make_shared<std::vector<engine::PoseLayer>>(1);
 
   constexpr std::uint32_t k_horde = 6;
   for (std::uint32_t i = 0; i < k_horde; ++i) {
     const engine::InstanceHandle handle = scene.add_instance(make_instance(skin));
-    scene.instance(handle).pose_layers = &layers; // all share texture_index 0
+    scene.instance(handle).pose_layers = layers; // all share texture_index 0
   }
 
   std::vector<engine::DrawCommand> draws;
@@ -282,14 +284,14 @@ void test_cull_opt_out_is_respected() {
   engine::Scene scene;
   (void)scene.add_mesh(engine::MeshSource{});
   const std::uint32_t skin = scene.add_skeleton(make_skeleton(3));
-  std::vector<engine::PoseLayer> layers(1);
+  const auto layers = std::make_shared<std::vector<engine::PoseLayer>>(1);
 
   engine::MeshInstance sky = make_instance(engine::k_invalid_skin_index);
   sky.layer = engine::RenderLayer::Background;
   (void)scene.add_instance(sky);
 
   const engine::InstanceHandle skinned = scene.add_instance(make_instance(skin));
-  scene.instance(skinned).pose_layers = &layers;
+  scene.instance(skinned).pose_layers = layers;
 
   std::vector<engine::DrawCommand> draws;
   engine::build_draw_list(scene, draws);
@@ -593,6 +595,53 @@ void test_bone_attachment_ignores_stale_target() {
         "a stale attachment target does not drag an unrelated instance around");
 }
 
+
+// Pose stacks are shared, not pointed at. A raw pointer into an AnimStateMachine
+// dangled whenever the game relocated one -- a std::vector of them growing was
+// enough -- and the result was every character reading freed memory, silently.
+void test_pose_stack_survives_owner_relocation() {
+  std::printf("pose stack ownership\n");
+
+  engine::Scene scene;
+  (void)scene.add_mesh(engine::MeshSource{});
+  const std::uint32_t skin = scene.add_skeleton(make_skeleton(3));
+
+  std::vector<engine::AnimStateMachine> minds;
+  minds.reserve(1); // force a reallocation on the second push_back
+
+  engine::AnimStateMachine first;
+  first.add_state({"idle", 0, true});
+  first.start("idle");
+  const auto shared = first.shared_layers();
+  minds.push_back(std::move(first));
+
+  const engine::InstanceHandle character = scene.add_instance(make_instance(skin));
+  scene.instance(character).pose_layers = minds[0].shared_layers();
+  const void *before = scene.instance(character).pose_layers.get();
+
+  // Reallocate the container the state machines live in.
+  for (int i = 0; i < 8; ++i) {
+    engine::AnimStateMachine extra;
+    extra.add_state({"idle", 0, true});
+    extra.start("idle");
+    minds.push_back(std::move(extra));
+  }
+
+  const void *after = scene.instance(character).pose_layers.get();
+  check(before == after, "the instance's pose stack did not move with its owner");
+  check(minds[0].shared_layers().get() == after,
+        "the relocated state machine still drives the same pose stack");
+  check(shared.use_count() > 1, "ownership is genuinely shared, not copied");
+
+  // Destroying every state machine must freeze the pose, not free it underneath
+  // the renderer.
+  minds.clear();
+  check(scene.instance(character).pose_layers != nullptr,
+        "the pose stack outlives its state machine rather than dangling");
+  check(scene.instance(character).pose_layers->size() >= 1,
+        "the last pose remains readable after the owner is gone");
+}
+
 } // namespace
 
 auto main() -> int {
@@ -609,6 +658,7 @@ auto main() -> int {
   test_shadow_slot_assignment();
   test_instance_handles_detect_reuse();
   test_bone_attachment_ignores_stale_target();
+  test_pose_stack_survives_owner_relocation();
 
   if (g_failures != 0) {
     std::printf("\n%d check(s) failed\n", g_failures);

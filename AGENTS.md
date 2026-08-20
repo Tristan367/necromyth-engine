@@ -97,6 +97,12 @@ thing.
 - `BoneAttachment::target_instance` is a handle and is generation-checked every
   frame, so a dropped weapon cannot start dragging an unrelated instance around.
 
+`MeshInstance::pose_layers` and `joint_overrides` are `shared_ptr`, not raw
+pointers into caller storage. Hand them `AnimStateMachine::shared_layers()`. The
+state machine can then be moved or relocated freely (a `std::vector` of them
+growing is fine), and if it is destroyed the character freezes in its last pose
+instead of reading freed memory.
+
 Do not store `handle.index` on its own and index `instances()` with it later.
 Iterating `instances()` directly is fine -- that is what the renderer does -- but
 a reference kept *across frames* has to be a handle.
@@ -211,6 +217,9 @@ correct ones — the symptom is a shadow that animates while the mesh does not.
 **Pipeline:** 6 new `PipelineId` variants: `TexturedOpaqueSkinned`, `TexturedCutoutSkinned`, `TexturedAlphaToCoverageSkinned`, `ShadowDepthSkinned`, `PointShadowDepth`, `PointShadowDepthSkinned` (IDs 5-10). Skinned main pipelines use separate VS SPIR-V (`triangle_skinned.spv`, `vertMainSkinned`) + reuse fragment shaders from `triangle.spv`. Skinned shadow uses dedicated `shadow_depth_skinned.spv` with 3-attr vertex input (pos + joints, no normal/color/tex). Point shadow uses `point_shadow.spv` (non-skinned + skinned variants, both VS + FS, multiview).
 
 **Descriptor layouts:** `material_skinned_layout_` (set 1: sampler b=0 + SSBO b=1) for main pass skinned; shadow skinned reuses same layout (dummy sampler at b=0, SSBO at b=1). Non-skinned uses `material_layout_` (set 1: sampler b=0 only). Zero overhead for non-skinned scenes — `build_skinned` flag gates skinned pipeline creation.
+
+**Ownership:** `AnimStateMachine` holds its pose stack in a `shared_ptr`; give
+`MeshInstance::pose_layers` the result of `shared_layers()`. Never `&layers()`.
 
 **Pose-layer stack (PREFERRED path):** `PoseLayer` (`animation_types.hpp`) = clip + internal A→B crossfade (`xfade_index/time/weight`) + compositing `weight` + optional bone `mask`. `evaluate_pose_layers()` composites an ordered stack per joint: layer 0 = full-body locomotion; higher layers = masked overrides (e.g. upper-body "hold weapon"), blended OVER via `blend_bone_trs(accum, sampled, weight)`. Set `MeshInstance::pose_layers` (non-null, non-empty) and `compute_joint_matrices_for_instance()` routes through the layer evaluator, ignoring all legacy blend/split fields. This is the Godot/Unity model: layers are additive-composite, never mutually-exclusive modes, and every layer crossfades its own transitions (no snapping). `AnimStateMachine` owns the stack (`layers()`), drives layer 0's crossfade, and exposes `add_override_layer()`, `set_override_clip()`, `set_override_weight()` (weight fades smoothly).
 

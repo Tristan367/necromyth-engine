@@ -276,7 +276,7 @@ inline void compute_joint_matrices_for_instance(
     return;
   }
   evaluate_pose_layers(skel, *instance.pose_layers, clips,
-                       instance.joint_overrides,
+                       instance.joint_overrides.get(),
                        out_joint_matrices, out_bone_worlds);
 }
 

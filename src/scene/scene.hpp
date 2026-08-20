@@ -233,8 +233,8 @@ public:
     instance->bone_attachments.shrink_to_fit();
     instance->cached_bone_worlds.clear();
     instance->cached_bone_worlds.shrink_to_fit();
-    instance->pose_layers = nullptr;
-    instance->joint_overrides = nullptr;
+    instance->pose_layers.reset();
+    instance->joint_overrides.reset();
     free_instance_slots_.push_back(handle.index);
   }
 
