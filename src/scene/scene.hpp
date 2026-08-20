@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/animation_types.hpp"
+#include "scene/bounds.hpp"
 #include "scene/camera.hpp"
 #include "scene/directional_light.hpp"
 #include "scene/shadow_utils.hpp"
@@ -16,6 +17,16 @@
 
 namespace engine {
 
+// One mesh slot. `revision` is bumped on every content change (create, update,
+// remove); the renderer stores the revision it last uploaded and re-uploads when
+// they differ, which makes add/update/remove a single uniform code path.
+struct MeshSlot {
+  MeshSource source;
+  AABB bounds{};
+  std::uint32_t revision{0};
+  bool alive{true};
+};
+
 class Scene {
 public:
   [[nodiscard]] auto camera() -> Camera & {
@@ -26,8 +37,17 @@ public:
     return camera_;
   }
 
-  [[nodiscard]] auto meshes() const -> const std::vector<MeshSource> & {
+  [[nodiscard]] auto meshes() const -> const std::vector<MeshSlot> & {
     return meshes_;
+  }
+
+  [[nodiscard]] auto mesh_alive(std::uint32_t index) const -> bool {
+    return index < meshes_.size() && meshes_[index].alive;
+  }
+
+  [[nodiscard]] auto mesh_bounds(std::uint32_t index) const -> const AABB & {
+    static const AABB k_empty{};
+    return index < meshes_.size() ? meshes_[index].bounds : k_empty;
   }
 
   [[nodiscard]] auto instances() const -> const std::vector<MeshInstance> & {
@@ -86,12 +106,60 @@ public:
   }
 
   [[nodiscard]] auto instance_count() const -> std::size_t { return instances_.size(); }
+  // Slot capacity, including free slots -- not the number of live meshes.
   [[nodiscard]] auto mesh_count() const -> std::size_t { return meshes_.size(); }
+  [[nodiscard]] auto live_mesh_count() const -> std::size_t {
+    return meshes_.size() - free_mesh_slots_.size();
+  }
 
+  // Mesh slots are stable: MeshInstance::mesh_index refers to a slot, not a
+  // position, so removal frees the slot for reuse rather than compacting the
+  // vector. A streaming world recycles a bounded pool of slots this way instead
+  // of growing one forever.
   [[nodiscard]] auto add_mesh(MeshSource mesh) -> std::uint32_t {
+    if (!free_mesh_slots_.empty()) {
+      const std::uint32_t index = free_mesh_slots_.back();
+      free_mesh_slots_.pop_back();
+      MeshSlot &slot = meshes_[index];
+      slot.bounds = compute_bounds(mesh);
+      slot.source = std::move(mesh);
+      slot.alive = true;
+      ++slot.revision;
+      return index;
+    }
+
     const std::uint32_t index = static_cast<std::uint32_t>(meshes_.size());
-    meshes_.push_back(std::move(mesh));
+    MeshSlot slot;
+    slot.bounds = compute_bounds(mesh);
+    slot.source = std::move(mesh);
+    slot.revision = 1;
+    meshes_.push_back(std::move(slot));
     return index;
+  }
+
+  // Replace a slot's geometry in place, keeping its index valid. This is the
+  // remesh path -- an edited or LOD-swapped chunk keeps its instances.
+  void update_mesh(std::uint32_t index, MeshSource mesh) {
+    if (index >= meshes_.size())
+      return;
+    MeshSlot &slot = meshes_[index];
+    slot.bounds = compute_bounds(mesh);
+    slot.source = std::move(mesh);
+    slot.alive = true;
+    ++slot.revision;
+  }
+
+  // Frees the slot and drops the CPU-side geometry. The renderer reclaims the
+  // GPU buffers once no in-flight frame can still reference them.
+  void remove_mesh(std::uint32_t index) {
+    if (index >= meshes_.size() || !meshes_[index].alive)
+      return;
+    MeshSlot &slot = meshes_[index];
+    slot.source = {};
+    slot.bounds = {};
+    slot.alive = false;
+    ++slot.revision;
+    free_mesh_slots_.push_back(index);
   }
 
   [[nodiscard]] auto add_texture(std::string path) -> std::uint32_t {
@@ -176,7 +244,8 @@ private:
   Camera camera_;
   DirectionalLight directional_light_{};
   DirectionalLightShadowSettings shadow_settings_{};
-  std::vector<MeshSource> meshes_;
+  std::vector<MeshSlot> meshes_;
+  std::vector<std::uint32_t> free_mesh_slots_;
   std::vector<std::string> texture_paths_;
   std::unordered_map<std::string, std::uint32_t> texture_path_index_;
   std::vector<std::string> texture_array_layer_paths_;

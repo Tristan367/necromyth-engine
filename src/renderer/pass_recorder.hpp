@@ -6,7 +6,7 @@
 #include "renderer/frustum.hpp"
 #include "renderer/image_barrier.hpp"
 #include "renderer/light_buffer.hpp"
-#include "renderer/mesh_gpu.hpp"
+#include "renderer/scene_gpu.hpp"
 #include "renderer/msaa_color_image.hpp"
 #include "renderer/pipeline_id.hpp"
 #include "renderer/pipeline_registry.hpp"
@@ -76,19 +76,6 @@ struct DrawBindState {
   std::uint32_t frame_index{};
 };
 
-// Returns true if the mesh's world-space bounding sphere intersects the light's range sphere.
-[[nodiscard]] inline auto sphere_intersects_light(const AABB &bounds, const glm::mat4 &model,
-                                                   glm::vec3 light_pos,
-                                                   float light_range) -> bool {
-  const float s0 = glm::length(glm::vec3(model[0]));
-  const float s1 = glm::length(glm::vec3(model[1]));
-  const float s2 = glm::length(glm::vec3(model[2]));
-  const float max_scale = std::max({s0, s1, s2});
-  const glm::vec3 world_center = glm::vec3(model * glm::vec4(bounds.center(), 1.0F));
-  const float r_sum = bounds.radius() * max_scale + light_range;
-  return glm::dot(world_center - light_pos, world_center - light_pos) <= r_sum * r_sum;
-}
-
 struct PassRecorder {
   const PipelineRegistry &pipelines;
   const DescriptorResources &descriptors;
@@ -98,7 +85,7 @@ struct PassRecorder {
   const ShadowMap &shadow_map;
   const TextureTable &texture_table;
   const TextureArray &texture_array;
-  const std::vector<MeshGpu> &mesh_gpus;
+  const std::vector<MeshGpuSlot> &mesh_gpus;
   bool msaa_enabled{};
   std::uint32_t shadow_cascade_count{1};
   vk::Extent2D render_extent{};
@@ -129,6 +116,26 @@ struct PassRecorder {
   // A zero radius means the draw opted out of culling (skinned meshes animate
   // outside their bind-pose bounds; background geometry ignores the camera
   // translation entirely).
+  // Null when the slot is out of range or holds no live geometry (a chunk that
+  // streamed out this frame, whose instances have not been retired yet).
+  [[nodiscard]] auto mesh_for(std::uint32_t mesh_index) const -> const MeshGpu * {
+    if (mesh_index >= mesh_gpus.size() || !mesh_gpus[mesh_index].alive)
+      return nullptr;
+    return &mesh_gpus[mesh_index].gpu;
+  }
+
+  // Conservative light-volume test on the draw's precomputed world sphere. A
+  // zero radius means bounds are unknown (skinned or background geometry), which
+  // must keep the draw rather than drop it.
+  [[nodiscard]] static auto affected_by_light(const DrawCommand &draw, const glm::vec3 &light_pos,
+                                              float light_range) -> bool {
+    if (draw.world_bounds.radius <= 0.0F)
+      return true;
+    const glm::vec3 delta = draw.world_bounds.center - light_pos;
+    const float reach = draw.world_bounds.radius + light_range;
+    return glm::dot(delta, delta) <= reach * reach;
+  }
+
   [[nodiscard]] static auto is_visible(const DrawCommand &draw, const Frustum &cull) -> bool {
     return draw.world_bounds.radius <= 0.0F || cull.intersects(draw.world_bounds);
   }
@@ -148,11 +155,11 @@ struct PassRecorder {
     return 0;
   }
 
-  void bind_mesh_buffers(vk::raii::CommandBuffer &command_buffer, std::uint32_t mesh_index, DrawBindState &state) const {
+  void bind_mesh_buffers(vk::raii::CommandBuffer &command_buffer, const MeshGpu &mesh,
+                         std::uint32_t mesh_index, DrawBindState &state) const {
     if (state.mesh_index == mesh_index)
       return;
 
-    const MeshGpu &mesh = mesh_gpus[mesh_index];
     const vk::Buffer vertex_buffers[] = {mesh.vertex_buffer()};
     const vk::DeviceSize offsets[] = {0};
     command_buffer.bindVertexBuffers(0, vertex_buffers, offsets);
@@ -220,7 +227,8 @@ struct PassRecorder {
        DrawBindState &state,
        const Frustum *cull,
        std::uint32_t point_light_index = 0) const {
-    if (draw.mesh_index >= mesh_gpus.size())
+    const MeshGpu *mesh = mesh_for(draw.mesh_index);
+    if (mesh == nullptr)
       return;
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
@@ -251,7 +259,7 @@ struct PassRecorder {
           nullptr);
     }
 
-    bind_mesh_buffers(command_buffer, draw.mesh_index, state);
+    bind_mesh_buffers(command_buffer, *mesh, draw.mesh_index, state);
 
     const TexturedPushConstants push_constants{
         .model = draw.model,
@@ -265,15 +273,15 @@ struct PassRecorder {
         sizeof(TexturedPushConstants),
         &push_constants);
 
-    const MeshGpu &mesh = mesh_gpus[draw.mesh_index];
-    command_buffer.drawIndexed(mesh.index_count(), 1, 0, 0, 0);
+    command_buffer.drawIndexed(mesh->index_count(), 1, 0, 0, 0);
   }
 
   void draw_mesh(
       vk::raii::CommandBuffer &command_buffer,
       const DrawCommand &draw,
       DrawBindState &state) const {
-    if (draw.mesh_index >= mesh_gpus.size())
+    const MeshGpu *mesh = mesh_for(draw.mesh_index);
+    if (mesh == nullptr)
       return;
 
     bind_pipeline(command_buffer, draw.pipeline, state);
@@ -305,10 +313,8 @@ struct PassRecorder {
           &push_constants);
     }
 
-    bind_mesh_buffers(command_buffer, draw.mesh_index, state);
-
-    const MeshGpu &mesh = mesh_gpus[draw.mesh_index];
-    command_buffer.drawIndexed(mesh.index_count(), 1, 0, 0, 0);
+    bind_mesh_buffers(command_buffer, *mesh, draw.mesh_index, state);
+    command_buffer.drawIndexed(mesh->index_count(), 1, 0, 0, 0);
   }
 
   void transition_swapchain_to_color_attachment(
@@ -815,9 +821,7 @@ struct PassRecorder {
       const glm::mat4 spot_vp = LightStorageBuffer::compute_shadow_view_proj(sl);
       const Frustum spot_cull = Frustum::from_view_proj(spot_vp);
       for (const DrawCommand &draw : draw_list) {
-        if (draw.mesh_index >= mesh_gpus.size()) continue;
-        const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
-        if (!sphere_intersects_light(bounds, draw.model, sl.position, sl.range)) continue;
+        if (!affected_by_light(draw, sl.position, sl.range)) continue;
         draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, spot_vp, bind_state, &spot_cull);
       }
 
@@ -898,8 +902,7 @@ struct PassRecorder {
       command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
       for (const DrawCommand &draw : draw_list) {
-        if (draw.mesh_index >= mesh_gpus.size()) continue;
-        if (!sphere_intersects_light(mesh_gpus[draw.mesh_index].bounds(), draw.model, pl.position, pl.range)) continue;
+        if (!affected_by_light(draw, pl.position, pl.range)) continue;
         draw_shadow_mesh(command_buffer, draw, 10, frame_index, glm::mat4(1.0F), bind_state, nullptr, si);
       }
 

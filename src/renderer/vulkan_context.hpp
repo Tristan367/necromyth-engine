@@ -5,6 +5,7 @@
 #include "renderer/light_buffer.hpp"
 #include "renderer/frame_overlay.hpp"
 #include "renderer/render_host.hpp"
+#include "renderer/deferred_delete.hpp"
 #include "renderer/depth_image.hpp"
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
@@ -77,13 +78,7 @@ public:
     create_point_light_shadow_ssbo(config.max_point_shadow_lights);
     particle_system_.create(device_.physical_device(), device_.device(), config.max_particles, 2);
     create_command_pool();
-    engine::upload_scene_meshes(
-        scene,
-        device_.physical_device(),
-        device_.device(),
-        command_pool_,
-        device_.graphics_queue(),
-        mesh_gpus_);
+    sync_mesh_slots(scene);
     engine::load_scene_textures(
         scene,
         device_.physical_device(),
@@ -157,6 +152,7 @@ public:
     }
 
     device_.wait_idle();
+    retired_meshes_.clear();
     gpu_shutdown_complete_ = true;
   }
 
@@ -207,30 +203,25 @@ public:
     if (gpu_shutdown_complete_)
       return;
 
-    // Every branch below destroys GPU objects that in-flight frames may still
-    // reference, so a full idle is required — but only when there is actually
-    // work to do. Games call sync_scene every frame; stalling the GPU on a
-    // no-op sync costs more than everything else in the frame combined.
-    const bool meshes_added = scene.meshes().size() > mesh_gpus_.size();
+    // Mesh slots first. Mesh buffers are bound directly (bindVertexBuffers), not
+    // through a descriptor set, so creating, remeshing and dropping geometry
+    // needs no descriptor rebuild and no device stall -- superseded buffers are
+    // retired and freed a few frames later instead. This is the path a
+    // streaming world hits every frame.
+    retired_meshes_.collect(frame_counter_, detail::max_frames_in_flight);
+    sync_mesh_slots(scene);
+
+    // Textures and bone buffers do live in descriptor sets, so changing them
+    // means rewriting sets that in-flight frames are reading. Those still need
+    // an idle -- but they are rare, and no longer dragged in by mesh churn.
     const bool textures_added = scene.texture_paths().size() > texture_table_.count();
     const bool bone_buffers_stale =
         count_skinned_instances(scene.instances(), scene) != static_cast<std::uint32_t>(bone_buffers_.size());
 
-    if (!meshes_added && !textures_added && !bone_buffers_stale)
+    if (!textures_added && !bone_buffers_stale)
       return;
 
     device_.wait_idle();
-
-    for (std::size_t mesh_index = mesh_gpus_.size(); mesh_index < scene.meshes().size(); ++mesh_index) {
-      MeshGpu gpu{};
-      gpu.upload(
-          device_.physical_device(),
-          device_.device(),
-          command_pool_,
-          device_.graphics_queue(),
-          scene.meshes()[mesh_index]);
-      mesh_gpus_.push_back(std::move(gpu));
-    }
 
     bool descriptors_changed = false;
 
@@ -396,7 +387,7 @@ public:
     }
 
     render_stats_.reset();
-    build_draw_list(scene, mesh_gpus_, draw_list_);
+    build_draw_list(scene, draw_list_);
     build_shadow_draw_list(draw_list_, shadow_draw_list_);
 
     auto &command_buffer = command_buffers_[frame_index_];
@@ -495,6 +486,7 @@ public:
       throw std::runtime_error("Failed to present swapchain image");
 
     frame_index_ = (frame_index_ + 1) % detail::max_frames_in_flight;
+    ++frame_counter_;
   }
 
 private:
@@ -533,6 +525,17 @@ private:
       };
       device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
     } catch (...) { /* device lost — no recovery */ }
+  }
+
+  void sync_mesh_slots(const Scene &scene) {
+    engine::sync_scene_meshes(
+        scene,
+        device_.physical_device(),
+        device_.device(),
+        command_pool_,
+        device_.graphics_queue(),
+        mesh_gpus_,
+        [this](MeshGpu retired) { retired_meshes_.retire(std::move(retired), frame_counter_); });
   }
 
   void create_pipeline_cache() {
@@ -1063,7 +1066,11 @@ private:
   ParticleSystem particle_system_;
   TextureTable texture_table_;
   TextureArray texture_array_;
-  std::vector<MeshGpu> mesh_gpus_;
+  std::vector<MeshGpuSlot> mesh_gpus_;
+  DeferredDelete<MeshGpu> retired_meshes_;
+  // Monotonic frame number, for deciding when retired GPU resources are safe
+  // to free. Distinct from frame_index_, which cycles 0..max_frames_in_flight-1.
+  std::uint64_t frame_counter_{0};
   UniformBufferSet uniform_buffers_;
   DescriptorResources descriptor_resources_;
   PipelineRegistry pipelines_;

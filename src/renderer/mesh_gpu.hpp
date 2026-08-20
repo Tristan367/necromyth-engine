@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/buffer.hpp"
+#include "scene/bounds.hpp"
 #include "scene/mesh_source.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -15,19 +16,6 @@
 
 namespace engine {
 
-struct AABB {
-  glm::vec3 min{std::numeric_limits<float>::max()};
-  glm::vec3 max{-std::numeric_limits<float>::max()};
-
-  void extend(const glm::vec3 &p) {
-    min = glm::min(min, p);
-    max = glm::max(max, p);
-  }
-
-  [[nodiscard]] auto center() const -> glm::vec3 { return (min + max) * 0.5F; }
-  [[nodiscard]] auto radius() const -> float { return glm::distance(min, max) * 0.5F; }
-};
-
 class MeshGpu {
 public:
   void upload(
@@ -35,10 +23,10 @@ public:
       vk::raii::Device &device,
       vk::raii::CommandPool &command_pool,
       vk::raii::Queue &queue,
-      const MeshSource &mesh) {
+      const MeshSource &mesh,
+      const AABB &bounds) {
     index_count_ = static_cast<std::uint32_t>(mesh.indices.size());
-    for (const MeshVertex &v : mesh.vertices)
-      bounds_.extend(glm::vec3(v.pos[0], v.pos[1], v.pos[2]));
+    bounds_ = bounds;
     vertex_buffer_.upload(
         physical_device,
         device,

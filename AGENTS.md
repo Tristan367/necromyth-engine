@@ -22,6 +22,48 @@ picked up automatically (CONFIGURE_DEPENDS glob); keep it self-contained.
 A GPU-side change still needs `cd ../necromyth-engine-demo && make debug` and an
 actual run with validation layers on.
 
+## Scaling rule: the demo is not the workload
+
+The demo builds its scene once at startup, gives every skinned instance a pose
+stack, and never removes anything. The target game is a streaming voxel world
+(8-chunk render distance, ~289 chunk meshes plus LOD tiers, continuous remeshing,
+hordes of skinned characters, dimension swaps that replace the whole world).
+
+Two silent skinning bugs and a per-frame GPU stall lived here for a long time
+purely because the demo never exercised the paths the game will. When adding a
+feature, size it for the game: many instances, continuous churn, and removal --
+not for the one-of-each case the demo happens to show.
+
+## Mesh streaming
+
+`Scene` mesh storage is slot-based, not append-only:
+
+| | |
+|---|---|
+| `add_mesh` | takes a free slot if there is one, otherwise grows |
+| `update_mesh` | replaces geometry in place, index stays valid (remesh / LOD swap) |
+| `remove_mesh` | frees the slot for reuse, drops the CPU geometry |
+
+Each slot carries a `revision`, bumped on every content change. The renderer
+records the revision it last uploaded and re-uploads on mismatch, so create,
+update and remove are one uniform path (`sync_scene_meshes`).
+
+**Mesh changes must not stall the GPU.** Mesh buffers are bound directly
+(`bindVertexBuffers`), never through a descriptor set, so changing geometry needs
+no descriptor rebuild and no `wait_idle`. Superseded buffers go to
+`DeferredDelete` and are freed once every in-flight frame has cycled past them.
+Only texture and bone-buffer changes -- which do rewrite descriptor sets -- still
+take an idle, and those are rare.
+
+`tests/stress_mesh_streaming.cpp` is the GPU-side check: it churns slots for
+hundreds of frames under the validation layers and asserts slot capacity tracks
+the working set rather than total churn. It needs a GPU and a display, so it is
+built but not run by `ctest`:
+
+```bash
+VCE_STRESS_TEXTURE=path/to/any.png ./build/vce_stress_mesh_streaming 600
+```
+
 ## The bone-slot invariant (read before touching skinning)
 
 Four separate sequential walks over `Scene::instances()` must produce the *same*

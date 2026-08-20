@@ -1,7 +1,6 @@
 #pragma once
 
 #include "renderer/frustum.hpp"
-#include "renderer/mesh_gpu.hpp"
 #include "renderer/pipeline_id.hpp"
 #include "scene/mesh_instance.hpp"
 #include "scene/scene.hpp"
@@ -9,7 +8,6 @@
 #include <glm/mat4x4.hpp>
 
 #include <algorithm>
-#include <span>
 #include <vector>
 
 namespace engine {
@@ -45,14 +43,17 @@ struct DrawCommand {
   };
 }
 
-inline void build_draw_list(const Scene &scene, std::span<const MeshGpu> mesh_gpus,
-                            std::vector<DrawCommand> &out) {
+inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
   out.clear();
   out.reserve(scene.instances().size());
 
   std::uint32_t bone_instance_count = 0;
   for (const MeshInstance &instance : scene.instances()) {
     if (!instance.alive) continue;
+    // An instance left pointing at a freed mesh slot (a chunk that streamed out
+    // before its instances were retired) draws nothing rather than reading a
+    // recycled or destroyed buffer.
+    if (!scene.mesh_alive(instance.mesh_index)) continue;
 
     // Must match every other bone-slot walker exactly — see instance_uses_skinning().
     const bool has_valid_skin = instance_uses_skinning(instance, scene);
@@ -67,9 +68,11 @@ inline void build_draw_list(const Scene &scene, std::span<const MeshGpu> mesh_gp
     // than pop limbs at the screen edge. Background geometry is never culled
     // either -- the sky is drawn with a translation-free view matrix.
     BoundingSphere world_bounds{};
-    if (!has_valid_skin && instance.layer != RenderLayer::Background &&
-        instance.mesh_index < mesh_gpus.size())
-      world_bounds = world_bounding_sphere(mesh_gpus[instance.mesh_index].bounds(), instance.model);
+    if (!has_valid_skin && instance.layer != RenderLayer::Background) {
+      const AABB &bounds = scene.mesh_bounds(instance.mesh_index);
+      if (!bounds.empty())
+        world_bounds = world_bounding_sphere(bounds, instance.model);
+    }
 
     out.push_back({
         .mesh_index = instance.mesh_index,

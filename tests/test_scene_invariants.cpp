@@ -4,6 +4,7 @@
 // predicates agreeing with each other, and that failed silently (wrong pose on
 // the wrong model, a light that would not turn off) rather than crashing.
 
+#include "renderer/deferred_delete.hpp"
 #include "renderer/draw_list.hpp"
 #include "renderer/frustum.hpp"
 #include "scene/camera.hpp"
@@ -82,7 +83,7 @@ void test_bone_slot_indices_are_dense_and_ordered() {
   scene.remove_instance(inst_dead);
 
   std::vector<engine::DrawCommand> draws;
-  engine::build_draw_list(scene, {}, draws);
+  engine::build_draw_list(scene, draws);
 
   // Expectation computed independently of build_draw_list.
   std::uint32_t expected_slots = 0;
@@ -152,7 +153,7 @@ void test_same_texture_skinned_instances_stay_distinct() {
   }
 
   std::vector<engine::DrawCommand> draws;
-  engine::build_draw_list(scene, {}, draws);
+  engine::build_draw_list(scene, draws);
 
   check(draws.size() == k_horde, "every instance of the horde is drawn");
 
@@ -218,7 +219,7 @@ void test_draw_list_layer_and_shadow_partition() {
   (void)scene.add_instance(make_instance(engine::k_invalid_skin_index));
 
   std::vector<engine::DrawCommand> draws;
-  engine::build_draw_list(scene, {}, draws);
+  engine::build_draw_list(scene, draws);
 
   std::vector<engine::DrawCommand> shadow_draws;
   engine::build_shadow_draw_list(draws, shadow_draws);
@@ -288,7 +289,7 @@ void test_cull_opt_out_is_respected() {
   scene.instance(skinned).pose_layers = &layers;
 
   std::vector<engine::DrawCommand> draws;
-  engine::build_draw_list(scene, {}, draws);
+  engine::build_draw_list(scene, draws);
 
   bool all_opted_out = true;
   for (const engine::DrawCommand &draw : draws)
@@ -296,6 +297,109 @@ void test_cull_opt_out_is_respected() {
       all_opted_out = false;
   check(all_opted_out,
         "skinned and background draws carry radius 0 (never culled)");
+}
+
+
+[[nodiscard]] auto make_mesh(float extent) -> engine::MeshSource {
+  engine::MeshSource mesh;
+  for (int i = 0; i < 2; ++i) {
+    engine::MeshVertex v{};
+    const float sign = i == 0 ? -1.0F : 1.0F;
+    v.pos[0] = sign * extent;
+    v.pos[1] = sign * extent;
+    v.pos[2] = sign * extent;
+    mesh.vertices.push_back(v);
+  }
+  mesh.indices = {0, 1, 0};
+  return mesh;
+}
+
+// Mesh slot lifecycle. A streaming world creates, remeshes and drops geometry
+// continuously, so slots must be reusable and indices must stay stable -- an
+// instance holds a slot index, not a position.
+void test_mesh_slot_lifecycle() {
+  std::printf("mesh slot lifecycle\n");
+
+  engine::Scene scene;
+  const std::uint32_t a = scene.add_mesh(make_mesh(1.0F));
+  const std::uint32_t b = scene.add_mesh(make_mesh(2.0F));
+
+  check(a != b, "distinct meshes get distinct slots");
+  check(scene.live_mesh_count() == 2, "two live meshes");
+  check(scene.mesh_alive(a) && scene.mesh_alive(b), "both slots alive");
+
+  const std::uint32_t rev_before = scene.meshes()[a].revision;
+  scene.update_mesh(a, make_mesh(8.0F));
+  check(scene.meshes()[a].revision != rev_before,
+        "update_mesh bumps the revision so the renderer re-uploads");
+  check(scene.mesh_bounds(a).max.x == 8.0F, "update_mesh recomputes bounds");
+
+  scene.remove_mesh(a);
+  check(!scene.mesh_alive(a), "removed slot is not alive");
+  check(scene.live_mesh_count() == 1, "live count drops");
+  check(scene.mesh_bounds(a).empty(), "removed slot has no bounds");
+
+  const std::uint32_t recycled = scene.add_mesh(make_mesh(3.0F));
+  check(recycled == a, "a freed slot is reused instead of growing the vector");
+  check(scene.mesh_count() == 2, "slot capacity did not grow");
+  check(scene.mesh_alive(recycled), "recycled slot is alive again");
+
+  // Removing twice must not push the slot onto the free list twice, or two
+  // different meshes would later be handed the same index.
+  scene.remove_mesh(recycled);
+  scene.remove_mesh(recycled);
+  const std::uint32_t x = scene.add_mesh(make_mesh(1.0F));
+  const std::uint32_t y = scene.add_mesh(make_mesh(1.0F));
+  check(x != y, "double remove does not hand the same slot out twice");
+}
+
+// An instance left pointing at a freed slot must draw nothing: the slot may
+// already hold different geometry, or none.
+void test_instances_of_removed_meshes_do_not_draw() {
+  std::printf("instances of removed meshes\n");
+
+  engine::Scene scene;
+  const std::uint32_t mesh = scene.add_mesh(make_mesh(1.0F));
+  engine::MeshInstance instance = make_instance(engine::k_invalid_skin_index);
+  instance.mesh_index = mesh;
+  (void)scene.add_instance(instance);
+
+  std::vector<engine::DrawCommand> draws;
+  engine::build_draw_list(scene, draws);
+  check(draws.size() == 1, "instance draws while its mesh is alive");
+
+  scene.remove_mesh(mesh);
+  engine::build_draw_list(scene, draws);
+  check(draws.empty(), "instance draws nothing once its mesh slot is freed");
+}
+
+// Deferred deletion timing. Freeing too early lets the GPU read destroyed
+// buffers; never freeing is a leak. Both are silent.
+void test_deferred_delete_holds_for_frames_in_flight() {
+  std::printf("deferred delete\n");
+
+  constexpr std::uint32_t k_frames_in_flight = 2;
+  engine::DeferredDelete<int> queue;
+
+  queue.retire(1, /*current_frame=*/10);
+  check(queue.pending_count() == 1, "retired resource is held");
+
+  queue.collect(10, k_frames_in_flight);
+  check(queue.pending_count() == 1, "not freed on the frame it was retired");
+
+  queue.collect(12, k_frames_in_flight);
+  check(queue.pending_count() == 1,
+        "still held while a frame in flight could reference it");
+
+  queue.collect(13, k_frames_in_flight);
+  check(queue.pending_count() == 0,
+        "freed once every in-flight frame has cycled past");
+
+  // Early frames must not underflow the frame arithmetic into freeing at once.
+  engine::DeferredDelete<int> early;
+  early.retire(1, 0);
+  early.collect(1, k_frames_in_flight);
+  check(early.pending_count() == 1, "no underflow during the first frames");
 }
 
 } // namespace
@@ -307,6 +411,9 @@ auto main() -> int {
   test_draw_list_layer_and_shadow_partition();
   test_frustum_culls_behind_not_in_front();
   test_cull_opt_out_is_respected();
+  test_mesh_slot_lifecycle();
+  test_instances_of_removed_meshes_do_not_draw();
+  test_deferred_delete_holds_for_frames_in_flight();
 
   if (g_failures != 0) {
     std::printf("\n%d check(s) failed\n", g_failures);

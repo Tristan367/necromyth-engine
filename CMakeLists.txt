@@ -412,4 +412,14 @@ if(VCE_BUILD_TESTS)
         target_compile_options(vce_tests PRIVATE -Wno-missing-field-initializers)
     endif()
     add_test(NAME scene_invariants COMMAND vce_tests)
+
+    # GPU stress test: needs a device and a display, so it is built but never
+    # run by ctest. Exercises mesh streaming (create / remesh / drop under
+    # frames in flight) against the validation layers, which is the only way to
+    # catch a buffer freed while still referenced.
+    add_executable(vce_stress_mesh_streaming tests/stress_mesh_streaming.cpp)
+    target_link_libraries(vce_stress_mesh_streaming PRIVATE vce_renderer)
+    if(NOT MSVC)
+        target_compile_options(vce_stress_mesh_streaming PRIVATE -Wno-missing-field-initializers)
+    endif()
 endif()
