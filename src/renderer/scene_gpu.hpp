@@ -35,8 +35,7 @@ auto sync_scene_meshes(
     const Scene &scene,
     const vk::raii::PhysicalDevice &physical_device,
     vk::raii::Device &device,
-    vk::raii::CommandPool &command_pool,
-    vk::raii::Queue &graphics_queue,
+    UploadQueue &uploads,
     std::vector<MeshGpuSlot> &slots,
     RetireFn &&retire) -> std::size_t {
   if (slots.size() < scene.meshes().size())
@@ -54,8 +53,11 @@ auto sync_scene_meshes(
     slot.gpu = MeshGpu{};
 
     if (source.alive) {
-      slot.gpu.upload(physical_device, device, command_pool, graphics_queue,
-                      source.source, source.bounds);
+      if (!slot.gpu.upload(physical_device, device, uploads, source.source, source.bounds)) {
+        // Staging is full for this frame. Leave the revision unmarked so this
+        // slot is retried next frame rather than drawn half-uploaded.
+        continue;
+      }
     }
     slot.revision = source.revision;
     slot.alive = source.alive;

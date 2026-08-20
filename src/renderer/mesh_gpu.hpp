@@ -18,31 +18,32 @@ namespace engine {
 
 class MeshGpu {
 public:
-  void upload(
+  // Queues both buffers for upload without blocking. The copies are replayed
+  // into the frame's command buffer, so a streaming world pays no GPU round trip
+  // per mesh.
+  auto upload(
       const vk::raii::PhysicalDevice &physical_device,
       vk::raii::Device &device,
-      vk::raii::CommandPool &command_pool,
-      vk::raii::Queue &queue,
+      UploadQueue &uploads,
       const MeshSource &mesh,
-      const AABB &bounds) {
+      const AABB &bounds) -> bool {
     index_count_ = static_cast<std::uint32_t>(mesh.indices.size());
     bounds_ = bounds;
-    vertex_buffer_.upload(
+    const bool vertices_staged = vertex_buffer_.upload_deferred(
         physical_device,
         device,
-        command_pool,
-        queue,
+        uploads,
         static_cast<vk::DeviceSize>(sizeof(MeshVertex) * mesh.vertices.size()),
         vk::BufferUsageFlagBits::eVertexBuffer,
         mesh.vertices.data());
-    index_buffer_.upload(
+    const bool indices_staged = index_buffer_.upload_deferred(
         physical_device,
         device,
-        command_pool,
-        queue,
+        uploads,
         static_cast<vk::DeviceSize>(sizeof(std::uint32_t) * mesh.indices.size()),
         vk::BufferUsageFlagBits::eIndexBuffer,
         mesh.indices.data());
+    return vertices_staged && indices_staged;
   }
 
   [[nodiscard]] auto index_count() const -> std::uint32_t {

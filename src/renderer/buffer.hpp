@@ -1,5 +1,8 @@
 #pragma once
 
+#include "renderer/device_memory.hpp"
+#include "renderer/upload_queue.hpp"
+
 #include <vulkan/vulkan_raii.hpp>
 
 #include <cstdint>
@@ -10,19 +13,6 @@
 namespace engine {
 
 namespace detail {
-
-[[nodiscard]] inline auto find_memory_type(
-    vk::PhysicalDeviceMemoryProperties memory_properties,
-    std::uint32_t type_filter,
-    vk::MemoryPropertyFlags properties) -> std::uint32_t {
-  for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-    if ((type_filter & (1U << i)) &&
-        (memory_properties.memoryTypes[i].propertyFlags & properties) == properties)
-      return i;
-  }
-
-  throw std::runtime_error("Failed to find suitable memory type for buffer");
-}
 
 [[nodiscard]] inline auto create_mipmapped_sampler(
     const vk::raii::Device &device,
@@ -136,6 +126,44 @@ public:
 
     buffer_.bindMemory(*memory_, 0);
     detail::copy_buffer(device, command_pool, queue, *staging_buffer, *buffer_, size);
+  }
+
+  // Allocates the device buffer and queues the copy, without waiting. The
+  // caller flushes the queue into the frame's command buffer. This is the path
+  // streaming geometry must use -- the blocking upload() above costs a GPU
+  // round trip per buffer, which is a dropped frame once chunks arrive
+  // continuously.
+  // Returns false when the frame's staging segment is full. The caller should
+  // leave the slot unmarked so it retries next frame -- back-pressure rather
+  // than either a stall or a buffer full of nothing.
+  auto upload_deferred(
+      const vk::raii::PhysicalDevice &physical_device,
+      vk::raii::Device &device,
+      UploadQueue &uploads,
+      vk::DeviceSize size,
+      vk::BufferUsageFlags usage,
+      const void *data) -> bool {
+    if (size == 0)
+      return true;
+
+    buffer_ = vk::raii::Buffer(device, vk::BufferCreateInfo{
+        .size = size,
+        .usage = usage | vk::BufferUsageFlagBits::eTransferDst,
+        .sharingMode = vk::SharingMode::eExclusive,
+    });
+    const vk::MemoryRequirements requirements = buffer_.getMemoryRequirements();
+    memory_ = vk::raii::DeviceMemory{
+        device,
+        vk::MemoryAllocateInfo{
+            .allocationSize = requirements.size,
+            .memoryTypeIndex = detail::find_memory_type(
+                physical_device.getMemoryProperties(),
+                requirements.memoryTypeBits,
+                vk::MemoryPropertyFlagBits::eDeviceLocal),
+        }};
+    buffer_.bindMemory(*memory_, 0);
+
+    return uploads.stage(*buffer_, size, data);
   }
 
   [[nodiscard]] auto handle() const -> vk::Buffer {

@@ -25,6 +25,7 @@
 #include "renderer/particle_system.hpp"
 #include "renderer/texture_table.hpp"
 #include "renderer/uniform_buffer.hpp"
+#include "renderer/upload_queue.hpp"
 #include "renderer/mesh_gpu.hpp"
 #include "renderer/vulkan_device.hpp"
 #include "scene/animation_utils.hpp"
@@ -84,6 +85,8 @@ public:
                          config.max_point_shadow_lights);
     create_point_light_shadow_ssbo(config.max_point_shadow_lights);
     particle_system_.create(device_.physical_device(), device_.device(), config.max_particles, 2);
+    upload_queue_.create(device_.physical_device(), device_.device(),
+                         config.staging_bytes_per_frame, detail::max_frames_in_flight);
     instance_buffer_.create(device_.physical_device(), device_.device(),
                             std::max(config.max_draw_instances, 1U), detail::max_frames_in_flight);
     max_skinned_instances_ = std::max(config.max_skinned_instances, 1U);
@@ -266,6 +269,7 @@ public:
       return;
 
     const ScopedCpuZone cpu_zone(cpu_profiler_, CpuZone::SyncScene);
+    upload_queue_.begin_frame(frame_counter_, frame_index_);
 
     // Mesh slots first. Mesh buffers are bound directly (bindVertexBuffers), not
     // through a descriptor set, so creating, remeshing and dropping geometry
@@ -493,8 +497,13 @@ public:
     cpu_profiler_.begin(CpuZone::RecordCommands);
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
+    upload_queue_.begin_frame(frame_counter_, frame_index_);
     command_buffer.begin({});
     gpu_profiler_.begin_frame(command_buffer, frame_index_);
+    // Geometry uploaded since the last frame is copied here, before anything
+    // draws it. Same command buffer, so ordering needs no semaphore -- just the
+    // one barrier flush() records.
+    upload_queue_.flush(command_buffer);
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, shadow_draw_list_,
                                          cascades.light_view_proj);
 
@@ -575,6 +584,8 @@ public:
     device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
     submit_guard.submitted = true;
     gpu_profiler_.mark_frame_recorded(frame_index_);
+
+
 
     const vk::PresentInfoKHR present_info{
         .waitSemaphoreCount = 1,
@@ -680,8 +691,7 @@ private:
         scene,
         device_.physical_device(),
         device_.device(),
-        command_pool_,
-        device_.graphics_queue(),
+        upload_queue_,
         mesh_gpus_,
         [this](MeshGpu retired) { retired_meshes_.retire(std::move(retired), frame_counter_); });
   }
@@ -1228,6 +1238,7 @@ private:
   bool skinned_pipelines_built_{false};
   std::vector<MeshGpuSlot> mesh_gpus_;
   DeferredDelete<MeshGpu> retired_meshes_;
+  UploadQueue upload_queue_;
   // Monotonic frame number, for deciding when retired GPU resources are safe
   // to free. Distinct from frame_index_, which cycles 0..max_frames_in_flight-1.
   std::uint64_t frame_counter_{0};

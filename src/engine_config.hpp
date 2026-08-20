@@ -31,6 +31,10 @@ struct EngineConfig {
   // Per-draw instance records per frame, across the main and shadow lists. One
   // 80-byte record per draw; 65536 is 5 MB per frame in flight.
   std::uint32_t max_draw_instances{65536};
+  // Staging ring size per frame in flight. Geometry uploaded in one frame has to
+  // fit; anything that does not is deferred to the next frame rather than
+  // stalling. 32 MB comfortably covers a streaming voxel world.
+  std::uint64_t staging_bytes_per_frame{32ULL * 1024 * 1024};
   // Print a per-pass CPU/GPU timing breakdown every profiling window.
   // ENGINE_PROFILE=1. Timestamps are always collected and readable via
   // VulkanContext::profile_report(); this only controls the periodic dump.
