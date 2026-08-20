@@ -22,6 +22,11 @@ struct EngineConfig {
   std::uint32_t max_spot_shadow_lights{16};
   std::uint32_t max_total_lights{256};
   std::uint32_t max_particles{65536};
+  // Skinned instances that can be posed in one frame. Backs a single shared
+  // bone buffer, so the cost is memory only (about 8 KB per slot per frame in
+  // flight) -- not descriptor sets, and not anything that reallocates when
+  // characters spawn.
+  std::uint32_t max_skinned_instances{256};
 };
 
 [[nodiscard]] inline auto engine_config_from_environment() -> EngineConfig {

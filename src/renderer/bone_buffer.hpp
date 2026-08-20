@@ -10,93 +10,129 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <iostream>
 #include <span>
 #include <stdexcept>
 #include <vector>
 
 namespace engine {
 
-class BoneStorageBufferSet {
+// Per-slot stride: k_max_bones matrices rounded up to the device's
+// minStorageBufferOffsetAlignment. Free functions so the offset arithmetic --
+// the part that decides which character reads which matrices -- can be tested
+// without a device.
+[[nodiscard]] constexpr auto bone_slot_stride(vk::DeviceSize min_alignment) -> std::uint32_t {
+  constexpr vk::DeviceSize k_slot_bytes = sizeof(glm::mat4) * k_max_bones;
+  const vk::DeviceSize alignment = min_alignment > 0 ? min_alignment : 1;
+  return static_cast<std::uint32_t>(((k_slot_bytes + alignment - 1) / alignment) * alignment);
+}
+
+[[nodiscard]] constexpr auto bone_slot_offset(
+    std::uint32_t frame_index,
+    std::uint32_t slot,
+    std::uint32_t slot_capacity,
+    std::uint32_t slot_stride) -> std::uint32_t {
+  return (frame_index * slot_capacity + slot) * slot_stride;
+}
+
+// One shared bone-matrix buffer for every skinned instance in the scene, bound
+// through a dynamic-offset descriptor.
+//
+// The previous design gave each instance its own pair of buffers and four
+// descriptor sets (main and shadow, times frames in flight), all rebuilt from
+// scratch whenever the skinned instance count changed -- behind a device
+// wait_idle. Spawning one more character in a horde of a hundred therefore
+// reallocated two hundred buffers and four hundred descriptor sets, and stalled
+// the GPU to do it.
+//
+// Here the descriptor is written once against the whole buffer. A draw selects
+// its instance's slice with a dynamic offset, so spawning and despawning cost
+// nothing but a slot index: no reallocation, no descriptor rewrite, no stall.
+// The descriptor set then only has to vary by texture, not by instance.
+//
+// Layout is [frame][slot], with a fixed per-slot stride of k_max_bones matrices
+// rounded up to the device's minStorageBufferOffsetAlignment. A fixed stride
+// wastes memory on small skeletons (an 11-bone model uses 704 of 8192 bytes) but
+// makes an offset pure arithmetic -- no table to rebuild, and nothing that can
+// fall out of step with the slot assignment. At a few megabytes total that is
+// the right trade for this engine.
+class BonePalette {
 public:
   void create(
       const vk::raii::PhysicalDevice &physical_device,
       vk::raii::Device &device,
-      std::uint32_t bone_count,
+      std::uint32_t slot_capacity,
       std::uint32_t frame_count) {
-    if (bone_count == 0 || bone_count > k_max_bones)
-      throw std::runtime_error("Invalid bone count for SSBO");
+    const vk::PhysicalDeviceProperties properties = physical_device.getProperties();
+    slot_stride_ = bone_slot_stride(properties.limits.minStorageBufferOffsetAlignment);
+    slot_capacity_ = std::max(slot_capacity, 1U);
+    frame_count_ = std::max(frame_count, 1U);
 
-    bone_count_ = bone_count;
-    const vk::DeviceSize buffer_size = sizeof(glm::mat4) * bone_count;
-    const auto memory_properties = physical_device.getMemoryProperties();
+    const vk::DeviceSize buffer_size =
+        static_cast<vk::DeviceSize>(slot_stride_) * slot_capacity_ * frame_count_;
 
-    buffers_.clear();
-    memory_.clear();
-    mapped_.clear();
-    buffers_.reserve(frame_count);
-    memory_.reserve(frame_count);
-    mapped_.reserve(frame_count);
+    const vk::BufferCreateInfo buffer_info{
+        .size = buffer_size,
+        .usage = vk::BufferUsageFlagBits::eStorageBuffer,
+        .sharingMode = vk::SharingMode::eExclusive,
+    };
+    buffer_ = vk::raii::Buffer(device, buffer_info);
 
-    for (std::uint32_t i = 0; i < frame_count; ++i) {
-      const vk::BufferCreateInfo buffer_info{
-          .size = buffer_size,
-          .usage = vk::BufferUsageFlagBits::eStorageBuffer,
-          .sharingMode = vk::SharingMode::eExclusive,
-      };
+    const vk::MemoryRequirements requirements = buffer_.getMemoryRequirements();
+    memory_ = vk::raii::DeviceMemory(
+        device,
+        vk::MemoryAllocateInfo{
+            .allocationSize = requirements.size,
+            .memoryTypeIndex = detail::find_memory_type(
+                physical_device.getMemoryProperties(),
+                requirements.memoryTypeBits,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent),
+        });
+    buffer_.bindMemory(*memory_, 0);
+    mapped_ = static_cast<std::byte *>(memory_.mapMemory(0, buffer_size));
 
-      buffers_.emplace_back(device, buffer_info);
-      const vk::MemoryRequirements requirements = buffers_.back().getMemoryRequirements();
-
-      memory_.emplace_back(
-          device,
-          vk::MemoryAllocateInfo{
-              .allocationSize = requirements.size,
-              .memoryTypeIndex = detail::find_memory_type(
-                  memory_properties,
-                  requirements.memoryTypeBits,
-                  vk::MemoryPropertyFlagBits::eHostVisible |
-                      vk::MemoryPropertyFlagBits::eHostCoherent),
-          });
-
-      buffers_.back().bindMemory(*memory_.back(), 0);
-      void *ptr = memory_.back().mapMemory(0, buffer_size);
-      // Initialize with identity matrices to avoid uninitialized GPU reads
-      // for skinned instances that haven't been animated yet (no pose_layers).
-      auto *matrices = static_cast<glm::mat4 *>(ptr);
-      for (std::uint32_t j = 0; j < bone_count; ++j)
-        matrices[j] = glm::mat4(1.0F);
-      mapped_.push_back(ptr);
-    }
+    // A slot that is never written must not feed the vertex shader garbage --
+    // an instance can exist for a frame before it is first posed.
+    auto *matrices = reinterpret_cast<glm::mat4 *>(mapped_);
+    const std::size_t matrix_count = static_cast<std::size_t>(buffer_size) / sizeof(glm::mat4);
+    for (std::size_t i = 0; i < matrix_count; ++i)
+      matrices[i] = glm::mat4(1.0F);
   }
 
-  void write(std::uint32_t frame_index, std::span<const glm::mat4> joint_matrices) {
-    if (frame_index >= mapped_.size())
-      throw std::runtime_error("Bone SSBO write: frame_index out of range");
-    if (joint_matrices.size() > static_cast<std::size_t>(bone_count_))
-      std::cerr << "Warning: Bone SSBO write: " << joint_matrices.size()
-                << " matrices exceed bone_count " << bone_count_ << " — truncating\n";
-    const std::size_t bytes = std::min(
-        joint_matrices.size() * sizeof(glm::mat4),
-        sizeof(glm::mat4) * static_cast<std::size_t>(bone_count_));
-    std::memcpy(mapped_[frame_index], joint_matrices.data(), bytes);
+  // Byte offset of one instance's slice, for bindDescriptorSets' dynamic offset.
+  [[nodiscard]] auto dynamic_offset(std::uint32_t frame_index, std::uint32_t slot) const
+      -> std::uint32_t {
+    return bone_slot_offset(frame_index, slot, slot_capacity_, slot_stride_);
   }
 
-  [[nodiscard]] auto buffer(std::uint32_t frame_index) const -> vk::Buffer {
-    if (frame_index >= buffers_.size())
-      throw std::runtime_error("Bone SSBO buffer: frame_index out of range");
-    return *buffers_[frame_index];
+  void write(std::uint32_t frame_index, std::uint32_t slot, std::span<const glm::mat4> joint_matrices) {
+    if (mapped_ == nullptr || frame_index >= frame_count_ || slot >= slot_capacity_)
+      return;
+    const std::size_t count = std::min<std::size_t>(joint_matrices.size(), k_max_bones);
+    if (count == 0)
+      return;
+    std::memcpy(mapped_ + dynamic_offset(frame_index, slot),
+                joint_matrices.data(),
+                count * sizeof(glm::mat4));
   }
 
-  [[nodiscard]] auto bone_count() const -> std::uint32_t {
-    return bone_count_;
-  }
+  [[nodiscard]] auto buffer() const -> vk::Buffer { return *buffer_; }
+  [[nodiscard]] auto slot_capacity() const -> std::uint32_t { return slot_capacity_; }
+  [[nodiscard]] auto slot_stride() const -> std::uint32_t { return slot_stride_; }
+  [[nodiscard]] auto valid() const -> bool { return mapped_ != nullptr; }
+
+  // Size of the window a dynamic-offset descriptor exposes at each slot. The
+  // buffer is an exact multiple of this, so offset + range never runs past the
+  // end for any valid slot.
+  [[nodiscard]] auto descriptor_range() const -> vk::DeviceSize { return slot_stride_; }
 
 private:
-  std::vector<vk::raii::Buffer> buffers_;
-  std::vector<vk::raii::DeviceMemory> memory_;
-  std::vector<void *> mapped_;
-  std::uint32_t bone_count_{};
+  vk::raii::Buffer buffer_{nullptr};
+  vk::raii::DeviceMemory memory_{nullptr};
+  std::byte *mapped_{nullptr};
+  std::uint32_t slot_stride_{0};
+  std::uint32_t slot_capacity_{0};
+  std::uint32_t frame_count_{0};
 };
 
 } // namespace engine

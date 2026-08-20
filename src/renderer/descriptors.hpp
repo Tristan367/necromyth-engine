@@ -84,9 +84,12 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
+        // Dynamic: one shared bone buffer for the whole scene, with each draw
+        // selecting its instance's slice via a dynamic offset. The shader sees
+        // an ordinary storage buffer -- this is transparent to SPIR-V.
         vk::DescriptorSetLayoutBinding{
             .binding = 1,
-            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorType = vk::DescriptorType::eStorageBufferDynamic,
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eVertex,
         },
@@ -114,16 +117,22 @@ public:
         });
   }
 
+  // `skinned` enables the skinned sets: one per texture for the main pass, plus
+  // a single shared set for the shadow pass. This no longer scales with the
+  // number of skinned instances -- the bone buffer is shared and indexed by
+  // dynamic offset -- so a horde costs the same descriptors as one character.
   void create_pool(
       vk::raii::Device &device,
       std::uint32_t frame_count,
       std::uint32_t texture_count,
-      std::uint32_t skinned_instance_count = 0) {
+      bool skinned = false) {
     if (texture_count == 0)
       throw std::runtime_error("At least one texture is required for descriptor allocation");
 
     frame_count_ = frame_count;
     texture_count_ = texture_count;
+
+    const std::uint32_t skinned_sets = skinned ? texture_count + 1 : 0;
 
     const std::array pool_sizes{
         vk::DescriptorPoolSize{
@@ -132,15 +141,19 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = frame_count * 4 + texture_count + skinned_instance_count * 4,
+            .descriptorCount = frame_count * 4 + texture_count + skinned_sets,
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eStorageBuffer,
-            .descriptorCount = frame_count * 3 + skinned_instance_count * 4,
+            .descriptorCount = frame_count * 3,
+        },
+        vk::DescriptorPoolSize{
+            .type = vk::DescriptorType::eStorageBufferDynamic,
+            .descriptorCount = std::max(skinned_sets, 1U),
         },
     };
 
-    const std::uint32_t max_sets = frame_count + texture_count + skinned_instance_count * 4;
+    const std::uint32_t max_sets = frame_count + texture_count + skinned_sets;
 
     descriptor_pool_ = vk::raii::DescriptorPool(
         device,
@@ -282,13 +295,13 @@ public:
     return material_sets_.at(texture_index);
   }
 
-  [[nodiscard]] auto skinned_set(std::uint32_t instance, std::uint32_t frame) const -> vk::DescriptorSet {
-    return skinned_sets_.at(static_cast<std::size_t>(instance) * 2 + frame);
+  [[nodiscard]] auto has_skinned_sets() const -> bool { return !skinned_sets_.empty(); }
+
+  [[nodiscard]] auto skinned_set(std::uint32_t texture_index) const -> vk::DescriptorSet {
+    return *skinned_sets_.at(texture_index % skinned_sets_.size());
   }
 
-  [[nodiscard]] auto shadow_bone_set(std::uint32_t instance, std::uint32_t frame) const -> vk::DescriptorSet {
-    return shadow_bone_sets_.at(static_cast<std::size_t>(instance) * 2 + frame);
-  }
+  [[nodiscard]] auto shadow_bone_set() const -> vk::DescriptorSet { return *shadow_bone_set_; }
 
   void update_light_buffers(vk::raii::Device &device, const std::array<vk::Buffer, 2> &light_buffers) {
     for (std::uint32_t i = 0; i < frame_count_ && i < 2; ++i) {
@@ -309,103 +322,71 @@ public:
     }
   }
 
+  // One set per texture (main pass) plus one shared set (shadow pass). Each
+  // binds the whole bone buffer; the draw picks its instance with a dynamic
+  // offset. Nothing here scales with instance count, so spawning or despawning
+  // a skinned instance needs no descriptor work at all.
   void allocate_skinned_sets(
       vk::raii::Device &device,
-      std::span<const vk::Buffer> bone_buffers,
-      std::span<const TextureImage *const> textures,
-      std::span<const std::uint32_t> texture_indices) {
-    if (bone_buffers.empty())
+      vk::Buffer bone_buffer,
+      vk::DeviceSize bone_range,
+      std::span<const TextureImage *const> textures) {
+    skinned_sets_.clear();
+    shadow_bone_set_ = vk::raii::DescriptorSet{nullptr};
+    if (bone_buffer == vk::Buffer{} || textures.empty())
       return;
 
-    const std::uint32_t instance_count = static_cast<std::uint32_t>(bone_buffers.size()) / 2;
-    skinned_sets_.clear();
-    shadow_bone_sets_.clear();
-    skinned_sets_.reserve(instance_count * 2);
-    shadow_bone_sets_.reserve(instance_count * 2);
+    const vk::DescriptorBufferInfo bone_info{
+        .buffer = bone_buffer,
+        .offset = 0,
+        .range = bone_range,
+    };
 
-    for (std::uint32_t i = 0; i < instance_count; ++i) {
-      const std::uint32_t tex_idx = i < texture_indices.size()
-          ? texture_indices[i]
-          : 0U;
+    const auto allocate_one = [&]() -> vk::raii::DescriptorSet {
+      const vk::DescriptorSetLayout layout = *material_skinned_layout_;
+      const vk::DescriptorSetAllocateInfo allocate{
+          .descriptorPool = *descriptor_pool_,
+          .descriptorSetCount = 1,
+          .pSetLayouts = &layout,
+      };
+      return std::move(device.allocateDescriptorSets(allocate).front());
+    };
 
-      const vk::DescriptorImageInfo table_image_info{
-          .sampler = textures[tex_idx % textures.size()]->sampler(),
-          .imageView = textures[tex_idx % textures.size()]->view(),
+    const auto write_set = [&](const vk::raii::DescriptorSet &set, const TextureImage &texture) {
+      const vk::DescriptorImageInfo image_info{
+          .sampler = texture.sampler(),
+          .imageView = texture.view(),
           .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
       };
+      const std::array writes{
+          vk::WriteDescriptorSet{
+              .dstSet = *set,
+              .dstBinding = 0,
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &image_info,
+          },
+          vk::WriteDescriptorSet{
+              .dstSet = *set,
+              .dstBinding = 1,
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eStorageBufferDynamic,
+              .pBufferInfo = &bone_info,
+          },
+      };
+      device.updateDescriptorSets(writes, nullptr);
+    };
 
-      for (std::uint32_t frame = 0; frame < 2; ++frame) {
-        const vk::DescriptorBufferInfo bone_info{
-            .buffer = bone_buffers[i * 2 + frame],
-            .offset = 0,
-            .range = vk::WholeSize,
-        };
-
-        // Main pass skinned set (texture + bone SSBO)
-        {
-          const vk::DescriptorSetLayout layout = *material_skinned_layout_;
-          const vk::DescriptorSetAllocateInfo allocate{
-              .descriptorPool = *descriptor_pool_,
-              .descriptorSetCount = 1,
-              .pSetLayouts = &layout,
-          };
-          skinned_sets_.push_back(std::move(device.allocateDescriptorSets(allocate).front()));
-
-          const std::array writes{
-              vk::WriteDescriptorSet{
-                  .dstSet = skinned_sets_.back(),
-                  .dstBinding = 0,
-                  .descriptorCount = 1,
-                  .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                  .pImageInfo = &table_image_info,
-              },
-              vk::WriteDescriptorSet{
-                  .dstSet = skinned_sets_.back(),
-                  .dstBinding = 1,
-                  .descriptorCount = 1,
-                  .descriptorType = vk::DescriptorType::eStorageBuffer,
-                  .pBufferInfo = &bone_info,
-              },
-          };
-          device.updateDescriptorSets(writes, nullptr);
-        }
-
-        // Shadow pass skinned set (dummy texture + bone SSBO)
-        {
-          const vk::DescriptorSetLayout layout = *material_skinned_layout_;
-          const vk::DescriptorSetAllocateInfo allocate{
-              .descriptorPool = *descriptor_pool_,
-              .descriptorSetCount = 1,
-              .pSetLayouts = &layout,
-          };
-          shadow_bone_sets_.push_back(std::move(device.allocateDescriptorSets(allocate).front()));
-
-          const vk::DescriptorImageInfo dummy_sampler_info{
-              .sampler = textures[0]->sampler(),
-              .imageView = textures[0]->view(),
-              .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-          };
-
-          const std::array writes{
-              vk::WriteDescriptorSet{
-                  .dstSet = shadow_bone_sets_.back(),
-                  .dstBinding = 0,
-                  .descriptorCount = 1,
-                  .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                  .pImageInfo = &dummy_sampler_info,
-              },
-              vk::WriteDescriptorSet{
-                  .dstSet = shadow_bone_sets_.back(),
-                  .dstBinding = 1,
-                  .descriptorCount = 1,
-                  .descriptorType = vk::DescriptorType::eStorageBuffer,
-                  .pBufferInfo = &bone_info,
-              },
-          };
-          device.updateDescriptorSets(writes, nullptr);
-        }
-      }
+    skinned_sets_.reserve(textures.size());
+    for (const TextureImage *texture : textures) {
+      skinned_sets_.push_back(allocate_one());
+      write_set(skinned_sets_.back(), *texture);
     }
+
+    // The shadow pass is vertex-only; binding 0 exists solely to satisfy the
+    // shared layout, so any texture will do.
+    shadow_bone_set_ = allocate_one();
+    write_set(shadow_bone_set_, *textures[0]);
   }
 
   void update_spot_shadow_sampler(vk::raii::Device &device, vk::Sampler sampler, vk::ImageView view) {
@@ -486,7 +467,7 @@ private:
   std::vector<vk::raii::DescriptorSet> frame_sets_;
   std::vector<vk::raii::DescriptorSet> material_sets_;
   std::vector<vk::raii::DescriptorSet> skinned_sets_;
-  std::vector<vk::raii::DescriptorSet> shadow_bone_sets_;
+  vk::raii::DescriptorSet shadow_bone_set_{nullptr};
 };
 
 } // namespace engine

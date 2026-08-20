@@ -4,6 +4,7 @@
 // predicates agreeing with each other, and that failed silently (wrong pose on
 // the wrong model, a light that would not turn off) rather than crashing.
 
+#include "renderer/bone_buffer.hpp"
 #include "renderer/deferred_delete.hpp"
 #include "renderer/draw_list.hpp"
 #include "renderer/frustum.hpp"
@@ -402,6 +403,56 @@ void test_deferred_delete_holds_for_frames_in_flight() {
   check(early.pending_count() == 1, "no underflow during the first frames");
 }
 
+
+// Bone slice addressing. Every skinned instance reads its matrices out of one
+// shared buffer at a dynamic offset, so two slots colliding means two characters
+// share a pose -- silently, with no validation error. Alignment matters too: a
+// dynamic offset that is not a multiple of minStorageBufferOffsetAlignment is
+// invalid usage.
+void test_bone_slot_offsets_are_distinct_and_aligned() {
+  std::printf("bone slice addressing\n");
+
+  for (const vk::DeviceSize alignment : {vk::DeviceSize{16}, vk::DeviceSize{64}, vk::DeviceSize{256}}) {
+    const std::uint32_t stride = engine::bone_slot_stride(alignment);
+    check(stride % alignment == 0,
+          "slot stride is a multiple of minStorageBufferOffsetAlignment");
+    check(stride >= sizeof(glm::mat4) * engine::k_max_bones,
+          "slot stride holds a full bone palette");
+  }
+
+  constexpr std::uint32_t k_capacity = 64;
+  constexpr std::uint32_t k_frames = 2;
+  const std::uint32_t stride = engine::bone_slot_stride(64);
+
+  std::vector<std::uint32_t> offsets;
+  for (std::uint32_t frame = 0; frame < k_frames; ++frame)
+    for (std::uint32_t slot = 0; slot < k_capacity; ++slot)
+      offsets.push_back(engine::bone_slot_offset(frame, slot, k_capacity, stride));
+
+  std::ranges::sort(offsets);
+  const bool all_distinct = std::ranges::adjacent_find(offsets) == offsets.end();
+  check(all_distinct, "every (frame, slot) pair maps to a distinct offset");
+
+  bool all_aligned = true;
+  for (const std::uint32_t offset : offsets)
+    if (offset % stride != 0)
+      all_aligned = false;
+  check(all_aligned, "every offset is stride-aligned");
+
+  // offset + range must stay inside the buffer for the last slot of the last
+  // frame, or the descriptor read runs past the end.
+  const std::uint32_t buffer_size = k_frames * k_capacity * stride;
+  const std::uint32_t last = engine::bone_slot_offset(k_frames - 1, k_capacity - 1, k_capacity, stride);
+  check(last + stride == buffer_size,
+        "the last slot's window ends exactly at the end of the buffer");
+
+  // Frames must not overlap: a slot's frame-0 and frame-1 slices are what make
+  // double buffering safe while a frame is still in flight.
+  check(engine::bone_slot_offset(0, 5, k_capacity, stride) !=
+            engine::bone_slot_offset(1, 5, k_capacity, stride),
+        "the same slot occupies different memory in different frames");
+}
+
 } // namespace
 
 auto main() -> int {
@@ -414,6 +465,7 @@ auto main() -> int {
   test_mesh_slot_lifecycle();
   test_instances_of_removed_meshes_do_not_draw();
   test_deferred_delete_holds_for_frames_in_flight();
+  test_bone_slot_offsets_are_distinct_and_aligned();
 
   if (g_failures != 0) {
     std::printf("\n%d check(s) failed\n", g_failures);

@@ -77,6 +77,9 @@ public:
                          config.max_point_shadow_lights);
     create_point_light_shadow_ssbo(config.max_point_shadow_lights);
     particle_system_.create(device_.physical_device(), device_.device(), config.max_particles, 2);
+    max_skinned_instances_ = std::max(config.max_skinned_instances, 1U);
+    bone_palette_.create(device_.physical_device(), device_.device(),
+                         max_skinned_instances_, detail::max_frames_in_flight);
     create_command_pool();
     sync_mesh_slots(scene);
     engine::load_scene_textures(
@@ -95,7 +98,6 @@ public:
         texture_array_);
     create_descriptor_set_layout();
     create_uniform_buffers();
-    create_bone_buffers(scene);
     create_descriptor_pool_and_sets(scene);
     create_pipelines(scene);
     create_command_buffers();
@@ -211,14 +213,13 @@ public:
     retired_meshes_.collect(frame_counter_, detail::max_frames_in_flight);
     sync_mesh_slots(scene);
 
-    // Textures and bone buffers do live in descriptor sets, so changing them
-    // means rewriting sets that in-flight frames are reading. Those still need
-    // an idle -- but they are rare, and no longer dragged in by mesh churn.
+    // Skinned instances no longer appear here: they share one bone buffer
+    // indexed by dynamic offset, so spawning or despawning a character needs no
+    // reallocation and no descriptor rewrite. Only textures still live in
+    // descriptor sets that in-flight frames are reading, so only textures still
+    // need an idle -- and new textures are rare.
     const bool textures_added = scene.texture_paths().size() > texture_table_.count();
-    const bool bone_buffers_stale =
-        count_skinned_instances(scene.instances(), scene) != static_cast<std::uint32_t>(bone_buffers_.size());
-
-    if (!textures_added && !bone_buffers_stale)
+    if (!textures_added)
       return;
 
     device_.wait_idle();
@@ -235,11 +236,6 @@ public:
             device_.graphics_queue(),
             scene.texture_paths()[texture_index]);
       }
-      descriptors_changed = true;
-    }
-
-    if (bone_buffers_stale) {
-      create_bone_buffers(scene);
       descriptors_changed = true;
     }
 
@@ -353,21 +349,23 @@ public:
     light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(),
                          static_cast<float>(startup_spot_atlas_size_));
 
-    if (!bone_buffers_.empty()) {
+    if (bone_palette_.valid()) {
       std::vector<glm::mat4> joint_matrices;
       std::vector<glm::mat4> bone_worlds;
-      std::uint32_t bone_buffer_index = 0;
-      for (std::size_t ii = 0; ii < scene.instances().size(); ++ii) {
-        MeshInstance &instance = scene.instances()[ii];
+      std::uint32_t bone_slot = 0;
+      bool overflowed = false;
+      for (MeshInstance &instance : scene.instances()) {
         // Must match every other bone-slot walker exactly — see
         // instance_uses_skinning(). In particular do NOT skip instances without
         // `pose_layers`: they still own a slot, and skipping them here would
-        // shift every later instance onto the wrong bone buffer.
+        // shift every later instance onto the wrong slice of the bone buffer.
         // compute_joint_matrices_for_instance() emits bind pose for them.
         if (!instance_uses_skinning(instance, scene))
           continue;
-        if (bone_buffer_index >= bone_buffers_.size())
+        if (bone_slot >= max_skinned_instances_) {
+          overflowed = true;
           break;
+        }
 
         joint_matrices.clear();
         bone_worlds.clear();
@@ -379,10 +377,22 @@ public:
             joint_matrices,
             &bone_worlds);
 
-        instance.cached_bone_worlds = bone_worlds;
+        // Bone attachments read this; swap rather than copy so a posed
+        // character costs no allocation per frame.
+        instance.cached_bone_worlds.swap(bone_worlds);
 
-        bone_buffers_[bone_buffer_index].write(frame_index_, joint_matrices);
-        ++bone_buffer_index;
+        bone_palette_.write(frame_index_, bone_slot, joint_matrices);
+        ++bone_slot;
+      }
+
+      // Silently dropping characters would look like a rendering bug, so say so
+      // once rather than every frame.
+      if (overflowed && !logged_bone_overflow_) {
+        std::cout << "Skinned instances exceed max_skinned_instances ("
+                  << max_skinned_instances_
+                  << "); extra characters render in bind pose. Raise "
+                     "EngineConfig::max_skinned_instances.\n";
+        logged_bone_overflow_ = true;
       }
     }
 
@@ -501,6 +511,7 @@ private:
         .texture_table = texture_table_,
         .texture_array = texture_array_,
         .mesh_gpus = mesh_gpus_,
+        .bone_palette = &bone_palette_,
         .msaa_enabled = device_.msaa_enabled(),
         .shadow_cascade_count = shadow_cascade_layer_count(startup_cascade_mode_),
         .render_extent = render_extent(),
@@ -753,15 +764,16 @@ private:
   }
 
   void create_descriptor_pool_and_sets(const Scene &scene) {
+    skinned_pipelines_built_ = has_skinned_instances(scene.instances(), scene);
     rebuild_descriptor_sets(count_skinned_instances(scene.instances(), scene));
   }
 
-  void rebuild_descriptor_sets(std::uint32_t skinned_count) {
+  void rebuild_descriptor_sets(bool skinned) {
     descriptor_resources_.create_pool(
         device_.device(),
         detail::max_frames_in_flight,
         texture_table_.count(),
-        skinned_count);
+        skinned);
 
     std::array<vk::Buffer, detail::max_frames_in_flight> buffers{};
     for (std::uint32_t i = 0; i < detail::max_frames_in_flight; ++i)
@@ -793,12 +805,16 @@ private:
       particle_bufs[i] = particle_system_.buffer(i);
     descriptor_resources_.update_particle_ssbo(device_.device(), particle_bufs);
 
-    allocate_skinned_descriptor_sets(texture_table_, skinned_count);
+    if (skinned)
+      descriptor_resources_.allocate_skinned_sets(
+          device_.device(),
+          bone_palette_.buffer(),
+          bone_palette_.descriptor_range(),
+          texture_table_.texture_pointers());
   }
 
   void recreate_descriptor_sets() {
-    rebuild_descriptor_sets(bone_buffers_.empty() ? 0U
-        : static_cast<std::uint32_t>(bone_buffers_.size()));
+    rebuild_descriptor_sets(skinned_pipelines_built_);
   }
 
   void create_pipelines(const Scene &scene) {
@@ -971,48 +987,6 @@ private:
     return false;
   }
 
-  void create_bone_buffers(const Scene &scene) {
-    std::vector<BoneStorageBufferSet> new_buffers;
-    std::vector<std::uint32_t> new_indices;
-    for (const MeshInstance &instance : scene.instances()) {
-      // Must match every other bone-slot walker exactly — see instance_uses_skinning().
-      if (!instance_uses_skinning(instance, scene))
-        continue;
-
-      const std::uint32_t bone_count =
-          static_cast<std::uint32_t>(scene.skeletons()[instance.skin_index].joint_nodes.size());
-
-      BoneStorageBufferSet bone_set;
-      bone_set.create(
-          device_.physical_device(),
-          device_.device(),
-          bone_count,
-          detail::max_frames_in_flight);
-      new_buffers.push_back(std::move(bone_set));
-      new_indices.push_back(instance.texture_index);
-    }
-    bone_buffers_ = std::move(new_buffers);
-    skinned_texture_indices_ = std::move(new_indices);
-  }
-
-  void allocate_skinned_descriptor_sets(const TextureTable &texture_table, std::uint32_t skinned_count) {
-    if (skinned_count == 0 || bone_buffers_.empty())
-      return;
-
-    std::vector<vk::Buffer> buffers;
-    buffers.reserve(bone_buffers_.size() * detail::max_frames_in_flight);
-    for (const BoneStorageBufferSet &bone_set : bone_buffers_) {
-      for (std::uint32_t frame = 0; frame < detail::max_frames_in_flight; ++frame)
-        buffers.push_back(bone_set.buffer(frame));
-    }
-
-    descriptor_resources_.allocate_skinned_sets(
-        device_.device(),
-        buffers,
-        texture_table.texture_pointers(),
-        skinned_texture_indices_);
-  }
-
   SDL_Window *window_{};
   mutable RenderStats render_stats_{};
   MsaaSettings msaa_config_{};
@@ -1066,6 +1040,9 @@ private:
   ParticleSystem particle_system_;
   TextureTable texture_table_;
   TextureArray texture_array_;
+  BonePalette bone_palette_;
+  std::uint32_t max_skinned_instances_{0};
+  bool skinned_pipelines_built_{false};
   std::vector<MeshGpuSlot> mesh_gpus_;
   DeferredDelete<MeshGpu> retired_meshes_;
   // Monotonic frame number, for deciding when retired GPU resources are safe
@@ -1077,8 +1054,7 @@ private:
   std::vector<DrawCommand> draw_list_;
   std::vector<DrawCommand> shadow_draw_list_;
   PassLayoutState pass_layouts_{};
-  std::vector<BoneStorageBufferSet> bone_buffers_;
-  std::vector<std::uint32_t> skinned_texture_indices_;
+  bool logged_bone_overflow_{false};
   std::uint32_t frame_index_{};
   bool framebuffer_resized_{};
   bool logged_shadow_filter_mode_{false};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/frame_overlay.hpp"
+#include "renderer/bone_buffer.hpp"
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
 #include "renderer/frustum.hpp"
@@ -56,12 +57,12 @@ struct RenderStats {
 struct DrawBindState {
   static constexpr std::uint32_t k_unbound_mesh = UINT32_MAX;
 
-  // Identifies the descriptor set currently bound to set 1. For skinned draws
-  // that set is the per-instance (bone SSBO + texture) set, so the bone slot is
-  // part of the identity — two instances sharing a texture still need separate
-  // binds. Leaving it out made every same-texture skinned instance reuse the
-  // first one's bone matrices in the main pass while the shadow pass (which
-  // binds unconditionally) used the correct ones.
+  // Identifies what is currently bound to set 1. The bone slot is part of the
+  // identity even though same-texture skinned instances now share a descriptor
+  // set: they differ by dynamic offset, and skipping the rebind would leave the
+  // previous instance's offset in place. Leaving the slot out of this key is
+  // what once made every same-texture skinned instance render with the first
+  // one's pose in the main pass while the shadow pass stayed correct.
   struct MaterialKey {
     TextureSource texture_source{};
     std::uint32_t descriptor_index{};
@@ -86,6 +87,7 @@ struct PassRecorder {
   const TextureTable &texture_table;
   const TextureArray &texture_array;
   const std::vector<MeshGpuSlot> &mesh_gpus;
+  const BonePalette *bone_palette{nullptr};
   bool msaa_enabled{};
   std::uint32_t shadow_cascade_count{1};
   vk::Extent2D render_extent{};
@@ -189,7 +191,9 @@ struct PassRecorder {
       return;
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
-    const bool bind_bone_set = is_skinned && draw.bone_instance_index != k_invalid_skin_index;
+    const bool bind_bone_set = is_skinned && draw.bone_instance_index != k_invalid_skin_index &&
+                               bone_palette != nullptr && bone_palette->valid() &&
+                               descriptors.has_skinned_sets();
 
     const DrawBindState::MaterialKey material_key{
         .texture_source = draw.texture_source,
@@ -201,12 +205,14 @@ struct PassRecorder {
       return;
 
     if (bind_bone_set) {
+      const std::uint32_t bone_offset =
+          bone_palette->dynamic_offset(state.frame_index, draw.bone_instance_index);
       command_buffer.bindDescriptorSets(
           vk::PipelineBindPoint::eGraphics,
           pipelines.layout_for(draw.pipeline),
           1,
-          descriptors.skinned_set(draw.bone_instance_index, state.frame_index),
-          nullptr);
+          descriptors.skinned_set(*descriptor_index),
+          bone_offset);
     } else {
       command_buffer.bindDescriptorSets(
           vk::PipelineBindPoint::eGraphics,
@@ -250,13 +256,14 @@ struct PassRecorder {
         : (is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth);
     bind_pipeline(command_buffer, shadow_pipeline, state);
 
-    if (is_skinned && draw.bone_instance_index != k_invalid_skin_index) {
+    if (is_skinned && draw.bone_instance_index != k_invalid_skin_index &&
+        bone_palette != nullptr && bone_palette->valid() && descriptors.has_skinned_sets()) {
       command_buffer.bindDescriptorSets(
           vk::PipelineBindPoint::eGraphics,
           pipelines.layout_for(shadow_pipeline),
           1,
-          descriptors.shadow_bone_set(draw.bone_instance_index, frame_index),
-          nullptr);
+          descriptors.shadow_bone_set(),
+          bone_palette->dynamic_offset(frame_index, draw.bone_instance_index));
     }
 
     bind_mesh_buffers(command_buffer, *mesh, draw.mesh_index, state);
