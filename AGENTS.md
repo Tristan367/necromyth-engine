@@ -289,8 +289,63 @@ correct ones — the symptom is a shadow that animates while the mesh does not.
 
 ## Roadmap (planned features, in priority order)
 
-1. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
-2. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
+1. **Instanced draws** — one `drawIndexed` per (pipeline, mesh, material) batch instead of per instance, with per-instance data (model matrix, texture layer, bone base) in a per-frame storage buffer read via `SV_InstanceID`. Prerequisite for everything below. The profiler puts command recording at ~2.2 ms of a ~2.7 ms CPU frame, and a horde is currently one draw call per character.
+2. **Impostor (Y-billboard) LOD** — see below.
+3. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
+4. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
+
+## Impostor / Y-billboard LOD (design, not yet implemented)
+
+Goal: render distant animated characters (zombies) as pre-rendered billboards
+instead of skinned meshes, so the horde stops costing skinning and geometry.
+Target is on the order of 10k characters as a small number of draw calls.
+Generalises to any model, and is the intended basis of an automated LOD step.
+
+**Offline bake** (a tool, not part of the runtime):
+
+- Input: a skinned glTF plus the clips to bake.
+- Render with an orthographic camera at a fixed elevation, rotating around Y in
+  `N` steps (8 or 16; 8 is usually enough for ground-level viewing), sampling
+  each clip at `M` uniform times (8-16 per loop).
+- Output: a texture array layer per `(angle, frame)` pair, plus a small manifest
+  (clip names, `N`, `M`, clip lengths, world-space quad size).
+- Bake albedo with alpha cutout. Optionally a second layer set with a baked
+  world-space normal, if the impostors need to respond to the sun rather than
+  carrying flat baked lighting.
+
+**Runtime**:
+
+- A dedicated pipeline, closest in shape to the existing particle billboard path.
+- **Y-billboard**: the quad yaws to face the camera but keeps world up, so it
+  does not tip when the camera looks down. Build it in the vertex shader from the
+  instance position, world up, and the camera's XZ-projected right vector -- NOT
+  the camera's true right, which is what makes a billboard roll.
+- Layer selection, per instance, in the vertex shader:
+  - `angle = round(N * frac((atan2 of camera-to-instance in XZ - instance yaw) / 2pi)) % N`
+  - `frame = floor(animTime / clipLength * M) % M`
+  - `layer = atlasBase + angle * M + frame`
+  where `atlasBase` selects the character variant, so different zombies with
+  different textures and different animations coexist in one draw.
+- Per-instance data (position, yaw, scale, `atlasBase`, clip, `animTime`) lives in
+  the same per-instance buffer instancing uses, so the whole horde is one
+  instanced draw.
+
+**Notes and pitfalls**:
+
+- One baked elevation looks wrong from directly above. Fine for a ground game;
+  bake a second elevation row if the camera ever gets height.
+- Shadows: impostors casting shadows need the same alpha-cutout treatment in the
+  shadow pass, or they cast rectangles.
+- Memory is the real constraint: `N x M x resolution`. 16 angles x 16 frames at
+  128x128 RGBA is ~16 MB per variant. 8 angles halves it. Budget per variant, not
+  per character -- variants are shared.
+- Transition from skinned mesh to impostor: a hard switch at a distance threshold
+  is usually acceptable and much cheaper than a cross-fade, provided the impostor
+  frame is picked from the same clip time.
+- **Temporal animation LOD** (updating distant characters' animation less often)
+  is probably unnecessary once impostors exist: for an impostor, "advancing the
+  animation" is choosing a frame index, which is nearly free. Measure before
+  building it.
 
 ## Implemented (formerly planned)
 
