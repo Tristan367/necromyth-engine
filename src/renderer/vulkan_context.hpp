@@ -13,6 +13,7 @@
 #include "renderer/pass_recorder.hpp"
 #include "renderer/pipeline_id.hpp"
 #include "renderer/pipeline_registry.hpp"
+#include "renderer/profiler.hpp"
 #include "renderer/render_color_image.hpp"
 #include "renderer/scene_gpu.hpp"
 #include "renderer/shadow_map.hpp"
@@ -36,7 +37,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -59,6 +63,7 @@ public:
         startup_cascade_mode_(scene.shadow_settings().cascade_mode),
         startup_render_scale_(config.render_scale),
         startup_shadow_scale_(config.shadow_scale),
+        profile_to_stdout_(config.profile_to_stdout),
         startup_shadow_map_resolution_(scaled_shadow_map_resolution(
             scene.shadow_settings().map_resolution,
             config.shadow_scale)),
@@ -81,6 +86,8 @@ public:
     bone_palette_.create(device_.physical_device(), device_.device(),
                          max_skinned_instances_, detail::max_frames_in_flight);
     create_command_pool();
+    gpu_profiler_.create(device_.physical_device(), device_.device(),
+                         detail::max_frames_in_flight, device_.queue_families().graphics);
     sync_mesh_slots(scene);
     engine::load_scene_textures(
         scene,
@@ -173,6 +180,18 @@ public:
   [[nodiscard]] auto phys_dev() -> vk::raii::PhysicalDevice { return device_.physical_device(); }
   [[nodiscard]] auto mem_props() -> vk::PhysicalDeviceMemoryProperties { return device_.physical_device().getMemoryProperties(); }
 
+  [[nodiscard]] static auto pad(const char *label) -> std::string {
+    std::string text(label);
+    text.resize(std::max<std::size_t>(text.size(), 24), ' ');
+    return text;
+  }
+
+  [[nodiscard]] static auto format_ms(float ms) -> std::string {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3) << std::setw(7) << ms << " ms";
+    return out.str();
+  }
+
   void mark_framebuffer_resized() {
     framebuffer_resized_ = true;
     last_resize_ticks_ = SDL_GetTicks();
@@ -180,6 +199,43 @@ public:
 
   void set_frame_overlay(FrameOverlayCallback callback) {
     frame_overlay_ = std::move(callback);
+  }
+
+  [[nodiscard]] auto gpu_profiler() const -> const GpuProfiler & { return gpu_profiler_; }
+  [[nodiscard]] auto cpu_profiler() const -> const CpuProfiler & { return cpu_profiler_; }
+
+  // Human-readable snapshot of the last profiling window. Set ENGINE_PROFILE=1
+  // to have it printed periodically, or call this to drive a debug overlay.
+  [[nodiscard]] auto profile_report() const -> std::string {
+    std::ostringstream out;
+    out << "\n-- frame profile (avg / max ms over " << k_profile_window_frames << " frames) --\n";
+
+    if (gpu_profiler_.supported()) {
+      float gpu_total = 0.0F;
+      for (std::uint32_t i = 0; i < GpuProfiler::k_zone_count; ++i)
+        gpu_total += gpu_profiler_.stats(static_cast<GpuZone>(i)).average_ms;
+      out << "  GPU (total " << format_ms(gpu_total) << ")\n";
+      for (std::uint32_t i = 0; i < GpuProfiler::k_zone_count; ++i) {
+        const auto zone = static_cast<GpuZone>(i);
+        out << "    " << pad(gpu_zone_name(zone)) << format_ms(gpu_profiler_.stats(zone).average_ms)
+            << "  max " << format_ms(gpu_profiler_.stats(zone).max_ms) << '\n';
+      }
+    } else {
+      out << "  GPU timestamps unsupported on this device/queue\n";
+    }
+
+    out << "  CPU\n";
+    for (std::uint32_t i = 0; i < CpuProfiler::k_zone_count; ++i) {
+      const auto zone = static_cast<CpuZone>(i);
+      out << "    " << pad(cpu_zone_name(zone)) << format_ms(cpu_profiler_.stats(zone).average_ms)
+          << "  max " << format_ms(cpu_profiler_.stats(zone).max_ms) << '\n';
+    }
+
+    out << "  draws " << render_stats_.draws_submitted << " submitted, "
+        << render_stats_.draws_culled << " culled (main); "
+        << render_stats_.shadow_draws_submitted << " submitted, "
+        << render_stats_.shadow_draws_culled << " culled (shadow)\n";
+    return out.str();
   }
 
   // Last completed frame's draw/cull counts.
@@ -204,6 +260,8 @@ public:
   void sync_scene(const Scene &scene) {
     if (gpu_shutdown_complete_)
       return;
+
+    const ScopedCpuZone cpu_zone(cpu_profiler_, CpuZone::SyncScene);
 
     // Mesh slots first. Mesh buffers are bound directly (bindVertexBuffers), not
     // through a descriptor set, so creating, remeshing and dropping geometry
@@ -253,13 +311,25 @@ public:
       return;
     }
 
-    if (device_.device().waitForFences(*in_flight_fences_[frame_index_], vk::True, UINT64_MAX) != vk::Result::eSuccess)
-      throw std::runtime_error("Failed to wait for frame fence");
+    const ScopedCpuZone frame_zone(cpu_profiler_, CpuZone::FrameTotal);
 
+    {
+      const ScopedCpuZone wait_zone(cpu_profiler_, CpuZone::WaitForFrame);
+      if (device_.device().waitForFences(*in_flight_fences_[frame_index_], vk::True, UINT64_MAX) !=
+          vk::Result::eSuccess)
+        throw std::runtime_error("Failed to wait for frame fence");
+    }
+
+    // The fence above guarantees this slot's previous submission has completed,
+    // so its timestamps are readable without ever blocking.
+    gpu_profiler_.collect(frame_index_);
+
+    cpu_profiler_.begin(CpuZone::AcquireImage);
     auto [acquire_result, image_index] = swapchain_.handle().acquireNextImage(
         UINT64_MAX,
         *image_available_semaphores_[frame_index_],
         nullptr);
+    cpu_profiler_.end(CpuZone::AcquireImage);
 
     if (acquire_result == vk::Result::eErrorOutOfDateKHR) {
       recreate_swapchain();
@@ -349,6 +419,7 @@ public:
     light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(),
                          static_cast<float>(startup_spot_atlas_size_));
 
+    cpu_profiler_.begin(CpuZone::Animation);
     if (bone_palette_.valid()) {
       std::vector<glm::mat4> joint_matrices;
       std::vector<glm::mat4> bone_worlds;
@@ -395,14 +466,19 @@ public:
         logged_bone_overflow_ = true;
       }
     }
+    cpu_profiler_.end(CpuZone::Animation);
 
+    cpu_profiler_.begin(CpuZone::BuildDrawLists);
     render_stats_.reset();
     build_draw_list(scene, draw_list_);
     build_shadow_draw_list(draw_list_, shadow_draw_list_);
+    cpu_profiler_.end(CpuZone::BuildDrawLists);
 
+    cpu_profiler_.begin(CpuZone::RecordCommands);
     auto &command_buffer = command_buffers_[frame_index_];
     command_buffer.reset();
     command_buffer.begin({});
+    gpu_profiler_.begin_frame(command_buffer, frame_index_);
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, shadow_draw_list_,
                                          cascades.light_view_proj);
 
@@ -458,6 +534,9 @@ public:
         overlay_ptr,
         std::move(post_geometry));
 
+    cpu_profiler_.end(CpuZone::RecordCommands);
+    const ScopedCpuZone submit_zone(cpu_profiler_, CpuZone::Submit);
+
     const vk::SemaphoreSubmitInfo wait_semaphore_info{
         .semaphore = *image_available_semaphores_[frame_index_],
         .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -480,6 +559,7 @@ public:
 
     device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
     submit_guard.submitted = true;
+    gpu_profiler_.mark_frame_recorded(frame_index_);
 
     const vk::PresentInfoKHR present_info{
         .waitSemaphoreCount = 1,
@@ -489,7 +569,9 @@ public:
         .pImageIndices = &image_index,
     };
 
+    cpu_profiler_.begin(CpuZone::Present);
     const vk::Result present_result = device_.present_queue().presentKHR(present_info);
+    cpu_profiler_.end(CpuZone::Present);
     if (present_result == vk::Result::eErrorOutOfDateKHR)
       recreate_swapchain();
     else if (present_result != vk::Result::eSuccess && present_result != vk::Result::eSuboptimalKHR)
@@ -497,6 +579,7 @@ public:
 
     frame_index_ = (frame_index_ + 1) % detail::max_frames_in_flight;
     ++frame_counter_;
+    advance_profile_window();
   }
 
 private:
@@ -517,6 +600,8 @@ private:
         .render_extent = render_extent(),
         .render_color_image = render_scale_active(startup_render_scale_) ? &render_color_image_ : nullptr,
         .stats = &render_stats_,
+        .gpu_profiler = &gpu_profiler_,
+        .profile_frame_index = frame_index_,
     };
   }
 
@@ -547,6 +632,21 @@ private:
         device_.graphics_queue(),
         mesh_gpus_,
         [this](MeshGpu retired) { retired_meshes_.retire(std::move(retired), frame_counter_); });
+  }
+
+  // Republishes the averaged numbers every window. A window of 120 frames is
+  // about two seconds at 60 Hz: long enough to be stable, short enough to react
+  // while you are walking around looking for the slow spot.
+  static constexpr std::uint32_t k_profile_window_frames = 120;
+
+  void advance_profile_window() {
+    if (++profile_window_frames_ < k_profile_window_frames)
+      return;
+    profile_window_frames_ = 0;
+    gpu_profiler_.flush();
+    cpu_profiler_.flush();
+    if (profile_to_stdout_)
+      std::cout << profile_report();
   }
 
   void create_pipeline_cache() {
@@ -989,16 +1089,25 @@ private:
 
   SDL_Window *window_{};
   mutable RenderStats render_stats_{};
+  // CpuProfiler holds no Vulkan objects, so it is free of the ordering
+  // constraint that keeps GpuProfiler below device_.
+  mutable CpuProfiler cpu_profiler_;
+  std::uint32_t profile_window_frames_{0};
   MsaaSettings msaa_config_{};
   bool startup_point_shadow_filter_{false};
   ShadowFilterMode startup_shadow_filter_mode_{ShadowFilterMode::Pcf3x3};
   ShadowCascadeMode startup_cascade_mode_{ShadowCascadeMode::Dual};
   std::uint32_t startup_render_scale_{1};
   std::uint32_t startup_shadow_scale_{1};
+  bool profile_to_stdout_{false};
   std::uint32_t startup_shadow_map_resolution_{k_default_shadow_map_resolution};
   std::uint32_t startup_spot_atlas_size_{1024};
   VulkanDevice device_;
   Swapchain swapchain_;
+  // MUST stay below device_: members are destroyed in reverse declaration
+  // order, so anything owning a Vulkan handle has to be declared after the
+  // device that created it or it will outlive the device and leak.
+  mutable GpuProfiler gpu_profiler_;
   vk::raii::PipelineCache pipeline_cache_{nullptr};
   vk::raii::CommandPool command_pool_{nullptr};
   vk::raii::CommandBuffers command_buffers_{nullptr};

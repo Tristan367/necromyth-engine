@@ -4,6 +4,7 @@
 #include "scene/shadow_utils.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <string>
 
@@ -27,6 +28,10 @@ struct EngineConfig {
   // flight) -- not descriptor sets, and not anything that reallocates when
   // characters spawn.
   std::uint32_t max_skinned_instances{256};
+  // Print a per-pass CPU/GPU timing breakdown every profiling window.
+  // ENGINE_PROFILE=1. Timestamps are always collected and readable via
+  // VulkanContext::profile_report(); this only controls the periodic dump.
+  bool profile_to_stdout{false};
 };
 
 [[nodiscard]] inline auto engine_config_from_environment() -> EngineConfig {
@@ -35,6 +40,8 @@ struct EngineConfig {
   config.render_scale = render_scale_settings_from_environment();
   config.shadow_scale = shadow_scale_settings_from_environment();
   config.present_mode = present_mode_preference_from_environment();
+  if (const char *env = std::getenv("ENGINE_PROFILE"); env != nullptr && env[0] != '\0')
+    config.profile_to_stdout = env[0] != '0';
   return config;
 }
 

@@ -22,6 +22,30 @@ picked up automatically (CONFIGURE_DEPENDS glob); keep it self-contained.
 A GPU-side change still needs `cd ../necromyth-engine-demo && make debug` and an
 actual run with validation layers on.
 
+## Profiling
+
+`ENGINE_PROFILE=1` prints a per-pass CPU/GPU breakdown every 120 frames.
+`VulkanContext::profile_report()` returns the same text for a debug overlay, and
+`gpu_profiler()` / `cpu_profiler()` expose the raw per-zone numbers.
+
+GPU zones come from real timestamps written into the command buffer and read back
+only after that frame slot's fence has been waited on, so collection never
+blocks. CPU zones are host timers around each phase of the frame.
+
+Read it like this:
+
+- **`acquire swapchain image` large, everything else small** — you are waiting on
+  the display, not rendering. At 60 Hz FIFO this is the idle remainder of the
+  frame and is exactly what you want to see. Profile with `ENGINE_PRESENT=mailbox`
+  to remove it and see the real cost.
+- **GPU total high** — look at which pass dominates before touching anything.
+- **`record commands` high with a low GPU total** — you are CPU-bound on draw
+  submission; fewer draw calls (batching, culling) will help, a cheaper shader
+  will not.
+
+Measure before and after, in mailbox mode, and quote the numbers. Eyeballing the
+frame rate cannot distinguish a 5 ms pass from a 0.1 ms one.
+
 ## Scaling rule: the demo is not the workload
 
 The demo builds its scene once at startup, gives every skinned instance a pose

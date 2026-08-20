@@ -10,6 +10,7 @@
 #include "renderer/scene_gpu.hpp"
 #include "renderer/msaa_color_image.hpp"
 #include "renderer/pipeline_id.hpp"
+#include "renderer/profiler.hpp"
 #include "renderer/pipeline_registry.hpp"
 #include "renderer/render_color_image.hpp"
 #include "renderer/shadow_map.hpp"
@@ -78,6 +79,39 @@ struct DrawBindState {
 };
 
 struct PassRecorder {
+  // Brackets one pass with GPU timestamps. Nested passes are not supported --
+  // each zone is one contiguous span of the command buffer.
+  class ScopedGpuZone {
+  public:
+    ScopedGpuZone(const PassRecorder &recorder, vk::raii::CommandBuffer &command_buffer, GpuZone zone)
+        : recorder_(recorder), command_buffer_(command_buffer), zone_(zone) {
+      if (recorder_.gpu_profiler != nullptr)
+        recorder_.gpu_profiler->begin_zone(command_buffer_, recorder_.profile_frame_index, zone_);
+    }
+    ~ScopedGpuZone() { close(); }
+
+    // A timestamp cannot be written after vkEndCommandBuffer, and
+    // record_main_pass ends the command buffer at more than one exit, so that
+    // pass closes its zone explicitly rather than leaving it to scope exit.
+    void close() {
+      if (closed_ || recorder_.gpu_profiler == nullptr)
+        return;
+      recorder_.gpu_profiler->end_zone(command_buffer_, recorder_.profile_frame_index, zone_);
+      closed_ = true;
+    }
+
+    ScopedGpuZone(const ScopedGpuZone &) = delete;
+    auto operator=(const ScopedGpuZone &) -> ScopedGpuZone & = delete;
+    ScopedGpuZone(ScopedGpuZone &&) = delete;
+    auto operator=(ScopedGpuZone &&) -> ScopedGpuZone & = delete;
+
+  private:
+    const PassRecorder &recorder_;
+    vk::raii::CommandBuffer &command_buffer_;
+    GpuZone zone_;
+    bool closed_{false};
+  };
+
   const PipelineRegistry &pipelines;
   const DescriptorResources &descriptors;
   const Swapchain &swapchain;
@@ -93,6 +127,8 @@ struct PassRecorder {
   vk::Extent2D render_extent{};
   const RenderColorImage *render_color_image{nullptr};
   RenderStats *stats{nullptr};
+  GpuProfiler *gpu_profiler{nullptr};
+  std::uint32_t profile_frame_index{0};
 
   [[nodiscard]] auto uses_render_scale() const -> bool {
     return render_color_image != nullptr;
@@ -651,6 +687,7 @@ struct PassRecorder {
        PassLayoutState &layouts,
        const std::vector<DrawCommand> &shadow_draws,
        const std::array<glm::mat4, k_max_shadow_cascades> &cascade_vps) const {
+    const ScopedGpuZone gpu_zone(*this, command_buffer, GpuZone::ShadowDirectional);
     if (layouts.shadow_image_layout != vk::ImageLayout::eDepthAttachmentOptimal) {
       const vk::ImageLayout previous_layout = layouts.shadow_image_layout;
       const vk::AccessFlags2 previous_access =
@@ -746,6 +783,7 @@ struct PassRecorder {
       vk::Image atlas_image,
       vk::ImageView atlas_view,
       std::uint32_t atlas_size = 1024) const {
+    const ScopedGpuZone gpu_zone(*this, command_buffer, GpuZone::ShadowSpot);
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
 
@@ -864,6 +902,7 @@ struct PassRecorder {
       vk::Image cube_image,
       std::span<const vk::raii::ImageView> cube_face_views,
       float face_size) const {
+    const ScopedGpuZone gpu_zone(*this, command_buffer, GpuZone::ShadowPoint);
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
 
@@ -954,6 +993,7 @@ struct PassRecorder {
       const Frustum &camera_cull,
       const FrameOverlayCallback *overlay = nullptr,
       std::function<void(vk::raii::CommandBuffer &)> post_geometry = {}) const {
+    ScopedGpuZone gpu_zone(*this, command_buffer, GpuZone::MainPass);
     if (uses_render_scale())
       transition_render_color_to_color_attachment(command_buffer, layouts);
     else
@@ -1013,6 +1053,7 @@ struct PassRecorder {
             vk::PipelineStageFlagBits2::eTransfer,
             vk::PipelineStageFlagBits2::eBottomOfPipe);
         layouts.swapchain_image_layouts[image_index] = vk::ImageLayout::ePresentSrcKHR;
+        gpu_zone.close();
         command_buffer.end();
         return;
       }
@@ -1028,6 +1069,7 @@ struct PassRecorder {
       record_overlay_pass(command_buffer, frame_index, image_index, *overlay);
     }
 
+    gpu_zone.close();
     finish_main_pass(command_buffer, image_index, layouts);
   }
 
