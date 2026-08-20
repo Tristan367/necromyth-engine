@@ -12,6 +12,11 @@ struct MeshVertex {
   float normal[3];
   float color[3];
   float tex_coord[2];
+  // Per-vertex texture array layer, added to the instance's base layer. Lets one
+  // mesh carry many materials -- a voxel chunk holds grass, dirt, stone, bark and
+  // leaves in a single draw. 0 means "just use the instance's layer", so meshes
+  // that do not care are unaffected.
+  std::uint32_t material;
   float joint_indices[4];
   float joint_weights[4];
 
@@ -20,6 +25,7 @@ struct MeshVertex {
            std::memcmp(normal, other.normal, sizeof(normal)) == 0 &&
            std::memcmp(color, other.color, sizeof(color)) == 0 &&
            std::memcmp(tex_coord, other.tex_coord, sizeof(tex_coord)) == 0 &&
+           material == other.material &&
            std::memcmp(joint_indices, other.joint_indices, sizeof(joint_indices)) == 0 &&
            std::memcmp(joint_weights, other.joint_weights, sizeof(joint_weights)) == 0;
   }

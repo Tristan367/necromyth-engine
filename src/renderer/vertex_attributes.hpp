@@ -13,7 +13,7 @@ namespace engine {
   return {.binding = 0, .stride = sizeof(MeshVertex), .inputRate = vk::VertexInputRate::eVertex};
 }
 
-[[nodiscard]] inline auto attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 6> {
+[[nodiscard]] inline auto attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 7> {
   return {{
       {.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(MeshVertex, pos)},
       {.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(MeshVertex, normal)},
@@ -21,15 +21,17 @@ namespace engine {
       {.location = 3, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(MeshVertex, tex_coord)},
       {.location = 4, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(MeshVertex, joint_indices)},
       {.location = 5, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(MeshVertex, joint_weights)},
+      {.location = 6, .binding = 0, .format = vk::Format::eR32Uint, .offset = offsetof(MeshVertex, material)},
   }};
 }
 
-[[nodiscard]] inline auto static_attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 4> {
+[[nodiscard]] inline auto static_attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 5> {
   return {{
       {.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(MeshVertex, pos)},
       {.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(MeshVertex, normal)},
       {.location = 2, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(MeshVertex, color)},
       {.location = 3, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(MeshVertex, tex_coord)},
+      {.location = 6, .binding = 0, .format = vk::Format::eR32Uint, .offset = offsetof(MeshVertex, material)},
   }};
 }
 

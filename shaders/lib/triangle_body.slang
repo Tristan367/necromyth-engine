@@ -16,7 +16,9 @@ VSOutput vertMain(VSInput input, uint instanceId : SV_InstanceID) {
     output.worldNormal = normalize(mul((float3x3)inst.model, input.inNormal));
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
-    output.textureLayer = inst.textureLayer;
+    // Instance base layer plus the vertex's own material, so a chunk of many
+    // block types is one draw.
+    output.textureLayer = inst.textureLayer + input.inMaterial;
     output.sampleTextureArray = inst.sampleTextureArray;
     return output;
 }

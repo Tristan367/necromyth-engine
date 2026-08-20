@@ -1,8 +1,14 @@
+// Locations are explicit because Slang refuses to mix implicit and explicit
+// bindings, and inMaterial has to sit at 6 to leave 4 and 5 for the skinning
+// attributes.
 struct VSInput {
-    float3 inPosition;
-    float3 inNormal;
-    float3 inColor;
-    float2 inTexCoord;
+    [[vk::location(0)]] float3 inPosition;
+    [[vk::location(1)]] float3 inNormal;
+    [[vk::location(2)]] float3 inColor;
+    [[vk::location(3)]] float2 inTexCoord;
+    // Per-vertex texture array layer, added to the instance's base layer. One
+    // mesh can therefore carry many materials.
+    [[vk::location(6)]] uint inMaterial;
 };
 
 struct VSOutput {
