@@ -14,6 +14,12 @@ make        # compiles all engine headers + shaders
 make test   # the above, then ctest
 ```
 
+Both are warning-free, C++ **and** Slang. Keep them that way -- a build with a
+handful of accepted warnings is a build where a new one goes unnoticed. Slang
+warning 39001 (`explicit binding overlap`) is disabled by id in CMakeLists,
+because a Texture and its Sampler sharing one `[[vk::binding]]` is how a combined
+image sampler is written; nothing else is suppressed.
+
 Before this existed, `make` built three third-party TUs and reported success
 while the entire header-only engine went unchecked — breakage surfaced as a
 build error in the demo, or at runtime in the game. If you add a header it is

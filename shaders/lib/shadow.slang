@@ -51,6 +51,11 @@ float applyCoverageFade(float shadow, float2 projectionXY) {
 // Returns false if the projection falls outside [0,1] or behind the camera.
 bool projectCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, uint layer,
                           out float3 outProjection, out float outCosTheta) {
+    // Initialised before any early return: callers are expected to check the
+    // return value, but leaving an out parameter undefined makes one forgotten
+    // check read garbage instead of a harmless zero.
+    outProjection = float3(0.0, 0.0, 0.0);
+
     float3 n = normalize(normal);
     outCosTheta = clamp(dot(n, lightDir), 0.0, 1.0);
     float3 receiverPos = worldPos + n * (kNormalOffsetScale * (1.0 - outCosTheta));

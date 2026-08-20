@@ -37,6 +37,14 @@ find_program(SLANGC_EXECUTABLE slangc
     REQUIRED
 )
 
+# 39001 "explicit binding overlap" fires on every combined image sampler: a
+# Texture and its Sampler deliberately share one [[vk::binding]], which is how
+# VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER is expressed with separate Slang
+# types. It is the intended idiom here and matches the descriptor layout, so it
+# is silenced by id rather than blanket-disabling warnings -- anything else the
+# shader compiler has to say should still be visible.
+set(VCE_SLANGC_WARNING_FLAGS -warnings-disable 39001)
+
 set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 set(SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS "${SHADER_SOURCE_DIR}/*.slang")
@@ -66,6 +74,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
+                ${VCE_SLANGC_WARNING_FLAGS}
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMain
@@ -83,6 +92,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
+                ${VCE_SLANGC_WARNING_FLAGS}
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMain
@@ -112,6 +122,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
+                ${VCE_SLANGC_WARNING_FLAGS}
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMain
@@ -141,6 +152,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
+                ${VCE_SLANGC_WARNING_FLAGS}
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMainSkinned
@@ -158,6 +170,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
+                ${VCE_SLANGC_WARNING_FLAGS}
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMainSkinned
@@ -175,6 +188,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
+                ${VCE_SLANGC_WARNING_FLAGS}
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMain
@@ -194,6 +208,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -I "${SHADER_SOURCE_DIR}"
                 -target spirv
                 -profile spirv_1_4
+                ${VCE_SLANGC_WARNING_FLAGS}
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMain
