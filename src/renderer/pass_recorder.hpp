@@ -3,6 +3,7 @@
 #include "renderer/frame_overlay.hpp"
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
+#include "renderer/frustum.hpp"
 #include "renderer/image_barrier.hpp"
 #include "renderer/light_buffer.hpp"
 #include "renderer/mesh_gpu.hpp"
@@ -35,6 +36,21 @@ struct PassLayoutState {
   mutable vk::ImageLayout depth_image_layout{vk::ImageLayout::eUndefined};
   mutable vk::ImageLayout msaa_color_layout{vk::ImageLayout::eUndefined};
   mutable vk::ImageLayout render_color_layout{vk::ImageLayout::eUndefined};
+};
+
+// Per-frame counters. Optimising a renderer without them is guesswork, and the
+// numbers are almost free: they are incremented on paths that already branch.
+struct RenderStats {
+  std::uint32_t draws_submitted{};   // main pass draw calls actually recorded
+  std::uint32_t draws_culled{};      // main pass instances rejected by the frustum
+  std::uint32_t shadow_draws_submitted{};
+  std::uint32_t shadow_draws_culled{};
+
+  void reset() { *this = {}; }
+
+  [[nodiscard]] auto main_pass_total() const -> std::uint32_t {
+    return draws_submitted + draws_culled;
+  }
 };
 
 struct DrawBindState {
@@ -87,6 +103,7 @@ struct PassRecorder {
   std::uint32_t shadow_cascade_count{1};
   vk::Extent2D render_extent{};
   const RenderColorImage *render_color_image{nullptr};
+  RenderStats *stats{nullptr};
 
   [[nodiscard]] auto uses_render_scale() const -> bool {
     return render_color_image != nullptr;
@@ -107,6 +124,13 @@ struct PassRecorder {
       command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelines.layout(), 0,
                                         descriptors.frame_set(frame_index), nullptr);
     }
+  }
+
+  // A zero radius means the draw opted out of culling (skinned meshes animate
+  // outside their bind-pose bounds; background geometry ignores the camera
+  // translation entirely).
+  [[nodiscard]] static auto is_visible(const DrawCommand &draw, const Frustum &cull) -> bool {
+    return draw.world_bounds.radius <= 0.0F || cull.intersects(draw.world_bounds);
   }
 
   [[nodiscard]] auto material_descriptor_index(const DrawCommand &draw) const -> std::optional<std::uint32_t> {
@@ -194,6 +218,7 @@ struct PassRecorder {
        std::uint32_t frame_index,
        const glm::mat4 &light_vp,
        DrawBindState &state,
+       const Frustum *cull,
        std::uint32_t point_light_index = 0) const {
     if (draw.mesh_index >= mesh_gpus.size())
       return;
@@ -201,34 +226,16 @@ struct PassRecorder {
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
     const bool is_point = cascade_index >= 10;
 
-    // Multiview point-shadow pass renders all six cube faces in one draw, so a
-    // single-face frustum test would wrongly cull geometry seen by other faces.
-    // Skip per-face culling here (the light's range already bounds coverage).
-    if (!is_point) {
-      const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
-      const glm::mat4 &m = draw.model;
-      const glm::vec3 center = glm::vec3(m * glm::vec4(bounds.center(), 1.0F));
-      const glm::vec3 half_extent = (bounds.max - bounds.min) * 0.5F;
-      const float world_radius = glm::length(glm::vec3(
-          glm::length(glm::vec3(m[0])) * half_extent.x,
-          glm::length(glm::vec3(m[1])) * half_extent.y,
-          glm::length(glm::vec3(m[2])) * half_extent.z));
-
-      // Frustum cull using Gribb/Hartmann planes (Godot: normalize normals).
-      const glm::vec4 r0(light_vp[0][0], light_vp[1][0], light_vp[2][0], light_vp[3][0]);
-      const glm::vec4 r1(light_vp[0][1], light_vp[1][1], light_vp[2][1], light_vp[3][1]);
-      const glm::vec4 r2(light_vp[0][2], light_vp[1][2], light_vp[2][2], light_vp[3][2]);
-      const glm::vec4 r3(light_vp[0][3], light_vp[1][3], light_vp[2][3], light_vp[3][3]);
-
-      auto norm = [](glm::vec4 p) { return p / glm::length(glm::vec3(p)); };
-      const glm::vec4 planes[6] = {
-          norm(r3 + r0), norm(r3 - r0), norm(r3 + r1),
-          norm(r3 - r1), norm(r2), norm(r3 - r2)};
-
-      auto test = [&](const glm::vec4 &p) { return glm::dot(glm::vec3(p), center) + p.w > -world_radius; };
-      for (const glm::vec4 &p : planes)
-        if (!test(p)) return;
+    // `cull` is null for the multiview point-shadow pass: it renders all six
+    // cube faces in one draw, so a single-face test would wrongly reject
+    // geometry visible from another face (the light's range already bounds it).
+    if (cull != nullptr && !is_visible(draw, *cull)) {
+      if (stats != nullptr)
+        ++stats->shadow_draws_culled;
+      return;
     }
+    if (stats != nullptr)
+      ++stats->shadow_draws_submitted;
 
     const PipelineId shadow_pipeline = is_point
         ? (is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth)
@@ -689,10 +696,10 @@ struct PassRecorder {
 
       DrawBindState bind_state{};
       bind_state.frame_index = frame_index;
-      for (const DrawCommand &draw : shadow_draws) {
-        const glm::mat4 &vp = cascade_vps[cascade_index];
-        draw_shadow_mesh(command_buffer, draw, cascade_index, frame_index, vp, bind_state);
-      }
+      const glm::mat4 &vp = cascade_vps[cascade_index];
+      const Frustum cascade_cull = Frustum::from_view_proj(vp);
+      for (const DrawCommand &draw : shadow_draws)
+        draw_shadow_mesh(command_buffer, draw, cascade_index, frame_index, vp, bind_state, &cascade_cull);
 
       command_buffer.endRendering();
     }
@@ -806,11 +813,12 @@ struct PassRecorder {
 
       const std::uint32_t cascade_idx = 2 + light_idx;
       const glm::mat4 spot_vp = LightStorageBuffer::compute_shadow_view_proj(sl);
+      const Frustum spot_cull = Frustum::from_view_proj(spot_vp);
       for (const DrawCommand &draw : draw_list) {
         if (draw.mesh_index >= mesh_gpus.size()) continue;
         const AABB &bounds = mesh_gpus[draw.mesh_index].bounds();
         if (!sphere_intersects_light(bounds, draw.model, sl.position, sl.range)) continue;
-        draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, spot_vp, bind_state);
+        draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, spot_vp, bind_state, &spot_cull);
       }
 
       command_buffer.endRendering();
@@ -892,7 +900,7 @@ struct PassRecorder {
       for (const DrawCommand &draw : draw_list) {
         if (draw.mesh_index >= mesh_gpus.size()) continue;
         if (!sphere_intersects_light(mesh_gpus[draw.mesh_index].bounds(), draw.model, pl.position, pl.range)) continue;
-        draw_shadow_mesh(command_buffer, draw, 10, frame_index, glm::mat4(1.0F), bind_state, si);
+        draw_shadow_mesh(command_buffer, draw, 10, frame_index, glm::mat4(1.0F), bind_state, nullptr, si);
       }
 
       command_buffer.endRendering();
@@ -933,6 +941,7 @@ struct PassRecorder {
       std::uint32_t image_index,
       PassLayoutState &layouts,
       const std::vector<DrawCommand> &draw_list,
+      const Frustum &camera_cull,
       const FrameOverlayCallback *overlay = nullptr,
       std::function<void(vk::raii::CommandBuffer &)> post_geometry = {}) const {
     if (uses_render_scale())
@@ -960,8 +969,20 @@ struct PassRecorder {
 
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
-    for (const DrawCommand &draw : draw_list)
+    // The main pass drew every instance unconditionally until now. With a
+    // streaming world most of the scene is behind the camera on any given frame,
+    // so this is the cheapest large win available: a plane test per instance
+    // against a frustum built once for the pass.
+    for (const DrawCommand &draw : draw_list) {
+      if (!is_visible(draw, camera_cull)) {
+        if (stats != nullptr)
+          ++stats->draws_culled;
+        continue;
+      }
+      if (stats != nullptr)
+        ++stats->draws_submitted;
       draw_mesh(command_buffer, draw, bind_state);
+    }
 
     if (post_geometry) post_geometry(command_buffer);
 

@@ -5,6 +5,8 @@
 // the wrong model, a light that would not turn off) rather than crashing.
 
 #include "renderer/draw_list.hpp"
+#include "renderer/frustum.hpp"
+#include "scene/camera.hpp"
 #include "scene/scene.hpp"
 
 #include <cstdio>
@@ -80,7 +82,7 @@ void test_bone_slot_indices_are_dense_and_ordered() {
   scene.remove_instance(inst_dead);
 
   std::vector<engine::DrawCommand> draws;
-  engine::build_draw_list(scene, draws);
+  engine::build_draw_list(scene, {}, draws);
 
   // Expectation computed independently of build_draw_list.
   std::uint32_t expected_slots = 0;
@@ -150,7 +152,7 @@ void test_same_texture_skinned_instances_stay_distinct() {
   }
 
   std::vector<engine::DrawCommand> draws;
-  engine::build_draw_list(scene, draws);
+  engine::build_draw_list(scene, {}, draws);
 
   check(draws.size() == k_horde, "every instance of the horde is drawn");
 
@@ -216,7 +218,7 @@ void test_draw_list_layer_and_shadow_partition() {
   (void)scene.add_instance(make_instance(engine::k_invalid_skin_index));
 
   std::vector<engine::DrawCommand> draws;
-  engine::build_draw_list(scene, draws);
+  engine::build_draw_list(scene, {}, draws);
 
   std::vector<engine::DrawCommand> shadow_draws;
   engine::build_shadow_draw_list(draws, shadow_draws);
@@ -239,6 +241,63 @@ void test_draw_list_layer_and_shadow_partition() {
   check(no_background_shadows, "background geometry casts no shadow");
 }
 
+
+// Frustum culling. A wrong near-plane convention (the OpenGL [-1,1] form on a
+// Vulkan [0,1] projection) culls geometry directly in front of the camera, and a
+// sign error culls everything or nothing -- both look like "the world vanished".
+void test_frustum_culls_behind_not_in_front() {
+  std::printf("frustum culling\n");
+
+  engine::Camera camera;
+  camera.set_aspect(16.0F / 9.0F);
+  camera.look_at({0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, -1.0F});
+
+  const engine::Frustum frustum =
+      engine::Frustum::from_view_proj(camera.view_projection_matrix());
+
+  check(frustum.intersects_sphere({0.0F, 0.0F, -10.0F}, 1.0F),
+        "sphere straight ahead is visible");
+  check(!frustum.intersects_sphere({0.0F, 0.0F, 10.0F}, 1.0F),
+        "sphere directly behind the camera is culled");
+  check(frustum.intersects_sphere({0.0F, 0.0F, 1.0F}, 5.0F),
+        "large sphere straddling the camera is kept (radius reaches the frustum)");
+  check(!frustum.intersects_sphere({10000.0F, 0.0F, -10.0F}, 1.0F),
+        "sphere far off to the side is culled");
+
+  // The near plane is the one that regresses when the depth convention is wrong.
+  check(frustum.intersects_sphere({0.0F, 0.0F, -0.5F}, 0.4F),
+        "sphere just past the near plane survives (Vulkan [0,1] depth convention)");
+}
+
+// Culling must never drop geometry that opted out: skinned meshes animate
+// outside their bind-pose bounds, and background geometry ignores camera
+// translation entirely.
+void test_cull_opt_out_is_respected() {
+  std::printf("cull opt-out\n");
+
+  engine::Scene scene;
+  (void)scene.add_mesh(engine::MeshSource{});
+  const std::uint32_t skin = scene.add_skeleton(make_skeleton(3));
+  std::vector<engine::PoseLayer> layers(1);
+
+  engine::MeshInstance sky = make_instance(engine::k_invalid_skin_index);
+  sky.layer = engine::RenderLayer::Background;
+  (void)scene.add_instance(sky);
+
+  const std::uint32_t skinned = scene.add_instance(make_instance(skin));
+  scene.instance(skinned).pose_layers = &layers;
+
+  std::vector<engine::DrawCommand> draws;
+  engine::build_draw_list(scene, {}, draws);
+
+  bool all_opted_out = true;
+  for (const engine::DrawCommand &draw : draws)
+    if (draw.world_bounds.radius > 0.0F)
+      all_opted_out = false;
+  check(all_opted_out,
+        "skinned and background draws carry radius 0 (never culled)");
+}
+
 } // namespace
 
 auto main() -> int {
@@ -246,6 +305,8 @@ auto main() -> int {
   test_same_texture_skinned_instances_stay_distinct();
   test_removed_lights_stop_emitting();
   test_draw_list_layer_and_shadow_partition();
+  test_frustum_culls_behind_not_in_front();
+  test_cull_opt_out_is_respected();
 
   if (g_failures != 0) {
     std::printf("\n%d check(s) failed\n", g_failures);

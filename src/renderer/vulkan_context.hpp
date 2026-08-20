@@ -184,6 +184,9 @@ public:
     frame_overlay_ = std::move(callback);
   }
 
+  // Last completed frame's draw/cull counts.
+  [[nodiscard]] auto render_stats() const -> const RenderStats & { return render_stats_; }
+
   [[nodiscard]] auto render_host_info() const -> RenderHostInfo {
     return RenderHostInfo{
         .instance = *device_.instance(),
@@ -392,7 +395,8 @@ public:
       }
     }
 
-    build_draw_list(scene, draw_list_);
+    render_stats_.reset();
+    build_draw_list(scene, mesh_gpus_, draw_list_);
     build_shadow_draw_list(draw_list_, shadow_draw_list_);
 
     auto &command_buffer = command_buffers_[frame_index_];
@@ -449,6 +453,7 @@ public:
         image_index,
         pass_layouts_,
         draw_list_,
+        Frustum::from_view_proj(scene.camera().view_projection_matrix()),
         overlay_ptr,
         std::move(post_geometry));
 
@@ -508,6 +513,7 @@ private:
         .shadow_cascade_count = shadow_cascade_layer_count(startup_cascade_mode_),
         .render_extent = render_extent(),
         .render_color_image = render_scale_active(startup_render_scale_) ? &render_color_image_ : nullptr,
+        .stats = &render_stats_,
     };
   }
 
@@ -1005,6 +1011,7 @@ private:
   }
 
   SDL_Window *window_{};
+  mutable RenderStats render_stats_{};
   MsaaSettings msaa_config_{};
   bool startup_point_shadow_filter_{false};
   ShadowFilterMode startup_shadow_filter_mode_{ShadowFilterMode::Pcf3x3};
