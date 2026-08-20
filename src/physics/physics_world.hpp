@@ -448,6 +448,12 @@ public:
     character_->SetLinearVelocity(JPH::Vec3(v.x, v.y, v.z));
   }
 
+  // Teleports the character. Needed for respawn, and for rebasing when the
+  // world origin shifts under a streaming world.
+  void set_position(const glm::vec3 &p) {
+    character_->SetPosition(JPH::RVec3(p.x, p.y, p.z));
+  }
+
   [[nodiscard]] auto is_on_ground() const -> bool {
     return character_->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
   }
