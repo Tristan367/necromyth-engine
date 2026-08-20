@@ -1,12 +1,8 @@
 struct PushConstants {
-    float4x4 model;
-    uint textureArrayLayer;
-    uint sampleTextureArray;
+    uint instanceBase;        // index of this draw's first instance record
     uint shadowCascadeIndex;
     uint pointLightIndex;
-    float _pad0;
-    float _pad1;
-    float _pad2;
+    uint _pad;
 };
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> pushConstants;

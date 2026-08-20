@@ -135,15 +135,51 @@ auto main(int argc, char **argv) -> int {
   }
 
   const engine::RenderStats stats = runtime.vulkan().render_stats();
+
+  // Batching these into one draw call is only correct if each character still
+  // reads its own slice of the shared bone palette. The characters were started
+  // at staggered animation phases, so their poses must differ -- if the bone
+  // base were wrong they would all show the first instance's pose, which renders
+  // perfectly happily and looks like a horde marching in lockstep.
+  std::size_t compared = 0;
+  std::size_t distinct = 0;
+  const engine::MeshInstance *reference = nullptr;
+  for (const engine::InstanceHandle handle : instances) {
+    const engine::MeshInstance *instance = scene.try_instance(handle);
+    if (instance == nullptr || instance->cached_bone_worlds.empty())
+      continue;
+    if (reference == nullptr) {
+      reference = instance;
+      continue;
+    }
+    ++compared;
+    if (instance->cached_bone_worlds != reference->cached_bone_worlds)
+      ++distinct;
+  }
+
   runtime.shutdown();
 
   std::printf("frames=%d horde=%d despawned=%zu respawned=%zu\n",
               frames, horde_size, despawned, respawned);
-  std::printf("last frame: %u draws submitted, %u culled\n",
-              stats.draws_submitted, stats.draws_culled);
+  std::printf("last frame, main pass: %u instances submitted in %u draw calls (%u culled)\n",
+              stats.draws_submitted, stats.batches_submitted, stats.draws_culled);
+  std::printf("last frame, shadow:    %u instances submitted in %u draw calls\n",
+              stats.shadow_draws_submitted, stats.shadow_batches_submitted);
+  if (stats.batches_submitted > 0) {
+    std::printf("instances per draw call: %.1f\n",
+                static_cast<double>(stats.draws_submitted) /
+                    static_cast<double>(stats.batches_submitted));
+  }
+
+  std::printf("distinct poses: %zu of %zu characters differ from the first\n", distinct, compared);
 
   if (stats.main_pass_total() == 0) {
     std::printf("FAIL: nothing was drawn\n");
+    return EXIT_FAILURE;
+  }
+  if (compared == 0 || distinct * 2 < compared) {
+    std::printf("FAIL: the horde is posed in lockstep -- characters are not reading\n"
+                "      their own slice of the bone palette.\n");
     return EXIT_FAILURE;
   }
   std::printf("ok\n");

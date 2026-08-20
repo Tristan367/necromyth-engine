@@ -416,44 +416,39 @@ void test_deferred_delete_holds_for_frames_in_flight() {
 void test_bone_slot_offsets_are_distinct_and_aligned() {
   std::printf("bone slice addressing\n");
 
-  for (const vk::DeviceSize alignment : {vk::DeviceSize{16}, vk::DeviceSize{64}, vk::DeviceSize{256}}) {
-    const std::uint32_t stride = engine::bone_slot_stride(alignment);
-    check(stride % alignment == 0,
-          "slot stride is a multiple of minStorageBufferOffsetAlignment");
-    check(stride >= sizeof(glm::mat4) * engine::k_max_bones,
-          "slot stride holds a full bone palette");
-  }
-
   constexpr std::uint32_t k_capacity = 64;
   constexpr std::uint32_t k_frames = 2;
-  const std::uint32_t stride = engine::bone_slot_stride(64);
 
-  std::vector<std::uint32_t> offsets;
+  std::vector<std::uint32_t> bases;
   for (std::uint32_t frame = 0; frame < k_frames; ++frame)
     for (std::uint32_t slot = 0; slot < k_capacity; ++slot)
-      offsets.push_back(engine::bone_slot_offset(frame, slot, k_capacity, stride));
+      bases.push_back(engine::bone_slot_matrix_base(frame, slot, k_capacity));
 
-  std::ranges::sort(offsets);
-  const bool all_distinct = std::ranges::adjacent_find(offsets) == offsets.end();
-  check(all_distinct, "every (frame, slot) pair maps to a distinct offset");
+  std::ranges::sort(bases);
+  check(std::ranges::adjacent_find(bases) == bases.end(),
+        "every (frame, slot) pair maps to a distinct matrix base");
 
-  bool all_aligned = true;
-  for (const std::uint32_t offset : offsets)
-    if (offset % stride != 0)
-      all_aligned = false;
-  check(all_aligned, "every offset is stride-aligned");
+  // Slices must not overlap: consecutive bases have to differ by a full palette,
+  // or one character's matrices spill into the next character's.
+  bool no_overlap = true;
+  for (std::size_t i = 1; i < bases.size(); ++i)
+    if (bases[i] - bases[i - 1] < engine::k_bone_slot_matrices)
+      no_overlap = false;
+  check(no_overlap, "slices are a whole palette apart, so they cannot overlap");
 
-  // offset + range must stay inside the buffer for the last slot of the last
-  // frame, or the descriptor read runs past the end.
-  const std::uint32_t buffer_size = k_frames * k_capacity * stride;
-  const std::uint32_t last = engine::bone_slot_offset(k_frames - 1, k_capacity - 1, k_capacity, stride);
-  check(last + stride == buffer_size,
-        "the last slot's window ends exactly at the end of the buffer");
+  check(engine::k_bone_slot_matrices >= engine::k_max_bones,
+        "a slice holds a full bone palette");
+
+  // The last slice must end exactly at the end of the buffer.
+  const std::uint32_t total = k_frames * k_capacity * engine::k_bone_slot_matrices;
+  const std::uint32_t last = engine::bone_slot_matrix_base(k_frames - 1, k_capacity - 1, k_capacity);
+  check(last + engine::k_bone_slot_matrices == total,
+        "the last slice ends exactly at the end of the palette");
 
   // Frames must not overlap: a slot's frame-0 and frame-1 slices are what make
   // double buffering safe while a frame is still in flight.
-  check(engine::bone_slot_offset(0, 5, k_capacity, stride) !=
-            engine::bone_slot_offset(1, 5, k_capacity, stride),
+  check(engine::bone_slot_matrix_base(0, 5, k_capacity) !=
+            engine::bone_slot_matrix_base(1, 5, k_capacity),
         "the same slot occupies different memory in different frames");
 }
 

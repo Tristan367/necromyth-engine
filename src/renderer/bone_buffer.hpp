@@ -16,22 +16,21 @@
 
 namespace engine {
 
-// Per-slot stride: k_max_bones matrices rounded up to the device's
-// minStorageBufferOffsetAlignment. Free functions so the offset arithmetic --
-// the part that decides which character reads which matrices -- can be tested
-// without a device.
-[[nodiscard]] constexpr auto bone_slot_stride(vk::DeviceSize min_alignment) -> std::uint32_t {
-  constexpr vk::DeviceSize k_slot_bytes = sizeof(glm::mat4) * k_max_bones;
-  const vk::DeviceSize alignment = min_alignment > 0 ? min_alignment : 1;
-  return static_cast<std::uint32_t>(((k_slot_bytes + alignment - 1) / alignment) * alignment);
-}
+// Per-slot stride, in matrices. Exactly k_max_bones: the descriptor covers the
+// whole palette and each instance selects its slice by matrix index, so there is
+// no offset alignment to satisfy. (It used to be rounded up to
+// minStorageBufferOffsetAlignment, which was required only while slices were
+// chosen with a dynamic offset.)
+//
+// Free functions so the arithmetic that decides which character reads which
+// matrices can be tested without a device.
+inline constexpr std::uint32_t k_bone_slot_matrices = k_max_bones;
 
-[[nodiscard]] constexpr auto bone_slot_offset(
+[[nodiscard]] constexpr auto bone_slot_matrix_base(
     std::uint32_t frame_index,
     std::uint32_t slot,
-    std::uint32_t slot_capacity,
-    std::uint32_t slot_stride) -> std::uint32_t {
-  return (frame_index * slot_capacity + slot) * slot_stride;
+    std::uint32_t slot_capacity) -> std::uint32_t {
+  return (frame_index * slot_capacity + slot) * k_bone_slot_matrices;
 }
 
 // One shared bone-matrix buffer for every skinned instance in the scene, bound
@@ -49,12 +48,11 @@ namespace engine {
 // nothing but a slot index: no reallocation, no descriptor rewrite, no stall.
 // The descriptor set then only has to vary by texture, not by instance.
 //
-// Layout is [frame][slot], with a fixed per-slot stride of k_max_bones matrices
-// rounded up to the device's minStorageBufferOffsetAlignment. A fixed stride
-// wastes memory on small skeletons (an 11-bone model uses 704 of 8192 bytes) but
-// makes an offset pure arithmetic -- no table to rebuild, and nothing that can
-// fall out of step with the slot assignment. At a few megabytes total that is
-// the right trade for this engine.
+// Layout is [frame][slot], with a fixed per-slot stride of k_max_bones matrices.
+// A fixed stride wastes memory on small skeletons (an 11-bone model uses 11 of
+// 128 slots) but makes a base index pure arithmetic -- no table to rebuild, and
+// nothing that can fall out of step with the slot assignment. At a few megabytes
+// total that is the right trade for this engine.
 class BonePalette {
 public:
   void create(
@@ -62,13 +60,12 @@ public:
       vk::raii::Device &device,
       std::uint32_t slot_capacity,
       std::uint32_t frame_count) {
-    const vk::PhysicalDeviceProperties properties = physical_device.getProperties();
-    slot_stride_ = bone_slot_stride(properties.limits.minStorageBufferOffsetAlignment);
     slot_capacity_ = std::max(slot_capacity, 1U);
     frame_count_ = std::max(frame_count, 1U);
 
     const vk::DeviceSize buffer_size =
-        static_cast<vk::DeviceSize>(slot_stride_) * slot_capacity_ * frame_count_;
+        static_cast<vk::DeviceSize>(k_bone_slot_matrices) * sizeof(glm::mat4) *
+        slot_capacity_ * frame_count_;
 
     const vk::BufferCreateInfo buffer_info{
         .size = buffer_size,
@@ -99,10 +96,13 @@ public:
       matrices[i] = glm::mat4(1.0F);
   }
 
-  // Byte offset of one instance's slice, for bindDescriptorSets' dynamic offset.
-  [[nodiscard]] auto dynamic_offset(std::uint32_t frame_index, std::uint32_t slot) const
+  // Index of an instance's first bone matrix within the whole palette, for its
+  // instance record. The shader indexes the buffer as an array, because an
+  // instanced draw binds once and cannot vary anything per instance except
+  // through instance data.
+  [[nodiscard]] auto matrix_base(std::uint32_t frame_index, std::uint32_t slot) const
       -> std::uint32_t {
-    return bone_slot_offset(frame_index, slot, slot_capacity_, slot_stride_);
+    return bone_slot_matrix_base(frame_index, slot, slot_capacity_);
   }
 
   void write(std::uint32_t frame_index, std::uint32_t slot, std::span<const glm::mat4> joint_matrices) {
@@ -111,26 +111,22 @@ public:
     const std::size_t count = std::min<std::size_t>(joint_matrices.size(), k_max_bones);
     if (count == 0)
       return;
-    std::memcpy(mapped_ + dynamic_offset(frame_index, slot),
+    std::memcpy(mapped_ + static_cast<std::size_t>(matrix_base(frame_index, slot)) * sizeof(glm::mat4),
                 joint_matrices.data(),
                 count * sizeof(glm::mat4));
   }
 
   [[nodiscard]] auto buffer() const -> vk::Buffer { return *buffer_; }
   [[nodiscard]] auto slot_capacity() const -> std::uint32_t { return slot_capacity_; }
-  [[nodiscard]] auto slot_stride() const -> std::uint32_t { return slot_stride_; }
   [[nodiscard]] auto valid() const -> bool { return mapped_ != nullptr; }
 
-  // Size of the window a dynamic-offset descriptor exposes at each slot. The
-  // buffer is an exact multiple of this, so offset + range never runs past the
-  // end for any valid slot.
-  [[nodiscard]] auto descriptor_range() const -> vk::DeviceSize { return slot_stride_; }
+  // The descriptor now covers the whole palette; slices are selected by index.
+  [[nodiscard]] auto descriptor_range() const -> vk::DeviceSize { return vk::WholeSize; }
 
 private:
   vk::raii::Buffer buffer_{nullptr};
   vk::raii::DeviceMemory memory_{nullptr};
   std::byte *mapped_{nullptr};
-  std::uint32_t slot_stride_{0};
   std::uint32_t slot_capacity_{0};
   std::uint32_t frame_count_{0};
 };

@@ -9,6 +9,7 @@
 #include "renderer/depth_image.hpp"
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
+#include "renderer/instance_buffer.hpp"
 #include "renderer/msaa_color_image.hpp"
 #include "renderer/pass_recorder.hpp"
 #include "renderer/pipeline_id.hpp"
@@ -83,6 +84,8 @@ public:
                          config.max_point_shadow_lights);
     create_point_light_shadow_ssbo(config.max_point_shadow_lights);
     particle_system_.create(device_.physical_device(), device_.device(), config.max_particles, 2);
+    instance_buffer_.create(device_.physical_device(), device_.device(),
+                            std::max(config.max_draw_instances, 1U), detail::max_frames_in_flight);
     max_skinned_instances_ = std::max(config.max_skinned_instances, 1U);
     bone_palette_.create(device_.physical_device(), device_.device(),
                          max_skinned_instances_, detail::max_frames_in_flight);
@@ -484,6 +487,7 @@ public:
     render_stats_.reset();
     build_draw_list(scene, draw_list_);
     build_shadow_draw_list(draw_list_, shadow_draw_list_);
+    write_instance_records(scene);
     cpu_profiler_.end(CpuZone::BuildDrawLists);
 
     cpu_profiler_.begin(CpuZone::RecordCommands);
@@ -611,6 +615,8 @@ private:
         .render_extent = render_extent(),
         .render_color_image = render_scale_active(startup_render_scale_) ? &render_color_image_ : nullptr,
         .stats = &render_stats_,
+        .visible_draws = &visible_draws_,
+        .shadow_visible_draws = &shadow_visible_draws_,
         .gpu_profiler = &gpu_profiler_,
         .profile_frame_index = frame_index_,
     };
@@ -632,6 +638,41 @@ private:
       };
       device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
     } catch (...) { /* device lost — no recovery */ }
+  }
+
+  // Writes one instance record per draw, for both lists.
+  //
+  // The two lists are sorted differently and get separate record ranges, so each
+  // is internally contiguous and can be batched independently. Duplicating a
+  // shadow caster's model matrix costs 80 bytes and buys batched shadow draws.
+  void write_instance_records(const Scene &scene) {
+    if (!instance_buffer_.begin_frame(frame_index_))
+      return;
+
+    const auto record = [&](DrawCommand &draw) {
+      GpuInstance instance;
+      instance.model = draw.model;
+      instance.texture_layer = draw.texture_index;
+      instance.sample_texture_array = draw.texture_source == TextureSource::ArrayLayer ? 1U : 0U;
+      instance.bone_base = draw.bone_instance_index != k_invalid_skin_index
+          ? bone_palette_.matrix_base(frame_index_, draw.bone_instance_index)
+          : k_no_bone_base;
+      draw.instance_index = instance_buffer_.push(instance);
+    };
+
+    for (DrawCommand &draw : draw_list_)
+      record(draw);
+    for (DrawCommand &draw : shadow_draw_list_)
+      record(draw);
+
+    if (instance_buffer_.overflowed() && !logged_instance_overflow_) {
+      std::cout << "Draw instances exceed max_draw_instances ("
+                << instance_buffer_.capacity()
+                << "); some geometry will not render. Raise "
+                   "EngineConfig::max_draw_instances.\n";
+      logged_instance_overflow_ = true;
+    }
+    (void)scene;
   }
 
   void sync_mesh_slots(const Scene &scene) {
@@ -923,6 +964,11 @@ private:
       buf_ptrs[i] = pt_shadow_buffers_[i] ? **pt_shadow_buffers_[i] : vk::Buffer{};
     descriptor_resources_.update_point_light_shadow_ssbo(device_.device(), buf_ptrs);
 
+    std::array<vk::Buffer, detail::max_frames_in_flight> instance_bufs{};
+    for (std::uint32_t i = 0; i < detail::max_frames_in_flight; ++i)
+      instance_bufs[i] = instance_buffer_.buffer(i);
+    descriptor_resources_.update_instance_buffers(device_.device(), instance_bufs);
+
     std::array<vk::Buffer, 2> particle_bufs{};
     for (std::uint32_t i = 0; i < 2; ++i)
       particle_bufs[i] = particle_system_.buffer(i);
@@ -1174,6 +1220,10 @@ private:
   TextureTable texture_table_;
   TextureArray texture_array_;
   BonePalette bone_palette_;
+  InstanceBuffer instance_buffer_;
+  mutable std::vector<DrawCommand> visible_draws_;
+  mutable std::vector<DrawCommand> shadow_visible_draws_;
+  bool logged_instance_overflow_{false};
   std::uint32_t max_skinned_instances_{0};
   bool skinned_pipelines_built_{false};
   std::vector<MeshGpuSlot> mesh_gpus_;

@@ -44,10 +44,12 @@ struct PassLayoutState {
 // Per-frame counters. Optimising a renderer without them is guesswork, and the
 // numbers are almost free: they are incremented on paths that already branch.
 struct RenderStats {
-  std::uint32_t draws_submitted{};   // main pass draw calls actually recorded
+  std::uint32_t draws_submitted{};   // main pass instances that survived culling
   std::uint32_t draws_culled{};      // main pass instances rejected by the frustum
+  std::uint32_t batches_submitted{}; // main pass drawIndexed calls actually recorded
   std::uint32_t shadow_draws_submitted{};
   std::uint32_t shadow_draws_culled{};
+  std::uint32_t shadow_batches_submitted{};
 
   void reset() { *this = {}; }
 
@@ -59,16 +61,17 @@ struct RenderStats {
 struct DrawBindState {
   static constexpr std::uint32_t k_unbound_mesh = UINT32_MAX;
 
-  // Identifies what is currently bound to set 1. The bone slot is part of the
-  // identity even though same-texture skinned instances now share a descriptor
-  // set: they differ by dynamic offset, and skipping the rebind would leave the
-  // previous instance's offset in place. Leaving the slot out of this key is
-  // what once made every same-texture skinned instance render with the first
-  // one's pose in the main pass while the shadow pass stayed correct.
+  // Identifies what is currently bound to set 1.
+  //
+  // The bone slot is deliberately NOT part of this any more: the skinned set now
+  // binds the whole palette, and each instance selects its slice by an index in
+  // its instance record, so two instances of the same character share both the
+  // set and the binding. (It had to be in the key while the slice was chosen by
+  // dynamic offset -- leaving it out then made every same-texture skinned
+  // instance render with the first one's pose.)
   struct MaterialKey {
     TextureSource texture_source{};
     std::uint32_t descriptor_index{};
-    std::uint32_t bone_instance_index{UINT32_MAX};
 
     auto operator<=>(const MaterialKey &) const = default;
   };
@@ -128,6 +131,9 @@ struct PassRecorder {
   vk::Extent2D render_extent{};
   const RenderColorImage *render_color_image{nullptr};
   RenderStats *stats{nullptr};
+  // Scratch for cull-then-batch, owned by the context so recording allocates nothing.
+  std::vector<DrawCommand> *visible_draws{nullptr};
+  std::vector<DrawCommand> *shadow_visible_draws{nullptr};
   GpuProfiler *gpu_profiler{nullptr};
   std::uint32_t profile_frame_index{0};
 
@@ -155,6 +161,45 @@ struct PassRecorder {
   // A zero radius means the draw opted out of culling (skinned meshes animate
   // outside their bind-pose bounds; background geometry ignores the camera
   // translation entirely).
+  // Walks a sorted draw list and hands each batchable run to `emit` as
+  // (first draw, count). Every pass shares this so the batching rule lives in
+  // one place -- a pass that grouped draws slightly differently from the way the
+  // instance records were laid out would render the wrong objects.
+  template <typename EmitFn>
+  static void for_each_batch(const std::vector<DrawCommand> &draws, EmitFn &&emit) {
+    std::size_t i = 0;
+    while (i < draws.size()) {
+      std::size_t end = i + 1;
+      while (end < draws.size() && draws_can_batch(draws[end - 1], draws[end]))
+        ++end;
+      emit(draws[i], static_cast<std::uint32_t>(end - i));
+      i = end;
+    }
+  }
+
+  // Selects the shadow casters for one light or cascade into `out`, so the
+  // survivors are contiguous and therefore batchable. `cull` is null for the
+  // multiview point-shadow pass: it renders all six cube faces in one draw, so a
+  // single-face frustum test would wrongly reject geometry visible from another
+  // face (the light's range already bounds it).
+  void select_shadow_casters(const std::vector<DrawCommand> &draws, const Frustum *cull,
+                             const glm::vec3 *light_pos, float light_range,
+                             std::vector<DrawCommand> &out) const {
+    out.clear();
+    for (const DrawCommand &draw : draws) {
+      const bool visible = (cull == nullptr || is_visible(draw, *cull)) &&
+                           (light_pos == nullptr || affected_by_light(draw, *light_pos, light_range));
+      if (!visible) {
+        if (stats != nullptr)
+          ++stats->shadow_draws_culled;
+        continue;
+      }
+      if (stats != nullptr)
+        ++stats->shadow_draws_submitted;
+      out.push_back(draw);
+    }
+  }
+
   // Null when the slot is out of range or holds no live geometry (a chunk that
   // streamed out this frame, whose instances have not been retired yet).
   [[nodiscard]] auto mesh_for(std::uint32_t mesh_index) const -> const MeshGpu * {
@@ -235,21 +280,18 @@ struct PassRecorder {
     const DrawBindState::MaterialKey material_key{
         .texture_source = draw.texture_source,
         .descriptor_index = *descriptor_index,
-        .bone_instance_index = bind_bone_set ? draw.bone_instance_index : UINT32_MAX,
     };
 
     if (state.material.has_value() && *state.material == material_key)
       return;
 
     if (bind_bone_set) {
-      const std::uint32_t bone_offset =
-          bone_palette->dynamic_offset(state.frame_index, draw.bone_instance_index);
       command_buffer.bindDescriptorSets(
           vk::PipelineBindPoint::eGraphics,
           pipelines.layout_for(draw.pipeline),
           1,
           descriptors.skinned_set(*descriptor_index),
-          bone_offset);
+          nullptr);
     } else {
       command_buffer.bindDescriptorSets(
           vk::PipelineBindPoint::eGraphics,
@@ -268,7 +310,7 @@ struct PassRecorder {
        std::uint32_t frame_index,
        const glm::mat4 &light_vp,
        DrawBindState &state,
-       const Frustum *cull,
+       std::uint32_t instance_count = 1,
        std::uint32_t point_light_index = 0) const {
     const MeshGpu *mesh = mesh_for(draw.mesh_index);
     if (mesh == nullptr)
@@ -277,16 +319,6 @@ struct PassRecorder {
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
     const bool is_point = cascade_index >= 10;
 
-    // `cull` is null for the multiview point-shadow pass: it renders all six
-    // cube faces in one draw, so a single-face test would wrongly reject
-    // geometry visible from another face (the light's range already bounds it).
-    if (cull != nullptr && !is_visible(draw, *cull)) {
-      if (stats != nullptr)
-        ++stats->shadow_draws_culled;
-      return;
-    }
-    if (stats != nullptr)
-      ++stats->shadow_draws_submitted;
 
     const PipelineId shadow_pipeline = is_point
         ? (is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth)
@@ -300,13 +332,13 @@ struct PassRecorder {
           pipelines.layout_for(shadow_pipeline),
           1,
           descriptors.shadow_bone_set(),
-          bone_palette->dynamic_offset(frame_index, draw.bone_instance_index));
+          nullptr);
     }
 
     bind_mesh_buffers(command_buffer, *mesh, draw.mesh_index, state);
 
     const TexturedPushConstants push_constants{
-        .model = draw.model,
+        .instance_base = draw.instance_index,
         .shadow_cascade_index = cascade_index,
         .point_light_index = point_light_index,
     };
@@ -317,13 +349,14 @@ struct PassRecorder {
         sizeof(TexturedPushConstants),
         &push_constants);
 
-    command_buffer.drawIndexed(mesh->index_count(), 1, 0, 0, 0);
+    command_buffer.drawIndexed(mesh->index_count(), instance_count, 0, 0, 0);
   }
 
   void draw_mesh(
       vk::raii::CommandBuffer &command_buffer,
       const DrawCommand &draw,
-      DrawBindState &state) const {
+      DrawBindState &state,
+      std::uint32_t instance_count = 1) const {
     const MeshGpu *mesh = mesh_for(draw.mesh_index);
     if (mesh == nullptr)
       return;
@@ -336,11 +369,7 @@ struct PassRecorder {
 
       bind_material(command_buffer, draw, state);
 
-      const TexturedPushConstants push_constants{
-          .model = draw.model,
-          .texture_array_layer = draw.texture_index,
-          .sample_texture_array = draw.texture_source == TextureSource::ArrayLayer ? 1U : 0U,
-      };
+      const TexturedPushConstants push_constants{.instance_base = draw.instance_index};
       command_buffer.pushConstants(
           pipelines.layout_for(draw.pipeline),
           vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
@@ -348,7 +377,7 @@ struct PassRecorder {
           sizeof(TexturedPushConstants),
           &push_constants);
     } else if (draw.pipeline == PipelineId::Background) {
-      const TexturedPushConstants push_constants{.model = draw.model};
+      const TexturedPushConstants push_constants{.instance_base = draw.instance_index};
       command_buffer.pushConstants(
           pipelines.layout_for(draw.pipeline),
           vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
@@ -358,7 +387,7 @@ struct PassRecorder {
     }
 
     bind_mesh_buffers(command_buffer, *mesh, draw.mesh_index, state);
-    command_buffer.drawIndexed(mesh->index_count(), 1, 0, 0, 0);
+    command_buffer.drawIndexed(mesh->index_count(), instance_count, 0, 0, 0);
   }
 
   void transition_swapchain_to_color_attachment(
@@ -749,8 +778,12 @@ struct PassRecorder {
       bind_state.frame_index = frame_index;
       const glm::mat4 &vp = cascade_vps[cascade_index];
       const Frustum cascade_cull = Frustum::from_view_proj(vp);
-      for (const DrawCommand &draw : shadow_draws)
-        draw_shadow_mesh(command_buffer, draw, cascade_index, frame_index, vp, bind_state, &cascade_cull);
+      select_shadow_casters(shadow_draws, &cascade_cull, nullptr, 0.0F, *shadow_visible_draws);
+      for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
+        draw_shadow_mesh(command_buffer, first, cascade_index, frame_index, vp, bind_state, count);
+        if (stats != nullptr)
+          ++stats->shadow_batches_submitted;
+      });
 
       command_buffer.endRendering();
     }
@@ -866,10 +899,12 @@ struct PassRecorder {
       const std::uint32_t cascade_idx = 2 + light_idx;
       const glm::mat4 spot_vp = LightStorageBuffer::compute_shadow_view_proj(sl);
       const Frustum spot_cull = Frustum::from_view_proj(spot_vp);
-      for (const DrawCommand &draw : draw_list) {
-        if (!affected_by_light(draw, sl.position, sl.range)) continue;
-        draw_shadow_mesh(command_buffer, draw, cascade_idx, frame_index, spot_vp, bind_state, &spot_cull);
-      }
+      select_shadow_casters(draw_list, &spot_cull, &sl.position, sl.range, *shadow_visible_draws);
+      for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
+        draw_shadow_mesh(command_buffer, first, cascade_idx, frame_index, spot_vp, bind_state, count);
+        if (stats != nullptr)
+          ++stats->shadow_batches_submitted;
+      });
 
       command_buffer.endRendering();
       ++light_idx;
@@ -959,10 +994,12 @@ struct PassRecorder {
       command_buffer.setScissor(0, vk::Rect2D{vk::Offset2D{0, 0}, face_ext});
       command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
-      for (const DrawCommand &draw : draw_list) {
-        if (!affected_by_light(draw, pl.position, pl.range)) continue;
-        draw_shadow_mesh(command_buffer, draw, 10, frame_index, glm::mat4(1.0F), bind_state, nullptr, si);
-      }
+      select_shadow_casters(draw_list, nullptr, &pl.position, pl.range, *shadow_visible_draws);
+      for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
+        draw_shadow_mesh(command_buffer, first, 10, frame_index, glm::mat4(1.0F), bind_state, count, si);
+        if (stats != nullptr)
+          ++stats->shadow_batches_submitted;
+      });
 
       command_buffer.endRendering();
     }
@@ -1035,6 +1072,11 @@ struct PassRecorder {
     // streaming world most of the scene is behind the camera on any given frame,
     // so this is the cheapest large win available: a plane test per instance
     // against a frustum built once for the pass.
+    // Culling runs before batching: a rejected draw in the middle of a run would
+    // leave a gap in the instance range, and the shader reads that range
+    // contiguously. visible_draws is a member scratch buffer so this does not
+    // allocate every frame.
+    visible_draws->clear();
     for (const DrawCommand &draw : draw_list) {
       if (!is_visible(draw, camera_cull)) {
         if (stats != nullptr)
@@ -1043,8 +1085,14 @@ struct PassRecorder {
       }
       if (stats != nullptr)
         ++stats->draws_submitted;
-      draw_mesh(command_buffer, draw, bind_state);
+      visible_draws->push_back(draw);
     }
+
+    for_each_batch(*visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
+      draw_mesh(command_buffer, first, bind_state, count);
+      if (stats != nullptr)
+        ++stats->batches_submitted;
+    });
 
     if (post_geometry) post_geometry(command_buffer);
 

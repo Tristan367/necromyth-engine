@@ -7,6 +7,7 @@
 #include "lib/mesh_types_skinned.slang"
 #include "lib/skinning.slang"
 #include "lib/textured_push_constants.slang"
+#include "lib/instance_data.slang"
 
 struct PointLightShadowData {
     float4x4 view;          // translate(-lightPos)
@@ -31,12 +32,13 @@ struct VSOutput {
 };
 
 [shader("vertex")]
-VSOutput vertMain(VSInput input, uint viewID : SV_ViewID) {
+VSOutput vertMain(VSInput input, uint viewID : SV_ViewID, uint instanceId : SV_InstanceID) {
     uint li = pushConstants.pointLightIndex;
     PointLightShadowData d = perLightData[li];
+    GpuInstance inst = loadInstance(instanceId);
 
     VSOutput output;
-    float4 worldPos = mul(pushConstants.model, float4(input.inPosition, 1.0));
+    float4 worldPos = mul(inst.model, float4(input.inPosition, 1.0));
     float4 lightLocal = mul(d.view, worldPos);
     output.position = mul(d.faceVP[viewID], lightLocal);
     output.lightDist = length(worldPos.xyz - d.pos.xyz);
@@ -48,15 +50,16 @@ VSOutput vertMain(VSInput input, uint viewID : SV_ViewID) {
 StructuredBuffer<float4x4> jointMatrices;
 
 [shader("vertex")]
-VSOutput vertMainSkinned(VSInputSkinned input, uint viewID : SV_ViewID) {
+VSOutput vertMainSkinned(VSInputSkinned input, uint viewID : SV_ViewID, uint instanceId : SV_InstanceID) {
     uint li = pushConstants.pointLightIndex;
     PointLightShadowData d = perLightData[li];
+    GpuInstance inst = loadInstance(instanceId);
 
-    float4x4 skinMat = computeSkinMatrix(input, jointMatrices);
+    float4x4 skinMat = computeSkinMatrix(input, jointMatrices, inst.boneBase);
 
     VSOutput output;
     float4 skinned = mul(skinMat, float4(input.inPosition, 1.0));
-    float4 worldPos = mul(pushConstants.model, skinned);
+    float4 worldPos = mul(inst.model, skinned);
     float4 lightLocal = mul(d.view, worldPos);
     output.position = mul(d.faceVP[viewID], lightLocal);
     output.lightDist = length(worldPos.xyz - d.pos.xyz);

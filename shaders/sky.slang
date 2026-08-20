@@ -1,14 +1,13 @@
 #include "lib/frame_uniforms.slang"
+// Shares the engine-wide push constant and instance layouts: background
+// geometry goes through the same draw list and gets an instance record like
+// everything else, so it must agree on both.
+#include "lib/textured_push_constants.slang"
+#include "lib/instance_data.slang"
 
 struct VSInput {
     float3 inPosition;
 };
-
-struct PushConstants {
-    float4x4 model;
-};
-[[vk::push_constant]]
-ConstantBuffer<PushConstants> pushConstants;
 
 struct VSOutput {
     float4 pos : SV_Position;
@@ -16,11 +15,11 @@ struct VSOutput {
 };
 
 [shader("vertex")]
-VSOutput vertMain(VSInput input) {
+VSOutput vertMain(VSInput input, uint instanceId : SV_InstanceID) {
     VSOutput output;
     output.direction = input.inPosition;
 
-    float4 world = mul(pushConstants.model, float4(input.inPosition, 1.0));
+    float4 world = mul(loadInstance(instanceId).model, float4(input.inPosition, 1.0));
     float4 viewPos = mul(ubo.viewSky, world);
     float4 clipPos = mul(ubo.proj, viewPos);
     clipPos.z = clipPos.w;

@@ -11,4 +11,10 @@ struct VSOutput {
     float3 worldPos;
     float3 fragColor;
     float2 fragTexCoord;
+    // Carried from the instance record. nointerpolation because these are
+    // per-instance selectors, not surface quantities -- interpolating a texture
+    // layer across a triangle is meaningless, and on a batched draw the
+    // neighbouring vertices may belong to a different instance entirely.
+    nointerpolation uint textureLayer;
+    nointerpolation uint sampleTextureArray;
 };

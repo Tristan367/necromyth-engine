@@ -66,6 +66,14 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eVertex,
         },
+        // Per-draw instance records: model matrix, material selection and bone
+        // palette base. Read by every vertex shader.
+        vk::DescriptorSetLayoutBinding{
+            .binding = 8,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex,
+        },
     };
 
     const std::array material_bindings{
@@ -84,12 +92,13 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
-        // Dynamic: one shared bone buffer for the whole scene, with each draw
-        // selecting its instance's slice via a dynamic offset. The shader sees
-        // an ordinary storage buffer -- this is transparent to SPIR-V.
+        // The whole shared bone palette. Each instance's slice is selected by
+        // an index carried in its instance record, not by a dynamic offset: a
+        // dynamic offset is fixed for a whole bind, so it cannot vary across the
+        // instances of a single instanced draw.
         vk::DescriptorSetLayoutBinding{
             .binding = 1,
-            .descriptorType = vk::DescriptorType::eStorageBufferDynamic,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eVertex,
         },
@@ -145,11 +154,7 @@ public:
         },
         vk::DescriptorPoolSize{
             .type = vk::DescriptorType::eStorageBuffer,
-            .descriptorCount = frame_count * 3,
-        },
-        vk::DescriptorPoolSize{
-            .type = vk::DescriptorType::eStorageBufferDynamic,
-            .descriptorCount = std::max(skinned_sets, 1U),
+            .descriptorCount = frame_count * 4 + skinned_sets,
         },
     };
 
@@ -370,7 +375,7 @@ public:
               .dstSet = *set,
               .dstBinding = 1,
               .descriptorCount = 1,
-              .descriptorType = vk::DescriptorType::eStorageBufferDynamic,
+              .descriptorType = vk::DescriptorType::eStorageBuffer,
               .pBufferInfo = &bone_info,
           },
       };
@@ -435,6 +440,21 @@ public:
       device.updateDescriptorSets(
           vk::WriteDescriptorSet{
               .dstSet = *frame_sets_[i], .dstBinding = 6, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eStorageBuffer,
+              .pBufferInfo = &info,
+          },
+          nullptr);
+    }
+  }
+
+  void update_instance_buffers(vk::raii::Device &device, std::span<const vk::Buffer> buffers) {
+    for (std::size_t i = 0; i < frame_sets_.size() && i < buffers.size(); ++i) {
+      if (buffers[i] == vk::Buffer{})
+        continue;
+      const vk::DescriptorBufferInfo info{.buffer = buffers[i], .offset = 0, .range = vk::WholeSize};
+      device.updateDescriptorSets(
+          vk::WriteDescriptorSet{
+              .dstSet = *frame_sets_[i], .dstBinding = 8, .descriptorCount = 1,
               .descriptorType = vk::DescriptorType::eStorageBuffer,
               .pBufferInfo = &info,
           },

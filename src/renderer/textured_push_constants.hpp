@@ -1,7 +1,5 @@
 #pragma once
 
-#include <glm/mat4x4.hpp>
-
 #include <cstdint>
 
 namespace engine {
@@ -11,13 +9,14 @@ enum class TextureSource : std::uint8_t {
   ArrayLayer = 1,
 };
 
+// 16 bytes. This used to carry the model matrix and material selection -- 92
+// bytes pushed per object -- which is exactly what made one draw call able to
+// describe only one object. Those live in the instance buffer now.
 struct TexturedPushConstants {
-  alignas(16) glm::mat4 model{};
-  std::uint32_t texture_array_layer{0};
-  std::uint32_t sample_texture_array{0};
+  std::uint32_t instance_base{0};
   std::uint32_t shadow_cascade_index{0};
   std::uint32_t point_light_index{0};
-  float _pad[3]{};
+  std::uint32_t _pad{0};
 };
 
 } // namespace engine

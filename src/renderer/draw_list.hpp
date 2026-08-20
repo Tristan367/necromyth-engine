@@ -24,7 +24,26 @@ struct DrawCommand {
   // World-space bounds, computed once here and reused by every culling pass.
   // radius == 0 means "bounds unknown" and disables culling for this draw.
   BoundingSphere world_bounds{};
+  // Index of this draw's record in the frame's instance buffer. Assigned when
+  // the records are written, which happens per list -- so a draw's index in the
+  // main list and in the shadow list differ.
+  std::uint32_t instance_index{0};
 };
+
+// True when `b` can be appended to a batch ending at `a`: same pipeline, same
+// mesh, same material binding, and adjacent instance records so one drawIndexed
+// with instanceCount > 1 covers both.
+//
+// The instance-record check is what makes this safe rather than clever: the
+// vertex shader reads record `instanceBase + SV_InstanceID`, so a gap in the
+// indices would silently draw the wrong objects.
+[[nodiscard]] inline auto draws_can_batch(const DrawCommand &a, const DrawCommand &b) -> bool {
+  return a.pipeline == b.pipeline
+      && a.mesh_index == b.mesh_index
+      && a.texture_source == b.texture_source
+      && a.texture_index == b.texture_index
+      && b.instance_index == a.instance_index + 1;
+}
 
 // World-space bounding sphere of a mesh AABB under a model transform.
 //
@@ -90,6 +109,10 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
       ++bone_instance_count;
   }
 
+  // Sort so that batchable draws end up adjacent: layer, then pipeline, then
+  // material, then mesh. Mesh now outranks the bone slot, because the bone slice
+  // is selected per instance inside the shader and no longer forces one draw per
+  // character -- a horde sharing a mesh and texture becomes one draw call.
   std::ranges::sort(out, [](const DrawCommand &a, const DrawCommand &b) {
     if (a.layer != b.layer)
       return a.layer < b.layer;
@@ -99,9 +122,9 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
       return a.texture_source < b.texture_source;
     if (a.texture_index != b.texture_index)
       return a.texture_index < b.texture_index;
-    if (a.bone_instance_index != b.bone_instance_index)
-      return a.bone_instance_index < b.bone_instance_index;
-    return a.mesh_index < b.mesh_index;
+    if (a.mesh_index != b.mesh_index)
+      return a.mesh_index < b.mesh_index;
+    return a.bone_instance_index < b.bone_instance_index;
   });
 }
 
@@ -118,7 +141,11 @@ inline void build_shadow_draw_list(const std::vector<DrawCommand> &draw_list, st
   std::ranges::sort(out, [](const DrawCommand &a, const DrawCommand &b) {
     if (a.layer != b.layer)
       return a.layer < b.layer;
-    return a.mesh_index < b.mesh_index;
+    if (a.pipeline != b.pipeline)
+      return a.pipeline < b.pipeline;
+    if (a.mesh_index != b.mesh_index)
+      return a.mesh_index < b.mesh_index;
+    return a.bone_instance_index < b.bone_instance_index;
   });
 }
 

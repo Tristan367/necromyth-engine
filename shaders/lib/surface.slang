@@ -14,7 +14,7 @@ float3 shadeDirectional(float3 worldPos, float3 normal, int filterModeSingle, in
 }
 
 float4 shadeOpaqueSingle(VSOutput vertIn, int filterMode) {
-    float4 texColor = sampleBaseColor(vertIn.fragTexCoord);
+    float4 texColor = sampleBaseColor(vertIn.fragTexCoord, vertIn.textureLayer, vertIn.sampleTextureArray);
     float3 baseColor = texColor.rgb * vertIn.fragColor;
     float3 normal = normalize(vertIn.worldNormal);
     float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
@@ -24,7 +24,7 @@ float4 shadeOpaqueSingle(VSOutput vertIn, int filterMode) {
 }
 
 float4 shadeOpaqueDual(VSOutput vertIn, int filterMode) {
-    float4 texColor = sampleBaseColor(vertIn.fragTexCoord);
+    float4 texColor = sampleBaseColor(vertIn.fragTexCoord, vertIn.textureLayer, vertIn.sampleTextureArray);
     float3 baseColor = texColor.rgb * vertIn.fragColor;
     float3 normal = normalize(vertIn.worldNormal);
     float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
@@ -34,28 +34,28 @@ float4 shadeOpaqueDual(VSOutput vertIn, int filterMode) {
 }
 
 float4 shadeCutoutSingle(VSOutput vertIn, int filterMode) {
-    float4 texColor = sampleBaseColor(vertIn.fragTexCoord);
+    float4 texColor = sampleBaseColor(vertIn.fragTexCoord, vertIn.textureLayer, vertIn.sampleTextureArray);
     if (texColor.a < kAlphaCutoff)
         discard;
     return shadeOpaqueSingle(vertIn, filterMode);
 }
 
 float4 shadeCutoutDual(VSOutput vertIn, int filterMode) {
-    float4 texColor = sampleBaseColor(vertIn.fragTexCoord);
+    float4 texColor = sampleBaseColor(vertIn.fragTexCoord, vertIn.textureLayer, vertIn.sampleTextureArray);
     if (texColor.a < kAlphaCutoff)
         discard;
     return shadeOpaqueDual(vertIn, filterMode);
 }
 
 float4 shadeAlphaToCoverageSingle(VSOutput vertIn, int filterMode) {
-    float4 texColor = sampleBaseColor(vertIn.fragTexCoord);
+    float4 texColor = sampleBaseColor(vertIn.fragTexCoord, vertIn.textureLayer, vertIn.sampleTextureArray);
     if (texColor.a <= 0.0)
         discard;
     return shadeOpaqueSingle(vertIn, filterMode);
 }
 
 float4 shadeAlphaToCoverageDual(VSOutput vertIn, int filterMode) {
-    float4 texColor = sampleBaseColor(vertIn.fragTexCoord);
+    float4 texColor = sampleBaseColor(vertIn.fragTexCoord, vertIn.textureLayer, vertIn.sampleTextureArray);
     if (texColor.a <= 0.0)
         discard;
     return shadeOpaqueDual(vertIn, filterMode);

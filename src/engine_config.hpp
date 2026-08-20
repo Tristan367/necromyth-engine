@@ -28,6 +28,9 @@ struct EngineConfig {
   // flight) -- not descriptor sets, and not anything that reallocates when
   // characters spawn.
   std::uint32_t max_skinned_instances{256};
+  // Per-draw instance records per frame, across the main and shadow lists. One
+  // 80-byte record per draw; 65536 is 5 MB per frame in flight.
+  std::uint32_t max_draw_instances{65536};
   // Print a per-pass CPU/GPU timing breakdown every profiling window.
   // ENGINE_PROFILE=1. Timestamps are always collected and readable via
   // VulkanContext::profile_report(); this only controls the periodic dump.

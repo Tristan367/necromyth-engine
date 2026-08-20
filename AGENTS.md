@@ -89,6 +89,38 @@ purely because the demo never exercised the paths the game will. When adding a
 feature, size it for the game: many instances, continuous churn, and removal --
 not for the one-of-each case the demo happens to show.
 
+## Instanced draws
+
+Everything per-object -- model matrix, texture layer, bone palette base -- lives
+in a per-frame storage buffer (`instance_buffer.hpp`, set 0 binding 8), NOT in
+push constants. The vertex shader reads record `pushConstants.instanceBase +
+SV_InstanceID`, so draws that share a pipeline, mesh and material collapse into
+one `drawIndexed` with `instanceCount > 1`. Measured: 255 skinned characters
+sharing a mesh and texture render in **one** draw call.
+
+Rules, all of which exist because breaking them renders the wrong objects rather
+than failing:
+
+- **Cull before batching.** A draw rejected in the middle of a run leaves a gap
+  in the instance range, and the shader reads that range contiguously. Every
+  pass selects survivors into a scratch list first, then batches.
+- **Batch with `draws_can_batch()`** (`draw_list.hpp`) and iterate with
+  `for_each_batch()`. It requires adjacent instance records, not just matching
+  state.
+- **The main and shadow lists sort differently and get separate record ranges.**
+  Each is contiguous within itself; a shadow caster's matrix is written twice, on
+  purpose.
+- Push constants are 16 bytes and carry only `instanceBase`, the shadow cascade,
+  and the point light index. Do not put per-object data back in them.
+- Bone slices are chosen by index (`bone_base` in the instance record), not by a
+  dynamic descriptor offset. A dynamic offset is fixed for a whole bind, so it
+  cannot vary across the instances of one instanced draw.
+
+`tests/stress_skinned_horde.cpp` checks both halves: that the horde batches, and
+that the characters still hold distinct poses. A wrong bone base renders happily
+and just looks like a horde marching in lockstep, so the test asserts the poses
+actually differ.
+
 ## Instance handles
 
 `Scene::add_instance()` returns an `InstanceHandle` (index + generation), not a
@@ -289,10 +321,9 @@ correct ones — the symptom is a shadow that animates while the mesh does not.
 
 ## Roadmap (planned features, in priority order)
 
-1. **Instanced draws** — one `drawIndexed` per (pipeline, mesh, material) batch instead of per instance, with per-instance data (model matrix, texture layer, bone base) in a per-frame storage buffer read via `SV_InstanceID`. Prerequisite for everything below. The profiler puts command recording at ~2.2 ms of a ~2.7 ms CPU frame, and a horde is currently one draw call per character.
-2. **Impostor (Y-billboard) LOD** — see below.
-3. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
-4. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
+1. **Impostor (Y-billboard) LOD** — see below. Instanced draws (its prerequisite) are done.
+2. **GPU particle system** — vertex-shader billboard quads with lifetime/velocity/color-over-life/gravity
+3. **Bone attachment system** — attach objects (weapons, particles, lights) to skeleton bones with hitbox support
 
 ## Impostor / Y-billboard LOD (design, not yet implemented)
 

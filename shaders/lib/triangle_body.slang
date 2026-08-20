@@ -1,19 +1,23 @@
 #include "lib/frame_uniforms.slang"
 #include "lib/mesh_types.slang"
 #include "lib/textured_push_constants.slang"
+#include "lib/instance_data.slang"
 #include "lib/textured_bindings.slang"
 #include "lib/shadow.slang"
 #include "lib/surface.slang"
 
 [shader("vertex")]
-VSOutput vertMain(VSInput input) {
+VSOutput vertMain(VSInput input, uint instanceId : SV_InstanceID) {
+    GpuInstance inst = loadInstance(instanceId);
     VSOutput output;
-    float4 worldPos = mul(pushConstants.model, float4(input.inPosition, 1.0));
+    float4 worldPos = mul(inst.model, float4(input.inPosition, 1.0));
     output.pos = mul(ubo.proj, mul(ubo.view, worldPos));
     output.worldPos = worldPos.xyz;
-    output.worldNormal = normalize(mul((float3x3)pushConstants.model, input.inNormal));
+    output.worldNormal = normalize(mul((float3x3)inst.model, input.inNormal));
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
+    output.textureLayer = inst.textureLayer;
+    output.sampleTextureArray = inst.sampleTextureArray;
     return output;
 }
 
