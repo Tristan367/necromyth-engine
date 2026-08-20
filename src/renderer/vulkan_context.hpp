@@ -28,6 +28,7 @@
 #include "renderer/vulkan_device.hpp"
 #include "scene/animation_utils.hpp"
 #include "scene/scene.hpp"
+#include "scene/shadow_assignment.hpp"
 #include "scene/shadow_utils.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -416,7 +417,18 @@ public:
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
 
-    light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(),
+    // Decide which lights get a shadow map before anything is written or drawn:
+    // the light buffer, the point-shadow SSBO and the shadow pass all have to
+    // agree on the slot each light was given.
+    const Frustum camera_frustum = Frustum::from_view_proj(scene.camera().view_projection_matrix());
+    const ShadowSlotAssignment shadow_slots = assign_shadow_slots(
+        scene.point_lights(),
+        scene.spot_lights(),
+        camera_frustum,
+        point_shadow_capacity_,
+        k_max_spot_shadow_lights);
+
+    light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(), shadow_slots,
                          static_cast<float>(startup_spot_atlas_size_));
 
     cpu_profiler_.begin(CpuZone::Animation);
@@ -482,13 +494,11 @@ public:
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, shadow_draw_list_,
                                          cascades.light_view_proj);
 
-    // Spot shadow pass (Godot-style atlas) — only when shadow-casting spot lights exist
-    bool has_spot_shadows = false;
-    for (const SpotLight &sl : scene.spot_lights())
-      if (sl.casts_shadow) { has_spot_shadows = true; break; }
-    bool has_point_shadows = false;
-    for (const PointLight &pl : scene.point_lights())
-      if (pl.casts_shadow) { has_point_shadows = true; break; }
+    // A light whose sphere of influence misses the camera frustum lights nothing
+    // visible, so it needs no shadow map -- assign_shadow_slots already dropped
+    // it, and these counts follow from that.
+    const bool has_spot_shadows = shadow_slots.spot_count > 0;
+    const bool has_point_shadows = shadow_slots.point_count > 0;
     if (has_spot_shadows)
       pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
                                                 shadow_draw_list_, *spot_atlas_, *spot_atlas_view_,
@@ -498,11 +508,12 @@ public:
 
     // Point shadow cubemap pass (Sascha omni model)
     if (has_point_shadows) {
-      write_point_light_shadows(frame_index_, scene);
+      write_point_light_shadows(frame_index_, scene, shadow_slots);
       pass_recorder().record_point_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
                                                 shadow_draw_list_, *point_cube_,
                                                 point_cube_face_views_,
-                                                point_cube_face_size_);
+                                                point_cube_face_size_,
+                                                shadow_slots);
     } else {
       ensure_shadow_sampler_readable(command_buffer, *point_cube_, pass_layouts_.point_cube_layout,
                                      point_cube_layer_count_);
@@ -530,7 +541,7 @@ public:
         image_index,
         pass_layouts_,
         draw_list_,
-        Frustum::from_view_proj(scene.camera().view_projection_matrix()),
+        camera_frustum,
         overlay_ptr,
         std::move(post_geometry));
 
@@ -737,6 +748,10 @@ private:
   void create_point_cubemap(std::uint32_t face_size = 1024, std::uint32_t max_point_lights = 1) {
     const std::uint32_t total_layers = max_point_lights * 6;
     point_cube_layer_count_ = total_layers;
+    // Shadow slots address CUBES, not image array layers. These differ by a
+    // factor of six, and confusing them hands out slots that index past the end
+    // of the cube array.
+    point_shadow_capacity_ = max_point_lights;
 
     // D32 depth cubemap array. Depth-only rendering (SV_Depth fragment output).
     // Sampled via comparison sampler in main pass for hardware PCF.
@@ -828,7 +843,12 @@ private:
     }
   }
 
-  void write_point_light_shadows(std::uint32_t frame_index, const Scene &scene) {
+  // Indexed by shadow slot, not by scene light index. Slots are dense and
+  // bounded by max_point_shadow_lights, so a scene with more point lights than
+  // shadow slots can no longer read past the end of this buffer -- which it did
+  // when the shader indexed it by the light's position in the scene array.
+  void write_point_light_shadows(std::uint32_t frame_index, const Scene &scene,
+                                 const ShadowSlotAssignment &shadows) {
     if (frame_index >= k_pt_shadow_frames || !pt_shadow_mapped_[frame_index])
       return;
 
@@ -836,14 +856,17 @@ private:
     const auto &face_views = cubemap_face_views();
 
     auto *ptr = pt_shadow_mapped_[frame_index];
-    for (std::size_t i = 0; i < lights.size() && i < pt_shadow_max_lights_; ++i) {
+    for (std::size_t i = 0; i < lights.size() && i < shadows.point_slots.size(); ++i) {
+      const std::int32_t slot = shadows.point_slots[i];
+      if (slot == k_no_shadow_slot || static_cast<std::size_t>(slot) >= pt_shadow_max_lights_)
+        continue;
       const auto &pl = lights[i];
       const glm::mat4 proj = glm::perspective(glm::radians(90.0F), 1.0F, 0.01F, pl.range);
-      ptr[i].view = glm::translate(glm::mat4(1.0F), -glm::vec3(pl.position));
+      ptr[slot].view = glm::translate(glm::mat4(1.0F), -glm::vec3(pl.position));
       for (int f = 0; f < 6; ++f)
-        ptr[i].face_vp[f] = proj * face_views[f];
-      ptr[i].pos = glm::vec4(pl.position, 0.0F);
-      ptr[i].range = pl.range;
+        ptr[slot].face_vp[f] = proj * face_views[f];
+      ptr[slot].pos = glm::vec4(pl.position, 0.0F);
+      ptr[slot].range = pl.range;
     }
   }
 
@@ -1145,7 +1168,8 @@ private:
   std::array<std::optional<vk::raii::DeviceMemory>, k_pt_shadow_frames> pt_shadow_memory_{};
   std::array<GpuPointLightShadowData *, k_pt_shadow_frames> pt_shadow_mapped_{};
   std::uint32_t pt_shadow_max_lights_{0};
-  std::uint32_t point_cube_layer_count_{0};
+  std::uint32_t point_cube_layer_count_{0};   // image array layers = cubes * 6
+  std::uint32_t point_shadow_capacity_{0};    // cubes, i.e. shadow-casting lights
   ParticleSystem particle_system_;
   TextureTable texture_table_;
   TextureArray texture_array_;

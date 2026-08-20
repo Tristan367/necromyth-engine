@@ -21,7 +21,7 @@
 //   SpotLight:  vec4(pos.xyz, range), vec4(color.rgb, intensity),
 //               vec4(dir.xyz, pad),   vec4(inner, outer, 0, 0),
 //               mat4 shadowMatrix,    vec4(uv_offset.xy, uv_scale.xy)
-// Buffer: [uvec4(numPoint, numSpot, 0, 0)][PointLight...][SpotLight...]
+// Buffer: [uvec4(numPoint, numSpot, 0, 0)][PointLight(48B)...][SpotLight(112B)...]
 
 // Spot shadow atlas (set 0 binding 4, shared by all spot lights)
 [[vk::binding(4, 0)]]
@@ -38,11 +38,13 @@ TextureCubeArray pointShadowCube;
 SamplerComparisonState pointShadowSampler;
 #endif
 
+// 48 bytes; must match LightStorageBuffer::GpuPointLight.
+// shadowParams.x is the cubemap array layer assigned to this light this frame,
+// or negative when it has no shadow map (it was culled, or it does not cast).
 struct GpuPointLight {
     float4 posRange;
     float4 colorIntensity;
-    float4x4 shadowMatrix;
-    float4 atlasRect;
+    float4 shadowParams;
 };
 
 struct GpuSpotLight {
@@ -86,12 +88,14 @@ float3 calcPointLight(GpuPointLight l, uint lightIndex, float3 fragPos, float3 n
     float lightContrib = (diffSpec.r + diffSpec.g + diffSpec.b) * atten;
     if (lightContrib <= 0.0001) return float3(0, 0, 0);
 
-    // Per-light point shadow: each light has its own cubemap layer and world position.
-    // shadowMatrix[0][0] == 1.0 when casts_shadow is true (sentinel in light_buffer write).
+    // The cubemap layer comes from the light buffer, not from the light's index
+    // in the scene: the renderer assigns layers only to the lights it actually
+    // rendered this frame.
     float shadowVis = 1.0;
 #ifndef ENGINE_NO_POINT_SHADOWS
-    if (kHasPointShadows && l.shadowMatrix[0][0] != 0.0) {
-        shadowVis = samplePointShadowCubemap(fragPos, normal, ndotl, l.posRange.xyz, l.posRange.w, lightIndex);
+    int shadowLayer = int(l.shadowParams.x);
+    if (kHasPointShadows && shadowLayer >= 0) {
+        shadowVis = samplePointShadowCubemap(fragPos, normal, ndotl, l.posRange.xyz, l.posRange.w, uint(shadowLayer));
     }
 #endif
 
@@ -214,7 +218,7 @@ float3 evaluatePointLights(float3 fragPos, float3 normal, float3 viewDir) {
     if (numPoint == 0) return float3(0, 0, 0);
 
     // GpuPointLight: posRange(16) + colorIntensity(16) + shadowMatrix(64) + atlasRect(16) = 112
-    const uint kPointLightSize = 112;
+    const uint kPointLightSize = 48;
 
     float3 contrib = float3(0, 0, 0);
     uint offset = 16;
@@ -222,11 +226,7 @@ float3 evaluatePointLights(float3 fragPos, float3 normal, float3 viewDir) {
         GpuPointLight l;
         l.posRange = asfloat(lightBuffer.Load4(offset));
         l.colorIntensity = asfloat(lightBuffer.Load4(offset + 16));
-        l.shadowMatrix[0] = asfloat(lightBuffer.Load4(offset + 32));
-        l.shadowMatrix[1] = asfloat(lightBuffer.Load4(offset + 48));
-        l.shadowMatrix[2] = asfloat(lightBuffer.Load4(offset + 64));
-        l.shadowMatrix[3] = asfloat(lightBuffer.Load4(offset + 80));
-        l.atlasRect = asfloat(lightBuffer.Load4(offset + 96));
+        l.shadowParams = asfloat(lightBuffer.Load4(offset + 32));
         contrib += calcPointLight(l, i, fragPos, normal, viewDir);
         offset += kPointLightSize;
     }
@@ -239,7 +239,7 @@ float3 evaluateSpotLights(float3 fragPos, float3 normal, float3 viewDir) {
 
     uint numPoint = lightBuffer.Load<uint>(0);
     // GpuPointLight: posRange(16) + colorIntensity(16) + shadowMatrix(64) + atlasRect(16) = 112
-    const uint kPointLightSize = 112;
+    const uint kPointLightSize = 48;
     uint offset = 16 + numPoint * kPointLightSize;
 
     float3 contrib = float3(0, 0, 0);

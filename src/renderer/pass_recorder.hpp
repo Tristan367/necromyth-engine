@@ -19,6 +19,7 @@
 #include "renderer/texture_table.hpp"
 #include "renderer/textured_push_constants.hpp"
 #include "renderer/depth_image.hpp"
+#include "scene/shadow_assignment.hpp"
 #include "scene/shadow_utils.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -901,7 +902,8 @@ struct PassRecorder {
       const std::vector<DrawCommand> &draw_list,
       vk::Image cube_image,
       std::span<const vk::raii::ImageView> cube_face_views,
-      float face_size) const {
+      float face_size,
+      const ShadowSlotAssignment &shadows) const {
     const ScopedGpuZone gpu_zone(*this, command_buffer, GpuZone::ShadowPoint);
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
@@ -921,9 +923,19 @@ struct PassRecorder {
       layouts.point_cube_layout = vk::ImageLayout::eDepthAttachmentOptimal;
     }
 
-    for (std::uint32_t si = 0; si < scene.point_lights().size() && si < cube_face_views.size(); ++si) {
-      const PointLight &pl = scene.point_lights()[si];
-      if (!pl.casts_shadow) continue;
+    // Iterate lights, but render into the slot the assignment gave each one --
+    // never into its scene index. Lights with no slot were skipped because
+    // nothing they illuminate is on screen, so their cubemap is not sampled.
+    for (std::uint32_t light_index = 0; light_index < scene.point_lights().size(); ++light_index) {
+      const std::int32_t slot = light_index < shadows.point_slots.size()
+          ? shadows.point_slots[light_index]
+          : k_no_shadow_slot;
+      if (slot == k_no_shadow_slot)
+        continue;
+      const auto si = static_cast<std::uint32_t>(slot);
+      if (si >= cube_face_views.size())
+        continue;
+      const PointLight &pl = scene.point_lights()[light_index];
 
       vk::RenderingAttachmentInfo depth_attach{};
       depth_attach.imageView = *cube_face_views[si];

@@ -417,11 +417,11 @@ if(VCE_BUILD_TESTS)
     # run by ctest. Exercises mesh streaming (create / remesh / drop under
     # frames in flight) against the validation layers, which is the only way to
     # catch a buffer freed while still referenced.
-    foreach(STRESS mesh_streaming skinned_horde)
-        add_executable(vce_stress_${STRESS} tests/stress_${STRESS}.cpp)
-        target_link_libraries(vce_stress_${STRESS} PRIVATE vce_renderer)
+    foreach(GPU_PROG stress_mesh_streaming stress_skinned_horde bench_point_shadows)
+        add_executable(vce_${GPU_PROG} tests/${GPU_PROG}.cpp)
+        target_link_libraries(vce_${GPU_PROG} PRIVATE vce_renderer)
         if(NOT MSVC)
-            target_compile_options(vce_stress_${STRESS} PRIVATE -Wno-missing-field-initializers)
+            target_compile_options(vce_${GPU_PROG} PRIVATE -Wno-missing-field-initializers)
         endif()
     endforeach()
 endif()

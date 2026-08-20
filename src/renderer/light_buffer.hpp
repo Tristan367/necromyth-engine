@@ -2,6 +2,7 @@
 
 #include "renderer/buffer.hpp"
 #include "scene/point_light.hpp"
+#include "scene/shadow_assignment.hpp"
 #include "scene/shadow_utils.hpp"
 #include "scene/spot_light.hpp"
 
@@ -26,12 +27,19 @@ public:
   static constexpr std::uint32_t k_frames_in_flight = 2;
   static constexpr vk::DeviceSize k_header_size = 16;  // num_point + num_spot (2× u32), 8B pad
 
+  // 48 bytes. The previous layout carried a 64-byte shadow_matrix that a point
+  // light never uses -- only its [0][0] element was read, as a "casts shadow"
+  // boolean -- plus an unused atlas_rect. Point lights sample a cubemap, not an
+  // atlas, so the matrix and rect were dead weight in a buffer the fragment
+  // shader walks once per light per pixel.
   struct GpuPointLight {
     float pos_range[4];
     float color_intensity[4];
-    float shadow_matrix[16]; // per-face VP (0 = no shadow)
-    float atlas_rect[4];     // xy = UV offset, zw = UV scale
+    // x = cubemap array layer this light was assigned this frame, or a negative
+    // value for "no shadow map"; yzw reserved.
+    float shadow_params[4];
   };
+  static_assert(sizeof(GpuPointLight) == 48, "shader lighting.slang assumes 48-byte point lights");
 
   struct GpuSpotLight {
     float pos_range[4];
@@ -85,6 +93,7 @@ public:
   void write(std::uint32_t frame_index,
              const std::vector<PointLight> &point_lights,
              const std::vector<SpotLight> &spot_lights,
+             const ShadowSlotAssignment &shadows,
              float atlas_size = 2048.0F) {
     if (frame_index >= k_frames_in_flight) return;
     const std::size_t num_point = std::min(point_lights.size(), max_lights_);
@@ -107,22 +116,18 @@ public:
       ptrs[i].color_intensity[1] = point_lights[i].color.g;
       ptrs[i].color_intensity[2] = point_lights[i].color.b;
       ptrs[i].color_intensity[3] = point_lights[i].intensity;
-      // Point shadows: cubemap layer = light array index.
-      // The shadow pass writes each light to cube_face_views[si], and the main-pass
-      // shader uses lightIndex (array position) as the cubemap layer via
-      // TextureCubeArray.  Non-shadow-casting lights skip the shadow pass entirely;
-      // the shader ignores them (shadow_matrix sentinel is zero).
-      if (point_lights[i].casts_shadow) {
-        std::memset(ptrs[i].shadow_matrix, 0, sizeof(ptrs[i].shadow_matrix));
-        ptrs[i].shadow_matrix[0] = 1.0f;
-        ptrs[i].atlas_rect[0] = 0.0f;
-        ptrs[i].atlas_rect[1] = 0.0f;
-        ptrs[i].atlas_rect[2] = 1.0f;
-        ptrs[i].atlas_rect[3] = 1.0f;
-      } else {
-        std::memset(ptrs[i].shadow_matrix, 0, sizeof(ptrs[i].shadow_matrix));
-        std::memset(ptrs[i].atlas_rect, 0, sizeof(ptrs[i].atlas_rect));
-      }
+
+      // The slot the shadow pass rendered this light into, not its index in the
+      // scene. A light that was skipped this frame reports no slot and is shaded
+      // unshadowed -- which is correct, because it was only skipped when nothing
+      // it lights is on screen.
+      const std::int32_t slot = i < shadows.point_slots.size()
+          ? shadows.point_slots[i]
+          : k_no_shadow_slot;
+      ptrs[i].shadow_params[0] = static_cast<float>(slot);
+      ptrs[i].shadow_params[1] = 0.0F;
+      ptrs[i].shadow_params[2] = 0.0F;
+      ptrs[i].shadow_params[3] = 0.0F;
     }
 
     auto *sptr = reinterpret_cast<GpuSpotLight *>(data + k_header_size + num_point * sizeof(GpuPointLight));

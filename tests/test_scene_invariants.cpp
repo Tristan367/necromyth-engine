@@ -9,6 +9,7 @@
 #include "renderer/draw_list.hpp"
 #include "renderer/frustum.hpp"
 #include "scene/camera.hpp"
+#include "scene/shadow_assignment.hpp"
 #include "scene/scene.hpp"
 
 #include <cstdio>
@@ -453,6 +454,66 @@ void test_bone_slot_offsets_are_distinct_and_aligned() {
         "the same slot occupies different memory in different frames");
 }
 
+
+// Shadow slot assignment. The cubemap layer a light renders into used to be its
+// index in the scene array, which meant a shadow-caster past the capacity was
+// skipped by the renderer while the shader kept sampling its nonexistent layer,
+// and no light could be skipped for being irrelevant without the shader reading
+// whatever was underneath. Slots are now explicit, so they must be dense,
+// in-range, and given only to lights that need one.
+void test_shadow_slot_assignment() {
+  std::printf("shadow slot assignment\n");
+
+  engine::Camera camera;
+  camera.set_aspect(16.0F / 9.0F);
+  camera.look_at({0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, -1.0F});
+  const engine::Frustum frustum =
+      engine::Frustum::from_view_proj(camera.view_projection_matrix());
+
+  const auto lamp = [](glm::vec3 position, bool casts) {
+    engine::PointLight light;
+    light.position = position;
+    light.range = 5.0F;
+    light.casts_shadow = casts;
+    return light;
+  };
+
+  std::vector<engine::PointLight> points{
+      lamp({0.0F, 0.0F, -10.0F}, true),   // 0: in view, casts    -> slot
+      lamp({0.0F, 0.0F, -12.0F}, false),  // 1: in view, no cast   -> none
+      lamp({0.0F, 0.0F, 500.0F}, true),   // 2: behind camera      -> none
+      lamp({0.0F, 0.0F, -14.0F}, true),   // 3: in view, casts     -> slot
+  };
+  points[1].casts_shadow = false;
+
+  const std::vector<engine::SpotLight> spots;
+  auto assignment = engine::assign_shadow_slots(points, spots, frustum, 8, 8);
+
+  check(assignment.point_count == 2, "only in-view shadow casters get a slot");
+  check(assignment.point_slots[0] == 0, "first caster takes slot 0");
+  check(assignment.point_slots[1] == engine::k_no_shadow_slot, "non-caster gets no slot");
+  check(assignment.point_slots[2] == engine::k_no_shadow_slot,
+        "light behind the camera gets no slot");
+  // Dense: the caster after a skipped light must take slot 1, not slot 3. Using
+  // the scene index here is what wasted cube layers and overran the capacity.
+  check(assignment.point_slots[3] == 1, "slots are dense, not the light's scene index");
+
+  // Capacity is in cubes. Every handed-out slot must be addressable.
+  auto capped = engine::assign_shadow_slots(points, spots, frustum, 1, 8);
+  check(capped.point_count == 1, "assignment stops at capacity");
+  bool within_capacity = true;
+  for (const std::int32_t slot : capped.point_slots)
+    if (slot != engine::k_no_shadow_slot && slot >= 1)
+      within_capacity = false;
+  check(within_capacity, "no slot is ever handed out past capacity");
+
+  // A light with no reach cannot illuminate anything, shadow or not.
+  std::vector<engine::PointLight> dark{lamp({0.0F, 0.0F, -10.0F}, true)};
+  dark[0].intensity = 0.0F;
+  const auto none = engine::assign_shadow_slots(dark, spots, frustum, 8, 8);
+  check(none.point_count == 0, "a zero-intensity light gets no shadow map");
+}
+
 } // namespace
 
 auto main() -> int {
@@ -466,6 +527,7 @@ auto main() -> int {
   test_instances_of_removed_meshes_do_not_draw();
   test_deferred_delete_holds_for_frames_in_flight();
   test_bone_slot_offsets_are_distinct_and_aligned();
+  test_shadow_slot_assignment();
 
   if (g_failures != 0) {
     std::printf("\n%d check(s) failed\n", g_failures);

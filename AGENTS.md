@@ -22,6 +22,31 @@ picked up automatically (CONFIGURE_DEPENDS glob); keep it self-contained.
 A GPU-side change still needs `cd ../necromyth-engine-demo && make debug` and an
 actual run with validation layers on.
 
+## Point light shadows: cubemap, not dual paraboloid
+
+The cubemap is the right choice; do not go back to dual paraboloid.
+
+DP's seam is not a bug that can be fixed. DP projects vertices through a
+non-linear warp, and the rasteriser then interpolates *linearly* across each
+triangle, so the error is worst where a triangle spans the hemisphere boundary --
+and it scales with triangle size. Engines that ship DP hide it with heavy
+tessellation and clamping, which costs back whatever DP saved. A cubemap has no
+seam because each face is an ordinary perspective projection.
+
+Rendered with multiview (`viewMask = 0b111111`), all six faces come from one draw
+per light, which is why the cubemap is also competitive on speed.
+
+**Shadow slots are explicit.** A light's cubemap is addressed by a slot assigned
+per frame in `assign_shadow_slots()` (`scene/shadow_assignment.hpp`), written into
+the light buffer, and read by the shader. It is NOT the light's index in
+`Scene::point_lights()`. Three things depend on agreeing about it -- the light
+buffer, the point-shadow SSBO, and the shadow pass -- so all three take the
+assignment. Note the capacity is in **cubes**, not image array layers; those
+differ by six.
+
+Lights whose sphere of influence misses the camera frustum get no slot and are
+not rendered: attenuation is zero past `range`, so nothing they light is visible.
+
 ## Profiling
 
 `ENGINE_PROFILE=1` prints a per-pass CPU/GPU breakdown every 120 frames.
