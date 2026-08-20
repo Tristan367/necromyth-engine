@@ -2,10 +2,10 @@
 
 #include "renderer/buffer.hpp"
 #include "scene/point_light.hpp"
+#include "scene/shadow_utils.hpp"
 #include "scene/spot_light.hpp"
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include "engine_glm.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/mat4x4.hpp>
 

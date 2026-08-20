@@ -4,7 +4,7 @@
 #include "scene/animation_types.hpp"
 #include "scene/scene.hpp"
 
-#define GLM_FORCE_RADIANS
+#include "engine_glm.hpp"
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/mat4x4.hpp>

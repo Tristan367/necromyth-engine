@@ -3,8 +3,7 @@
 #include "renderer/buffer.hpp"
 #include "scene/shadow_utils.hpp"
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include "engine_glm.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/mat4x4.hpp>
 

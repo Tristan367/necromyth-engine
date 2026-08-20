@@ -5,6 +5,8 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <glm/common.hpp>
+#include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
 #include <algorithm>

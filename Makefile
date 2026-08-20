@@ -1,4 +1,4 @@
-.PHONY: all configure build clean shaders
+.PHONY: all configure build clean shaders test
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -16,6 +16,11 @@ build: configure
 
 shaders: configure
 	cmake --build "$(BUILD_DIR)" --target vce_shaders -j$$(nproc)
+
+# CPU-side invariants; needs no GPU. `build` already compiles every engine
+# header, so this is the second half of "did I break the engine?".
+test: build
+	ctest --test-dir "$(BUILD_DIR)" --output-on-failure
 
 clean:
 	rm -rf "$(BUILD_DIR)"

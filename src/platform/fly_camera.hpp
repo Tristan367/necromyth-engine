@@ -2,8 +2,7 @@
 
 #include <SDL3/SDL.h>
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include "engine_glm.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 

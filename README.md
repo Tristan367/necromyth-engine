@@ -44,10 +44,15 @@ If SDL3 is installed system-wide (e.g. Arch `sdl3` package), no extra prefix is 
 Engine library + shaders only:
 
 ```bash
-make              # Build VCE::Engine + compile shaders
+make              # Compile every engine header + shaders
+make test         # ...then run the CPU-side invariant tests (no GPU needed)
 make shaders      # Shaders only
 make clean
 ```
+
+The engine is header-only, so `make` builds a compile gate rather than a
+library: every header is compiled once together and once on its own, which is
+what makes a broken header fail here instead of in a downstream project.
 
 **Run the demo** from the sibling app repo:
 

@@ -2,6 +2,56 @@
 
 Read this and `README.md` before large renderer changes.
 
+## Verify your work before handing it back
+
+`make` in this repo compiles **every** engine header — once in a single TU
+(catches cross-header conflicts) and once per header on its own (catches headers
+that only compile because a consumer included their dependencies first). `make
+test` additionally runs the CPU-side invariants in `tests/`. Neither needs a GPU.
+
+```bash
+make        # compiles all engine headers + shaders
+make test   # the above, then ctest
+```
+
+Before this existed, `make` built three third-party TUs and reported success
+while the entire header-only engine went unchecked — breakage surfaced as a
+build error in the demo, or at runtime in the game. If you add a header it is
+picked up automatically (CONFIGURE_DEPENDS glob); keep it self-contained.
+
+A GPU-side change still needs `cd ../necromyth-engine-demo && make debug` and an
+actual run with validation layers on.
+
+## The bone-slot invariant (read before touching skinning)
+
+Four separate sequential walks over `Scene::instances()` must produce the *same*
+slot numbering, because each one indexes the same per-instance bone resources:
+
+| Walker | File |
+|---|---|
+| bone buffer creation | `create_bone_buffers()` in `vulkan_context.hpp` |
+| skinned descriptor set count | `count_skinned_instances()` in `vulkan_context.hpp` |
+| per-frame joint-matrix upload | `draw_frame()` in `vulkan_context.hpp` |
+| `DrawCommand::bone_instance_index` | `build_draw_list()` in `draw_list.hpp` |
+
+All four call **`instance_uses_skinning()`** (`scene/scene.hpp`) and advance on
+exactly that predicate. Do not inline a variant of the check, and do not add an
+extra condition to one site. When two of them disagreed, instances silently
+rendered with another model's pose — no crash, no validation error.
+
+Specifically: an instance without `pose_layers` **still owns a slot**. It renders
+in bind pose (`compute_joint_matrices_for_instance()` handles the null case).
+Skipping it in the upload loop shifts every later instance onto the wrong buffer.
+
+Second half of the same invariant: the set-1 descriptor cache in
+`PassRecorder::bind_material` keys on `MaterialKey`, which **must** include
+`bone_instance_index`. Without it, same-texture skinned instances are adjacent
+after the draw-list sort and all collapse onto the first one's bone matrices in
+the main pass, while the shadow pass (which binds unconditionally) uses the
+correct ones — the symptom is a shadow that animates while the mesh does not.
+
+`tests/test_scene_invariants.cpp` covers both halves.
+
 ## Architecture
 
 - **Engine** (`VCE::Engine`): header-only library + compiled `vce_gltf_impl` + Slang SPIR-V. `vulkan_context.hpp` owns init/frame loop; `pass_recorder.hpp` records shadow/main passes.
@@ -185,8 +235,14 @@ When capping ticks per frame (max 2), drain the overflow: `accumulator = fmod(ac
 ## Do not
 
 - Use Sascha **`shadowmapping`** (perspective point light) as directional shadow authority.
-- Commit without user asking.
 - Add PBR/normal maps unless direction changes.
+
+## Git
+
+Commit after every coherent change set — small, self-contained commits, so a bad
+change can be reverted without unpicking good ones. No need to ask first.
+Push occasionally rather than per commit (this is a big repo; pushing every
+commit wastes time), but do push before wrapping up a session's work.
 
 ## Deferred refactors (design decisions needed)
 
@@ -198,7 +254,9 @@ When capping ticks per frame (max 2), drain the overflow: `accumulator = fmod(ac
 
 4. **`PipelineId` insertion safety** — adding a pipeline in the middle of the enum breaks `is_textured_surface_pipeline(id >= E_First && id <= E_Last)` and `is_skinned_pipeline`. Options: explicit check sets (`std::unordered_set<PipelineId>`) or sentinel `Count` values.
 
-5. **Bone buffer instance mapping** — `bone_instance_index` is computed sequentially. If instances are reordered (insertion/removal in the middle), bone buffers silently map to wrong skeletons. Slot-map or stable `bone_handle` per instance would fix both this and dead-instance sequencing issues at the root.
+5. **Bone buffer instance mapping** — `bone_instance_index` is computed sequentially by four separate walkers. ~~They disagreed (on `alive`, on `pose_layers`, on empty `joint_nodes`), so dead or pose-stack-less skinned instances shifted every later instance onto the wrong bone buffer.~~ All four now share `instance_uses_skinning()` and are covered by `tests/test_scene_invariants.cpp` — see **The bone-slot invariant** above.
+
+   Still open at the design level: the mapping is *positional*, so it is only correct because `remove_instance()` tombstones rather than erases. A stable `bone_handle` (slot map) per instance would remove the ordering dependency entirely and is the real fix if instance storage ever compacts.
 
 6. **`TextureImage/TextureArray::create_sampler` identical** — ~~character-for-character duplicate (~20 lines each). Extract to `detail::create_mipmapped_sampler`.~~ Done.
 

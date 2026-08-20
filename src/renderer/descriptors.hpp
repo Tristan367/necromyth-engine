@@ -414,10 +414,10 @@ public:
         .imageView = view,
         .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
     };
-    for (const vk::DescriptorSet &set : frame_sets_) {
+    for (const vk::raii::DescriptorSet &set : frame_sets_) {
       device.updateDescriptorSets(
           vk::WriteDescriptorSet{
-              .dstSet = set, .dstBinding = 4, .descriptorCount = 1,
+              .dstSet = *set, .dstBinding = 4, .descriptorCount = 1,
               .descriptorType = vk::DescriptorType::eCombinedImageSampler,
               .pImageInfo = &info,
           },
@@ -431,10 +431,10 @@ public:
         .imageView = view,
         .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
     };
-    for (const vk::DescriptorSet &set : frame_sets_) {
+    for (const vk::raii::DescriptorSet &set : frame_sets_) {
       device.updateDescriptorSets(
           vk::WriteDescriptorSet{
-              .dstSet = set, .dstBinding = 5, .descriptorCount = 1,
+              .dstSet = *set, .dstBinding = 5, .descriptorCount = 1,
               .descriptorType = vk::DescriptorType::eCombinedImageSampler,
               .pImageInfo = &info,
           },

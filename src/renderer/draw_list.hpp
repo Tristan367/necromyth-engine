@@ -30,9 +30,8 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
   for (const MeshInstance &instance : scene.instances()) {
     if (!instance.alive) continue;
 
-    const bool has_valid_skin = instance.skin_index != k_invalid_skin_index
-        && instance.skin_index < scene.skeletons().size()
-        && !scene.skeletons()[instance.skin_index].joint_nodes.empty();
+    // Must match every other bone-slot walker exactly — see instance_uses_skinning().
+    const bool has_valid_skin = instance_uses_skinning(instance, scene);
     const PipelineId pipeline = instance.layer == RenderLayer::Background
         ? PipelineId::Background
         : textured_pipeline(instance.alpha_mode, has_valid_skin);

@@ -204,6 +204,18 @@ public:
     if (gpu_shutdown_complete_)
       return;
 
+    // Every branch below destroys GPU objects that in-flight frames may still
+    // reference, so a full idle is required — but only when there is actually
+    // work to do. Games call sync_scene every frame; stalling the GPU on a
+    // no-op sync costs more than everything else in the frame combined.
+    const bool meshes_added = scene.meshes().size() > mesh_gpus_.size();
+    const bool textures_added = scene.texture_paths().size() > texture_table_.count();
+    const bool bone_buffers_stale =
+        count_skinned_instances(scene.instances(), scene) != static_cast<std::uint32_t>(bone_buffers_.size());
+
+    if (!meshes_added && !textures_added && !bone_buffers_stale)
+      return;
+
     device_.wait_idle();
 
     for (std::size_t mesh_index = mesh_gpus_.size(); mesh_index < scene.meshes().size(); ++mesh_index) {
@@ -219,7 +231,7 @@ public:
 
     bool descriptors_changed = false;
 
-    if (scene.texture_paths().size() > texture_table_.count()) {
+    if (textures_added) {
       for (std::size_t texture_index = texture_table_.count(); texture_index < scene.texture_paths().size();
            ++texture_index) {
         texture_table_.append_from_file(
@@ -232,7 +244,7 @@ public:
       descriptors_changed = true;
     }
 
-    if (count_skinned_instances(scene.instances(), scene) != static_cast<std::uint32_t>(bone_buffers_.size())) {
+    if (bone_buffers_stale) {
       create_bone_buffers(scene);
       descriptors_changed = true;
     }
@@ -353,10 +365,12 @@ public:
       std::uint32_t bone_buffer_index = 0;
       for (std::size_t ii = 0; ii < scene.instances().size(); ++ii) {
         MeshInstance &instance = scene.instances()[ii];
-        if (!instance.alive) continue;
-        if (instance.skin_index == k_invalid_skin_index || !instance.pose_layers)
-          continue;
-        if (instance.skin_index >= scene.skeletons().size())
+        // Must match every other bone-slot walker exactly — see
+        // instance_uses_skinning(). In particular do NOT skip instances without
+        // `pose_layers`: they still own a slot, and skipping them here would
+        // shift every later instance onto the wrong bone buffer.
+        // compute_joint_matrices_for_instance() emits bind pose for them.
+        if (!instance_uses_skinning(instance, scene))
           continue;
         if (bone_buffer_index >= bone_buffers_.size())
           break;
@@ -930,10 +944,9 @@ private:
                                                      const Scene &scene) -> std::uint32_t {
     std::uint32_t count = 0;
     for (const MeshInstance &instance : instances) {
-      if (instance.skin_index == k_invalid_skin_index) continue;
-      if (instance.skin_index >= scene.skeletons().size()) continue;
-      if (scene.skeletons()[instance.skin_index].joint_nodes.empty()) continue;
-      ++count;
+      // Must match every other bone-slot walker exactly — see instance_uses_skinning().
+      if (instance_uses_skinning(instance, scene))
+        ++count;
     }
     return count;
   }
@@ -953,17 +966,12 @@ private:
     std::vector<BoneStorageBufferSet> new_buffers;
     std::vector<std::uint32_t> new_indices;
     for (const MeshInstance &instance : scene.instances()) {
-      if (!instance.alive) continue;
-      if (instance.skin_index == k_invalid_skin_index)
-        continue;
-
-      if (instance.skin_index >= scene.skeletons().size())
+      // Must match every other bone-slot walker exactly — see instance_uses_skinning().
+      if (!instance_uses_skinning(instance, scene))
         continue;
 
       const std::uint32_t bone_count =
           static_cast<std::uint32_t>(scene.skeletons()[instance.skin_index].joint_nodes.size());
-      if (bone_count == 0)
-        continue;
 
       BoneStorageBufferSet bone_set;
       bone_set.create(

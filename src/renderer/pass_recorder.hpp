@@ -40,9 +40,16 @@ struct PassLayoutState {
 struct DrawBindState {
   static constexpr std::uint32_t k_unbound_mesh = UINT32_MAX;
 
+  // Identifies the descriptor set currently bound to set 1. For skinned draws
+  // that set is the per-instance (bone SSBO + texture) set, so the bone slot is
+  // part of the identity — two instances sharing a texture still need separate
+  // binds. Leaving it out made every same-texture skinned instance reuse the
+  // first one's bone matrices in the main pass while the shadow pass (which
+  // binds unconditionally) used the correct ones.
   struct MaterialKey {
     TextureSource texture_source{};
     std::uint32_t descriptor_index{};
+    std::uint32_t bone_instance_index{UINT32_MAX};
 
     auto operator<=>(const MaterialKey &) const = default;
   };
@@ -150,17 +157,19 @@ struct PassRecorder {
     if (!descriptor_index)
       return;
 
+    const bool is_skinned = is_skinned_pipeline(draw.pipeline);
+    const bool bind_bone_set = is_skinned && draw.bone_instance_index != k_invalid_skin_index;
+
     const DrawBindState::MaterialKey material_key{
         .texture_source = draw.texture_source,
         .descriptor_index = *descriptor_index,
+        .bone_instance_index = bind_bone_set ? draw.bone_instance_index : UINT32_MAX,
     };
 
     if (state.material.has_value() && *state.material == material_key)
       return;
 
-    const bool is_skinned = is_skinned_pipeline(draw.pipeline);
-
-    if (is_skinned && draw.bone_instance_index != k_invalid_skin_index) {
+    if (bind_bone_set) {
       command_buffer.bindDescriptorSets(
           vk::PipelineBindPoint::eGraphics,
           pipelines.layout_for(draw.pipeline),

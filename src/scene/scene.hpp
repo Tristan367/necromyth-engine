@@ -133,14 +133,31 @@ public:
     return index;
   }
 
+  // Light indices are stable (the GPU cubemap layer for a shadow-casting point
+  // light IS its array index), so removal blanks the slot in place rather than
+  // erasing it. A default-constructed light is NOT blank — it is a white,
+  // intensity-1, range-5 lamp at the world origin — so zero the emissive fields
+  // explicitly.
   void remove_point_light(std::uint32_t index) {
-    if (index < point_lights_.size())
-      point_lights_[index] = {};
+    if (index >= point_lights_.size())
+      return;
+    PointLight &light = point_lights_[index];
+    light = {};
+    light.color = glm::vec3(0.0F);
+    light.intensity = 0.0F;
+    light.range = 0.0F;
+    light.casts_shadow = false;
   }
 
   void remove_spot_light(std::uint32_t index) {
-    if (index < spot_lights_.size())
-      spot_lights_[index] = {};
+    if (index >= spot_lights_.size())
+      return;
+    SpotLight &light = spot_lights_[index];
+    light = {};
+    light.color = glm::vec3(0.0F);
+    light.intensity = 0.0F;
+    light.range = 0.0F;
+    light.casts_shadow = false;
   }
 
   [[nodiscard]] auto add_skeleton(SkeletonAsset skeleton) -> std::uint32_t {
@@ -169,5 +186,26 @@ private:
   std::vector<PointLight> point_lights_;
   std::vector<SpotLight> spot_lights_;
 };
+
+// Single source of truth for "does this instance own a per-instance bone buffer
+// and skinned descriptor set?".
+//
+// Bone buffers (`create_bone_buffers`), skinned descriptor sets
+// (`count_skinned_instances`), the per-frame joint-matrix upload in
+// `draw_frame`, and `DrawCommand::bone_instance_index` all index the SAME
+// sequential slot list. Every one of those sites must walk `instances()` in
+// order and advance its counter on exactly this predicate. If any two disagree
+// the slot lists shift relative to each other and instances silently render
+// with another model's pose. Do not inline a variant of this check.
+//
+// Note it deliberately does NOT test `pose_layers`: an instance without a pose
+// stack still owns a slot and renders in bind pose
+// (`compute_joint_matrices_for_instance` handles the null case).
+[[nodiscard]] inline auto instance_uses_skinning(const MeshInstance &instance, const Scene &scene) -> bool {
+  return instance.alive
+      && instance.skin_index != k_invalid_skin_index
+      && instance.skin_index < scene.skeletons().size()
+      && !scene.skeletons()[instance.skin_index].joint_nodes.empty();
+}
 
 } // namespace engine

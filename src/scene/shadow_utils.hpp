@@ -3,8 +3,7 @@
 #include "scene/camera.hpp"
 #include "scene/directional_light.hpp"
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include "engine_glm.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -289,7 +288,7 @@ namespace detail {
 // GPU Gems / Sascha practical split over [near, shadow_far].
 [[nodiscard]] inline auto compute_cascade_split_normalized(
     const Camera &camera,
-    const DirectionalLightShadowSettings &settings,
+    [[maybe_unused]] const DirectionalLightShadowSettings &settings,
     float shadow_far,
     std::uint32_t cascade_index,
     std::uint32_t cascade_count) -> float {
