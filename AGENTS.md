@@ -83,6 +83,24 @@ purely because the demo never exercised the paths the game will. When adding a
 feature, size it for the game: many instances, continuous churn, and removal --
 not for the one-of-each case the demo happens to show.
 
+## Instance handles
+
+`Scene::add_instance()` returns an `InstanceHandle` (index + generation), not a
+bare index. Instance slots are recycled like mesh slots, so an index alone is not
+a safe reference: after a despawn the same index belongs to a different entity,
+and code holding the old one would silently move, animate or delete the wrong
+thing.
+
+- `scene.instance(handle)` throws on a stale handle.
+- `scene.try_instance(handle)` returns null -- use it wherever the entity may
+  legitimately be gone (a projectile whose target despawned mid-flight).
+- `BoneAttachment::target_instance` is a handle and is generation-checked every
+  frame, so a dropped weapon cannot start dragging an unrelated instance around.
+
+Do not store `handle.index` on its own and index `instances()` with it later.
+Iterating `instances()` directly is fine -- that is what the renderer does -- but
+a reference kept *across frames* has to be a handle.
+
 ## Mesh streaming
 
 `Scene` mesh storage is slot-based, not append-only:

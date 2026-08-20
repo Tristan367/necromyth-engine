@@ -15,9 +15,27 @@ namespace engine {
 
 class Scene;
 
+// Reference to a scene instance that survives other instances being removed.
+//
+// Instance slots are recycled, so a bare index is not enough: after a despawn
+// the same index can belong to an entirely different entity, and code holding
+// the old index would silently move, animate or delete the wrong one. The
+// generation is bumped every time a slot is reused, so a stale handle is
+// detectable rather than merely wrong.
+struct InstanceHandle {
+  static constexpr std::uint32_t k_invalid_index = std::numeric_limits<std::uint32_t>::max();
+
+  std::uint32_t index{k_invalid_index};
+  std::uint32_t generation{0};
+
+  [[nodiscard]] auto is_set() const -> bool { return index != k_invalid_index; }
+
+  auto operator==(const InstanceHandle &) const -> bool = default;
+};
+
 struct BoneAttachment {
   std::uint32_t joint_index{};
-  std::uint32_t target_instance{std::numeric_limits<std::uint32_t>::max()};
+  InstanceHandle target_instance{};
   glm::mat4 world_transform{1.0F};
 };
 
@@ -43,6 +61,8 @@ struct MeshInstance {
   std::vector<BoneAttachment> bone_attachments;
   std::vector<glm::mat4> cached_bone_worlds;
   bool alive{true};
+  // Bumped each time this slot is reused; compared against InstanceHandle.
+  std::uint32_t generation{1};
 };
 
 constexpr auto k_invalid_skin_index = std::numeric_limits<std::uint32_t>::max();

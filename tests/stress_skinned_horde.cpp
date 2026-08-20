@@ -61,7 +61,7 @@ auto main(int argc, char **argv) -> int {
   // pointer because MeshInstance::pose_layers is a raw pointer into it -- a
   // vector that reallocates would dangle every one of them.
   std::vector<std::unique_ptr<engine::AnimStateMachine>> minds;
-  std::vector<std::uint32_t> instances;
+  std::vector<engine::InstanceHandle> instances;
 
   const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(horde_size))));
   for (int i = 0; i < horde_size; ++i) {
@@ -78,15 +78,15 @@ auto main(int argc, char **argv) -> int {
                          static_cast<float>(i / side) * 2.0F - static_cast<float>(side),
                          1.0F);
 
-    const std::uint32_t index = scene.add_instance({
+    const engine::InstanceHandle handle = scene.add_instance({
         .mesh_index = mesh,
         .texture_index = texture, // deliberately shared across the whole horde
         .model = xform,
         .skin_index = skin,
     });
-    scene.instance(index).pose_layers = &mind->layers();
+    scene.instance(handle).pose_layers = &mind->layers();
     minds.push_back(std::move(mind));
-    instances.push_back(index);
+    instances.push_back(handle);
   }
 
   scene.camera().look_at({0.0F, 12.0F, static_cast<float>(side) * 2.5F}, {0.0F, 0.0F, 0.0F});
@@ -116,14 +116,14 @@ auto main(int argc, char **argv) -> int {
       auto mind = std::make_unique<engine::AnimStateMachine>();
       mind->add_state({"move", clips[0], true});
       mind->start("move");
-      const std::uint32_t index = scene.add_instance({
+      const engine::InstanceHandle handle = scene.add_instance({
           .mesh_index = mesh,
           .texture_index = texture,
           .skin_index = skin,
       });
-      scene.instance(index).pose_layers = &mind->layers();
+      scene.instance(handle).pose_layers = &mind->layers();
       minds.push_back(std::move(mind));
-      instances.push_back(index);
+      instances.push_back(handle);
       ++respawned;
     }
 

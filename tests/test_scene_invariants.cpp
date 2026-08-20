@@ -9,6 +9,7 @@
 #include "renderer/draw_list.hpp"
 #include "renderer/frustum.hpp"
 #include "scene/camera.hpp"
+#include "scene/animation_utils.hpp"
 #include "scene/shadow_assignment.hpp"
 #include "scene/scene.hpp"
 
@@ -69,12 +70,12 @@ void test_bone_slot_indices_are_dense_and_ordered() {
 
   // A deliberately awkward mix: skinned and unskinned, alive and dead, with and
   // without a pose stack, plus a skeleton that carries no joints at all.
-  const std::uint32_t inst_skinned_0 = scene.add_instance(make_instance(skin_a));
+  const engine::InstanceHandle inst_skinned_0 = scene.add_instance(make_instance(skin_a));
   (void)scene.add_instance(make_instance(engine::k_invalid_skin_index)); // static
-  const std::uint32_t inst_no_layers = scene.add_instance(make_instance(skin_b));
-  const std::uint32_t inst_dead = scene.add_instance(make_instance(skin_a));
+  const engine::InstanceHandle inst_no_layers = scene.add_instance(make_instance(skin_b));
+  const engine::InstanceHandle inst_dead = scene.add_instance(make_instance(skin_a));
   (void)scene.add_instance(make_instance(skin_empty));                   // jointless
-  const std::uint32_t inst_skinned_last = scene.add_instance(make_instance(skin_b));
+  const engine::InstanceHandle inst_skinned_last = scene.add_instance(make_instance(skin_b));
   (void)scene.add_instance(make_instance(engine::k_invalid_skin_index)); // static
 
   // Only some skinned instances get a pose stack. The ones without must still
@@ -150,8 +151,8 @@ void test_same_texture_skinned_instances_stay_distinct() {
 
   constexpr std::uint32_t k_horde = 6;
   for (std::uint32_t i = 0; i < k_horde; ++i) {
-    const std::uint32_t index = scene.add_instance(make_instance(skin));
-    scene.instance(index).pose_layers = &layers; // all share texture_index 0
+    const engine::InstanceHandle handle = scene.add_instance(make_instance(skin));
+    scene.instance(handle).pose_layers = &layers; // all share texture_index 0
   }
 
   std::vector<engine::DrawCommand> draws;
@@ -287,7 +288,7 @@ void test_cull_opt_out_is_respected() {
   sky.layer = engine::RenderLayer::Background;
   (void)scene.add_instance(sky);
 
-  const std::uint32_t skinned = scene.add_instance(make_instance(skin));
+  const engine::InstanceHandle skinned = scene.add_instance(make_instance(skin));
   scene.instance(skinned).pose_layers = &layers;
 
   std::vector<engine::DrawCommand> draws;
@@ -514,6 +515,84 @@ void test_shadow_slot_assignment() {
   check(none.point_count == 0, "a zero-intensity light gets no shadow map");
 }
 
+
+// Instance handles. Slot reuse means a bare index can silently refer to a
+// different entity after a despawn -- the generation is what makes that
+// detectable instead of merely wrong.
+void test_instance_handles_detect_reuse() {
+  std::printf("instance handles\n");
+
+  engine::Scene scene;
+  (void)scene.add_mesh(engine::MeshSource{});
+
+  const engine::InstanceHandle a = scene.add_instance(make_instance(engine::k_invalid_skin_index));
+  const engine::InstanceHandle b = scene.add_instance(make_instance(engine::k_invalid_skin_index));
+  check(scene.is_valid(a) && scene.is_valid(b), "fresh handles are valid");
+  check(!(a == b), "distinct instances get distinct handles");
+  check(scene.live_instance_count() == 2, "two live instances");
+
+  scene.remove_instance(a);
+  check(!scene.is_valid(a), "a removed handle stops being valid");
+  check(scene.try_instance(a) == nullptr, "try_instance returns null for a removed handle");
+  check(scene.is_valid(b), "removing one instance does not disturb another");
+  check(scene.live_instance_count() == 1, "live count drops");
+
+  // The slot comes back, but as a different entity.
+  const engine::InstanceHandle c = scene.add_instance(make_instance(engine::k_invalid_skin_index));
+  check(c.index == a.index, "the freed slot is reused rather than growing the vector");
+  check(c.generation != a.generation, "reuse bumps the generation");
+  check(!scene.is_valid(a), "the stale handle is still rejected after its slot is reused");
+  check(scene.is_valid(c), "the new handle for that slot is valid");
+
+  // Double remove must not free the same slot twice, or two live entities would
+  // later be handed the same index.
+  scene.remove_instance(c);
+  scene.remove_instance(c);
+  const engine::InstanceHandle d = scene.add_instance(make_instance(engine::k_invalid_skin_index));
+  const engine::InstanceHandle e = scene.add_instance(make_instance(engine::k_invalid_skin_index));
+  check(d.index != e.index, "double remove does not hand the same slot out twice");
+
+  const engine::InstanceHandle unset;
+  check(!scene.is_valid(unset), "a default-constructed handle is never valid");
+}
+
+// A bone attachment holds a handle to the object it drives (a weapon in a hand).
+// If that object was removed and its slot reused, driving it would move an
+// unrelated entity every frame.
+void test_bone_attachment_ignores_stale_target() {
+  std::printf("bone attachment targets\n");
+
+  engine::Scene scene;
+  (void)scene.add_mesh(engine::MeshSource{});
+  const std::uint32_t skin = scene.add_skeleton(make_skeleton(4));
+
+  const engine::InstanceHandle weapon = scene.add_instance(make_instance(engine::k_invalid_skin_index));
+  const engine::InstanceHandle character = scene.add_instance(make_instance(skin));
+  scene.instance(character).cached_bone_worlds.assign(4, glm::mat4(1.0F));
+  scene.instance(character).bone_attachments.push_back(
+      engine::BoneAttachment{.joint_index = 1, .target_instance = weapon});
+
+  glm::mat4 moved(1.0F);
+  moved[3] = glm::vec4(5.0F, 0.0F, 0.0F, 1.0F);
+  scene.instance(character).model = moved;
+
+  engine::update_bone_attachments(scene.instances());
+  check(scene.instance(weapon).model[3].x == 5.0F, "a live attachment target follows the bone");
+
+  // Remove the weapon and let something else take its slot.
+  scene.remove_instance(weapon);
+  const engine::InstanceHandle bystander = scene.add_instance(make_instance(engine::k_invalid_skin_index));
+  check(bystander.index == weapon.index, "the bystander took the weapon's slot");
+
+  glm::mat4 moved_again(1.0F);
+  moved_again[3] = glm::vec4(99.0F, 0.0F, 0.0F, 1.0F);
+  scene.instance(character).model = moved_again;
+  engine::update_bone_attachments(scene.instances());
+
+  check(scene.instance(bystander).model[3].x == 0.0F,
+        "a stale attachment target does not drag an unrelated instance around");
+}
+
 } // namespace
 
 auto main() -> int {
@@ -528,6 +607,8 @@ auto main() -> int {
   test_deferred_delete_holds_for_frames_in_flight();
   test_bone_slot_offsets_are_distinct_and_aligned();
   test_shadow_slot_assignment();
+  test_instance_handles_detect_reuse();
+  test_bone_attachment_ignores_stale_target();
 
   if (g_failures != 0) {
     std::printf("\n%d check(s) failed\n", g_failures);

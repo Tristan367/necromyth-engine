@@ -11,6 +11,7 @@
 #include "scene/spot_light.hpp"
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -66,8 +67,30 @@ public:
     return texture_array_layer_paths_;
   }
 
-  [[nodiscard]] auto instance(std::uint32_t index) -> MeshInstance & {
-    return instances_.at(index);
+  // Throws on a stale handle. Use try_instance() where the entity may legitimately
+  // have been removed (a projectile whose target despawned mid-flight).
+  [[nodiscard]] auto instance(InstanceHandle handle) -> MeshInstance & {
+    MeshInstance *found = try_instance(handle);
+    if (found == nullptr)
+      throw std::out_of_range("Scene::instance: stale or invalid InstanceHandle");
+    return *found;
+  }
+
+  [[nodiscard]] auto try_instance(InstanceHandle handle) -> MeshInstance * {
+    if (!handle.is_set() || handle.index >= instances_.size())
+      return nullptr;
+    MeshInstance &instance = instances_[handle.index];
+    if (!instance.alive || instance.generation != handle.generation)
+      return nullptr;
+    return &instance;
+  }
+
+  [[nodiscard]] auto try_instance(InstanceHandle handle) const -> const MeshInstance * {
+    return const_cast<Scene *>(this)->try_instance(handle);
+  }
+
+  [[nodiscard]] auto is_valid(InstanceHandle handle) const -> bool {
+    return try_instance(handle) != nullptr;
   }
 
   [[nodiscard]] auto directional_light() -> DirectionalLight & {
@@ -178,15 +201,45 @@ public:
     return index;
   }
 
-  [[nodiscard]] auto add_instance(MeshInstance instance) -> std::uint32_t {
+  // Instance slots are recycled like mesh slots. Without reuse a game that
+  // spawns and despawns grows this vector for the lifetime of the session, and
+  // every frame walks the tombstones to build the draw list.
+  [[nodiscard]] auto add_instance(MeshInstance instance) -> InstanceHandle {
+    if (!free_instance_slots_.empty()) {
+      const std::uint32_t index = free_instance_slots_.back();
+      free_instance_slots_.pop_back();
+      const std::uint32_t generation = instances_[index].generation + 1;
+      instances_[index] = std::move(instance);
+      instances_[index].alive = true;
+      instances_[index].generation = generation;
+      return {.index = index, .generation = generation};
+    }
+
     const std::uint32_t index = static_cast<std::uint32_t>(instances_.size());
+    instance.alive = true;
+    instance.generation = 1;
     instances_.push_back(std::move(instance));
-    return index;
+    return {.index = index, .generation = 1};
   }
 
-  void remove_instance(std::uint32_t index) {
-    if (index < instances_.size())
-      instances_[index].alive = false;
+  void remove_instance(InstanceHandle handle) {
+    MeshInstance *instance = try_instance(handle);
+    if (instance == nullptr)
+      return;
+    instance->alive = false;
+    // Drop per-instance storage now rather than holding it until the slot is
+    // reused; a horde's worth of cached bone transforms is not free.
+    instance->bone_attachments.clear();
+    instance->bone_attachments.shrink_to_fit();
+    instance->cached_bone_worlds.clear();
+    instance->cached_bone_worlds.shrink_to_fit();
+    instance->pose_layers = nullptr;
+    instance->joint_overrides = nullptr;
+    free_instance_slots_.push_back(handle.index);
+  }
+
+  [[nodiscard]] auto live_instance_count() const -> std::size_t {
+    return instances_.size() - free_instance_slots_.size();
   }
 
   [[nodiscard]] auto add_point_light(PointLight light) -> std::uint32_t {
@@ -250,6 +303,7 @@ private:
   std::unordered_map<std::string, std::uint32_t> texture_path_index_;
   std::vector<std::string> texture_array_layer_paths_;
   std::vector<MeshInstance> instances_;
+  std::vector<std::uint32_t> free_instance_slots_;
   std::vector<SkeletonAsset> skeletons_;
   std::vector<AnimationClip> animations_;
   std::vector<PointLight> point_lights_;

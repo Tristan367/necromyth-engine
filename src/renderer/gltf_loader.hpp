@@ -613,9 +613,17 @@ inline void load_animations(const tinygltf::Model &model, std::vector<AnimationC
 }
 
 struct GltfImportResult {
-  std::uint32_t first_instance{};
-  std::uint32_t instance_count{};
+  // One handle per imported primitive. This used to be a first index plus a
+  // count, which assumed the instances landed contiguously -- true only while
+  // instances were append-only. Slot reuse can scatter them, so the handles are
+  // kept explicitly.
+  std::vector<InstanceHandle> instances;
   std::uint32_t skeleton_index{k_invalid_skin_index};
+
+  [[nodiscard]] auto first_instance() const -> InstanceHandle {
+    return instances.empty() ? InstanceHandle{} : instances.front();
+  }
+  [[nodiscard]] auto instance_count() const -> std::size_t { return instances.size(); }
 };
 
 // Single-call glTF import: loads file, adds meshes/textures/instances/skeletons/animations,
@@ -627,24 +635,20 @@ struct GltfImportResult {
   GltfImportResult result;
   if (model.primitives.empty()) return result;
 
-  const std::uint32_t before = static_cast<std::uint32_t>(scene.instances().size());
-
+  result.instances.reserve(model.primitives.size());
   for (const LoadedGltfPrimitive &prim : model.primitives) {
     const std::uint32_t mesh_idx = scene.add_mesh({prim.mesh.vertices, prim.mesh.indices});
     const std::uint32_t tex_idx = prim.material.base_color_texture_path
         ? scene.add_texture(*prim.material.base_color_texture_path)
         : 0;
-    (void)scene.add_instance({
+    result.instances.push_back(scene.add_instance({
         .mesh_index = mesh_idx,
         .texture_index = tex_idx,
         .texture_source = TextureSource::Table,
         .model = instance_transform * prim.node_transform,
         .layer = RenderLayer::Opaque,
-    });
+    }));
   }
-
-  result.first_instance = before;
-  result.instance_count = static_cast<std::uint32_t>(scene.instances().size()) - before;
 
   if (!model.skeletons.empty()) {
     SkeletonAsset skeleton = model.skeletons.front();
@@ -653,8 +657,8 @@ struct GltfImportResult {
     for (const AnimationClip &anim : model.animations)
       (void)scene.add_animation(anim);
 
-    for (std::uint32_t i = 0; i < result.instance_count; ++i)
-      scene.instance(result.first_instance + i).skin_index = result.skeleton_index;
+    for (const InstanceHandle handle : result.instances)
+      scene.instance(handle).skin_index = result.skeleton_index;
   }
 
   return result;

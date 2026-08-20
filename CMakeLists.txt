@@ -350,6 +350,12 @@ target_link_libraries(vce_engine INTERFACE vce_renderer)
 # It builds no engine functionality; it exists purely to make `make` mean
 # something in this repo.
 # ---------------------------------------------------------------------------
+# Only when this repo is the thing being built. A downstream project already
+# compiles the headers it uses; making it also compile all 57 of them twice,
+# plus the tests and GPU benchmarks, would just be a slower build for no signal.
+option(VCE_BUILD_HEADER_CHECK "Compile every engine header as a build gate" ${PROJECT_IS_TOP_LEVEL})
+
+if(VCE_BUILD_HEADER_CHECK)
 file(GLOB_RECURSE VCE_PUBLIC_HEADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp")
 list(SORT VCE_PUBLIC_HEADERS)
@@ -394,6 +400,7 @@ if(NOT MSVC)
     target_compile_options(vce_header_check PRIVATE -Wno-missing-field-initializers)
 endif()
 add_dependencies(vce_header_check vce_shaders)
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -402,7 +409,7 @@ add_dependencies(vce_header_check vce_shaders)
 # works on any machine and in CI. Renderer behaviour that genuinely needs a GPU
 # stays the demo's job.
 # ---------------------------------------------------------------------------
-option(VCE_BUILD_TESTS "Build the engine's CPU-side tests" ON)
+option(VCE_BUILD_TESTS "Build the engine's CPU-side tests" ${PROJECT_IS_TOP_LEVEL})
 
 if(VCE_BUILD_TESTS)
     enable_testing()

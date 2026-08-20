@@ -77,7 +77,7 @@ auto main(int argc, char **argv) -> int {
   // Slot -> instance, for the chunks currently streamed in.
   struct Chunk {
     std::uint32_t mesh{};
-    std::uint32_t instance{};
+    engine::InstanceHandle instance{};
   };
   std::vector<Chunk> live;
 
@@ -94,7 +94,7 @@ auto main(int argc, char **argv) -> int {
       glm::mat4 model(1.0F);
       model[3] = glm::vec4(static_cast<float>((frame * 3 + i) % 40) - 20.0F, 0.0F,
                            static_cast<float>((frame + i) % 40) - 20.0F, 1.0F);
-      const std::uint32_t instance = scene.add_instance({
+      const engine::InstanceHandle instance = scene.add_instance({
           .mesh_index = mesh,
           .texture_index = 0,
           .model = model,

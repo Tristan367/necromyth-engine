@@ -288,11 +288,20 @@ inline   void update_bone_attachments(
     if (instance.cached_bone_worlds.empty()) continue;
 
     for (BoneAttachment &att : instance.bone_attachments) {
-      if (att.joint_index < instance.cached_bone_worlds.size()) {
-        att.world_transform = instance.model * instance.cached_bone_worlds[att.joint_index];
-        if (att.target_instance != k_invalid_skin_index && att.target_instance < instances.size())
-          instances[att.target_instance].model = att.world_transform;
-      }
+      if (att.joint_index >= instance.cached_bone_worlds.size())
+        continue;
+      att.world_transform = instance.model * instance.cached_bone_worlds[att.joint_index];
+
+      // Generation check: the attached object (a dropped weapon, a detached
+      // limb) may have been removed and its slot handed to something else.
+      // Moving that would be silent and very confusing.
+      const InstanceHandle target = att.target_instance;
+      if (!target.is_set() || target.index >= instances.size())
+        continue;
+      MeshInstance &attached = instances[target.index];
+      if (!attached.alive || attached.generation != target.generation)
+        continue;
+      attached.model = att.world_transform;
     }
   }
 }
