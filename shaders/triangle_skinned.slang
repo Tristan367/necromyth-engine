@@ -22,6 +22,7 @@ VSOutput vertMainSkinned(VSInputSkinned input, uint instanceId : SV_InstanceID) 
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
     output.textureLayer = inst.textureLayer;
+    output.bakedLight = float2(1.0, 0.0); // characters are lit dynamically
     output.sampleTextureArray = inst.sampleTextureArray;
     return output;
 }

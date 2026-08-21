@@ -23,4 +23,7 @@ struct VSOutput {
     // neighbouring vertices may belong to a different instance entirely.
     nointerpolation uint textureLayer;
     nointerpolation uint sampleTextureArray;
+    // Baked voxel light: x = skylight, y = block light, both 0..1. Interpolated,
+    // unlike the selectors above, so lighting varies smoothly across a face.
+    float2 bakedLight;
 };

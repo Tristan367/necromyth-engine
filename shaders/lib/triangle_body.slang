@@ -16,9 +16,14 @@ VSOutput vertMain(VSInput input, uint instanceId : SV_InstanceID) {
     output.worldNormal = normalize(mul((float3x3)inst.model, input.inNormal));
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
-    // Instance base layer plus the vertex's own material, so a chunk of many
-    // block types is one draw.
-    output.textureLayer = inst.textureLayer + input.inMaterial;
+    // The material field packs the texture layer in its low byte and baked voxel
+    // light above it. Meshes that never set it read as layer 0 with full light,
+    // which is what unlit geometry should look like.
+    output.textureLayer = inst.textureLayer + (input.inMaterial & 0xFFu);
+    const uint packedLight = input.inMaterial >> 8u;
+    output.bakedLight = packedLight == 0u
+        ? float2(1.0, 0.0)
+        : float2(float(packedLight & 0xFu) / 15.0, float((packedLight >> 4u) & 0xFu) / 15.0);
     output.sampleTextureArray = inst.sampleTextureArray;
     return output;
 }
