@@ -16,15 +16,44 @@ float3 applyBakedLight(float3 lit, float2 bakedLight) {
     return lit * sky + kBlockLightTint * bakedLight.y;
 }
 
+// Never fully black: a surface pointing straight away from the sun still shows
+// its own colour rather than becoming a silhouette.
+static const float kMinDiffuse = 0.2;
+// How much light a shadowed surface keeps. Zero would undo the wrap below --
+// the shaded half of the world would be flat again, just flat and dark instead
+// of flat and lit -- so a shadow darkens rather than erases.
+static const float kShadowBrightness = 0.55;
+
+// Wrapped diffuse, in place of clamped Lambert.
+//
+// Lambert clamps everything more than ninety degrees off the sun to exactly
+// zero, so a whole half of the world collapses to one flat value and the shapes
+// in it stop being readable: a roofline, a stack of crates and a smooth
+// hillside are the same block of colour on their shaded side.
+//
+// Wrapping spreads the dot product across the whole sphere instead of half of
+// it, so a surface pointing away is still lighter than one pointing further
+// away and the geometry survives. Spreading it that way costs half the
+// contrast, which the cube puts back -- it leaves a face pointed straight at
+// the sun untouched and pushes everything else down, so the gradient across a
+// shaded wall is worth looking at rather than a wash of near-identical greys.
+//
+// This is what the C# client does (Voxel.gdshader, `nSky`), and it is most of
+// why that game reads as solid shapes rather than as flat regions.
+float wrappedDiffuse(float3 normal, float3 lightDir) {
+    float wrapped = dot(normal, lightDir) * 0.5 + 0.5;
+    wrapped = wrapped * wrapped * wrapped;
+    return wrapped * (1.0 - kMinDiffuse) + kMinDiffuse;
+}
+
 float3 shadeDirectional(float3 worldPos, float3 normal, int filterModeSingle, int filterModeDual) {
     float3 lightDir = normalize(ubo.lightDirection.xyz);
-    float ndotl = max(dot(normal, lightDir), 0.0);
     float ambient = ubo.lightColor.w;
-    float3 diffuse = ubo.lightColor.rgb * ndotl;
     float shadow = (filterModeDual >= 0)
         ? shadowVisibilityDual(worldPos, normal, lightDir, filterModeDual)
         : shadowVisibilitySingle(worldPos, normal, lightDir, filterModeSingle);
-    return ambient + diffuse * shadow;
+    float sun = min(shadow + kShadowBrightness, 1.0);
+    return ambient + ubo.lightColor.rgb * wrappedDiffuse(normal, lightDir) * sun;
 }
 
 float4 shadeOpaqueSingle(VSOutput vertIn, int filterMode) {
