@@ -67,6 +67,18 @@ bool projectCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, uint 
 }
 
 // Samples the shadow map at a pre-computed projection.
+// Without the edge fade. In dual-cascade mode the NEAR cascade is never the last
+// word -- the far cascade covers everything it does and more -- so fading its
+// samples toward "lit" at its edges is wrong twice over: the blend already
+// handles coverage, and a shadow faded toward lit and then blended against a
+// real shadow lightens it. That double fade is the bright band at the split.
+float sampleFromProjectionRaw(float3 projection, uint layer, int filterMode, float cosTheta) {
+    float bias = shadowDepthBias(cosTheta);
+    return filterMode == 1
+        ? filterPCF(projection, layer, bias)
+        : textureProj(projection, layer, float2(0.0, 0.0), bias);
+}
+
 float sampleFromProjection(float3 projection, uint layer, int filterMode, float cosTheta) {
     float bias = shadowDepthBias(cosTheta);
     float shadow = filterMode == 1
@@ -125,8 +137,10 @@ float shadowVisibilityDual(float3 worldPos, float3 normal, float3 lightDir, int 
     // cross-fade washed the shadow out, leaving a bright band across the ground
     // at the split. Deferring to the other cascade keeps the blend between two
     // real answers, or one real answer and itself.
+    // Near cascade unfaded: the far cascade is its fallback, so it must not
+    // fade toward lit at its own edges.
     const float rawNear = nearOk
-        ? sampleFromProjection(projNear, cascadeNear, filterMode, cosNear) : -1.0;
+        ? sampleFromProjectionRaw(projNear, cascadeNear, filterMode, cosNear) : -1.0;
     const float rawFar  = farOk
         ? sampleFromProjection(projFar, cascadeFar, filterMode, cosFar)   : -1.0;
 
