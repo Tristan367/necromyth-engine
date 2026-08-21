@@ -387,17 +387,28 @@ private:
 
 class Character {
 public:
+  // One voxel plus a little, so a single-block step and the lip between two
+  // marching-cubes cells are both taken in stride.
+  static constexpr float k_step_height = 1.05F;
+  static constexpr float k_max_slope_degrees = 60.0F;
+
   Character(PhysicsWorld &world, const glm::vec3 &position,
             float radius = 0.5F, float height = 1.5F)
       : world_{world} {
     JPH::Ref<JPH::CapsuleShape> shape = new JPH::CapsuleShape(0.5F * height, radius);
     JPH::CharacterVirtualSettings settings;
     settings.mShape = shape;
-    settings.mMaxSlopeAngle = JPH::DegreesToRadians(60.0F);
+    // Steep enough to walk any marching-cubes slope the terrain generates --
+    // a cell that rises a full voxel across its own width is 45 degrees -- and
+    // shallow enough that a wall is still a wall.
+    settings.mMaxSlopeAngle = JPH::DegreesToRadians(k_max_slope_degrees);
     settings.mEnhancedInternalEdgeRemoval = true;
     settings.mInnerBodyShape = nullptr;
     settings.mMass = 0.0F;                    // disables gravity push-down onto bodies underfoot
-    settings.mPenetrationRecoverySpeed = 0.5F;
+    // Full-speed recovery. At half speed a capsule that sinks a little into a
+    // slope takes several frames to be pushed back out, and while it is in
+    // there it is wedged.
+    settings.mPenetrationRecoverySpeed = 1.0F;
     character_ = new JPH::CharacterVirtual(
         &settings,
         JPH::RVec3(position.x, position.y, position.z),
@@ -415,8 +426,15 @@ public:
 
   void update(float delta) {
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
-    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -0.5F, 0.0F);
-    settings.mWalkStairsStepUp = JPH::Vec3(0.0F, 0.4F, 0.0F);
+    // Both of these are measured in world units against a world made of one
+    // metre voxels, so anything below 1.0 cannot deal with a single voxel.
+    //
+    // They were 0.5 and 0.4, which meant a step of one voxel -- the smallest
+    // feature the world can possibly have -- stopped the character dead, and
+    // the lip where two marching-cubes cells meet was enough to catch on. That
+    // reads as "walks for a bit, then gets stuck against a hill".
+    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -k_step_height, 0.0F);
+    settings.mWalkStairsStepUp = JPH::Vec3(0.0F, k_step_height, 0.0F);
 
     character_->ExtendedUpdate(delta,
                                JPH::Vec3(0.0F, -9.81F, 0.0F),
@@ -452,6 +470,17 @@ public:
   // world origin shifts under a streaming world.
   void set_position(const glm::vec3 &p) {
     character_->SetPosition(JPH::RVec3(p.x, p.y, p.z));
+  }
+
+  // Surface normal of whatever is underfoot, or straight up when airborne.
+  // Callers that want a constant speed regardless of slope need this: the
+  // movement direction has to be projected onto the ground plane and rescaled,
+  // or walking uphill silently costs you speed.
+  [[nodiscard]] auto ground_normal() const -> glm::vec3 {
+    if (!is_on_ground())
+      return {0.0F, 1.0F, 0.0F};
+    const JPH::Vec3 n = character_->GetGroundNormal();
+    return {n.GetX(), n.GetY(), n.GetZ()};
   }
 
   [[nodiscard]] auto is_on_ground() const -> bool {

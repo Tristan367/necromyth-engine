@@ -435,6 +435,13 @@ if(VCE_BUILD_TESTS)
     endif()
     add_test(NAME scene_invariants COMMAND vce_tests)
 
+    add_executable(vce_tests_character tests/test_character_slopes.cpp)
+    target_link_libraries(vce_tests_character PRIVATE vce_renderer)
+    if(NOT MSVC)
+        target_compile_options(vce_tests_character PRIVATE -Wno-missing-field-initializers)
+    endif()
+    add_test(NAME character_slopes COMMAND vce_tests_character)
+
     # GPU stress test: needs a device and a display, so it is built but never
     # run by ctest. Exercises mesh streaming (create / remesh / drop under
     # frames in flight) against the validation layers, which is the only way to
