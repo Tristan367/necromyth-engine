@@ -399,6 +399,12 @@ public:
   // enough to stay glued to a slope you are walking down at a normal pace, and
   // little enough that running off a real drop lets gravity take over.
   static constexpr float k_stick_to_floor = 0.5F;
+
+  // Climbing: stick hard, so cresting a rise cannot throw the character.
+  static constexpr float k_stick_climbing = 1.2F;
+  // Descending: barely stick at all, so gravity does the work and a drop reads
+  // as falling rather than as being pulled.
+  static constexpr float k_stick_descending = 0.15F;
   static constexpr float k_max_slope_degrees = 60.0F;
 
   Character(PhysicsWorld &world, const glm::vec3 &position,
@@ -433,7 +439,16 @@ public:
   Character(Character &&) = delete;
   Character &operator=(Character &&) = delete;
 
-  void update(float delta) {
+  // `stick_down` is how far the controller may pull the character back down to
+  // keep contact with the ground this step.
+  //
+  // It wants to be asymmetric. Going UP a slope, sticking hard is what stops the
+  // character being thrown off the crest -- there is no downside, because the
+  // ground is rising to meet it anyway. Going DOWN, sticking hard is exactly
+  // what makes a descent feel like being sucked into the hill, because the
+  // controller teleports the character down faster than gravity would take it.
+  // One number cannot be right for both, so the caller picks per step.
+  void update(float delta, float stick_down = k_stick_to_floor) {
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     // Both of these are measured in world units against a world made of one
     // metre voxels, so anything below 1.0 cannot deal with a single voxel.
@@ -442,7 +457,7 @@ public:
     // feature the world can possibly have -- stopped the character dead, and
     // the lip where two marching-cubes cells meet was enough to catch on. That
     // reads as "walks for a bit, then gets stuck against a hill".
-    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -k_stick_to_floor, 0.0F);
+    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -std::max(stick_down, 0.0F), 0.0F);
     settings.mWalkStairsStepUp = JPH::Vec3(0.0F, k_step_height, 0.0F);
 
     character_->ExtendedUpdate(delta,
