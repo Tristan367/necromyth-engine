@@ -37,16 +37,19 @@ auto sync_scene_meshes(
     vk::raii::Device &device,
     UploadQueue &uploads,
     std::vector<MeshGpuSlot> &slots,
-    RetireFn &&retire) -> std::size_t {
+    RetireFn &&retire,
+    std::size_t *out_pending = nullptr) -> std::size_t {
   if (slots.size() < scene.meshes().size())
     slots.resize(scene.meshes().size());
 
   std::size_t changed = 0;
+  std::size_t pending = 0;
   for (std::size_t i = 0; i < scene.meshes().size(); ++i) {
     const MeshSlot &source = scene.meshes()[i];
     MeshGpuSlot &slot = slots[i];
     if (slot.revision == source.revision)
       continue;
+    ++pending; // alive in the Scene, not yet matching on the GPU
 
     if (source.alive) {
       // Upload into a fresh slot and only take it once it has succeeded.
@@ -72,6 +75,8 @@ auto sync_scene_meshes(
     slot.alive = source.alive;
     ++changed;
   }
+  if (out_pending != nullptr)
+    *out_pending = pending;
   return changed;
 }
 

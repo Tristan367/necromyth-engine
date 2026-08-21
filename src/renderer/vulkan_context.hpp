@@ -271,6 +271,11 @@ public:
   // be bigger.
   [[nodiscard]] auto upload_deferrals() const -> std::uint64_t { return upload_deferrals_; }
 
+  // Mesh slots the Scene considers alive whose GPU copy does not match. Nonzero
+  // for a frame or two is normal streaming; nonzero and STUCK means geometry
+  // that will never appear -- an invisible chunk you can still walk on.
+  [[nodiscard]] auto pending_mesh_uploads() const -> std::size_t { return pending_mesh_uploads_; }
+
   // Writes the next presented frame to an image file.
   //
   // Being able to look at a frame without a human in front of the window is the
@@ -722,7 +727,8 @@ private:
         device_.device(),
         upload_queue_,
         mesh_gpus_,
-        [this](MeshGpu retired) { retired_meshes_.retire(std::move(retired), frame_counter_); });
+        [this](MeshGpu retired) { retired_meshes_.retire(std::move(retired), frame_counter_); },
+        &pending_mesh_uploads_);
   }
 
   // Republishes the averaged numbers every window. A window of 120 frames is
@@ -1352,6 +1358,7 @@ private:
   std::string screenshot_path_;
   UploadQueue upload_queue_;
   std::uint64_t upload_deferrals_{0};
+  std::size_t pending_mesh_uploads_{0};
   bool logged_upload_overflow_{false};
   // Monotonic frame number, for deciding when retired GPU resources are safe
   // to free. Distinct from frame_index_, which cycles 0..max_frames_in_flight-1.

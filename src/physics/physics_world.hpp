@@ -390,6 +390,15 @@ public:
   // One voxel plus a little, so a single-block step and the lip between two
   // marching-cubes cells are both taken in stride.
   static constexpr float k_step_height = 1.05F;
+
+  // How far the controller may pull the character back down to keep contact.
+  //
+  // Deliberately smaller than the step-up. Matching them meant a descent was
+  // resolved by teleporting down more than a metre every frame, which is faster
+  // than gravity and feels like being sucked into the hill. Half a voxel is
+  // enough to stay glued to a slope you are walking down at a normal pace, and
+  // little enough that running off a real drop lets gravity take over.
+  static constexpr float k_stick_to_floor = 0.5F;
   static constexpr float k_max_slope_degrees = 60.0F;
 
   Character(PhysicsWorld &world, const glm::vec3 &position,
@@ -433,7 +442,7 @@ public:
     // feature the world can possibly have -- stopped the character dead, and
     // the lip where two marching-cubes cells meet was enough to catch on. That
     // reads as "walks for a bit, then gets stuck against a hill".
-    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -k_step_height, 0.0F);
+    settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -k_stick_to_floor, 0.0F);
     settings.mWalkStairsStepUp = JPH::Vec3(0.0F, k_step_height, 0.0F);
 
     character_->ExtendedUpdate(delta,
