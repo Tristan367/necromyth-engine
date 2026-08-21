@@ -118,10 +118,23 @@ float shadowVisibilityDual(float3 worldPos, float3 normal, float3 lightDir, int 
         nearConfidence = smoothstep(0.0, 0.05, nearEdge);
     }
 
-    const float shadowNear = nearOk
-        ? sampleFromProjection(projNear, cascadeNear, filterMode, cosNear) : 1.0;
-    const float shadowFar  = farOk
-        ? sampleFromProjection(projFar, cascadeFar, filterMode, cosFar)   : 1.0;
+    // A cascade that does not cover this fragment must abstain, not vote.
+    //
+    // Falling back to 1.0 means "fully lit", and 1.0 blended against a real
+    // shadow lightens it -- so wherever one cascade ran out of coverage the
+    // cross-fade washed the shadow out, leaving a bright band across the ground
+    // at the split. Deferring to the other cascade keeps the blend between two
+    // real answers, or one real answer and itself.
+    const float rawNear = nearOk
+        ? sampleFromProjection(projNear, cascadeNear, filterMode, cosNear) : -1.0;
+    const float rawFar  = farOk
+        ? sampleFromProjection(projFar, cascadeFar, filterMode, cosFar)   : -1.0;
+
+    if (rawNear < 0.0 && rawFar < 0.0)
+        return 1.0; // genuinely outside both: nothing can shadow it
+
+    const float shadowNear = rawNear >= 0.0 ? rawNear : rawFar;
+    const float shadowFar  = rawFar  >= 0.0 ? rawFar  : rawNear;
 
     const float blend = smoothstep(split - blendRange, split + blendRange, viewZ);
     const float blendedResult = lerp(shadowFar, shadowNear, blend);
