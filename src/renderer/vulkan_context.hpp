@@ -264,6 +264,12 @@ public:
   }
 
   // Upload meshes/textures appended to Scene after construction; rebuilds texture descriptors when needed.
+  // How many frames have hit the staging limit and deferred an upload. Not an
+  // error -- back-pressure is the design -- but a steady stream of them means
+  // geometry is arriving faster than it can be uploaded, and the ring wants to
+  // be bigger.
+  [[nodiscard]] auto upload_deferrals() const -> std::uint64_t { return upload_deferrals_; }
+
   void sync_scene(const Scene &scene) {
     if (gpu_shutdown_complete_)
       return;
@@ -687,6 +693,16 @@ private:
   }
 
   void sync_mesh_slots(const Scene &scene) {
+    if (upload_queue_.overflowed()) {
+      ++upload_deferrals_;
+      upload_queue_.clear_overflow();
+      if (!logged_upload_overflow_) {
+        std::cout << "Mesh staging ring is full; uploads are being deferred to later "
+                     "frames. Raise EngineConfig::upload_bytes_per_frame if this is "
+                     "constant.\n";
+        logged_upload_overflow_ = true;
+      }
+    }
     engine::sync_scene_meshes(
         scene,
         device_.physical_device(),
@@ -1239,6 +1255,8 @@ private:
   std::vector<MeshGpuSlot> mesh_gpus_;
   DeferredDelete<MeshGpu> retired_meshes_;
   UploadQueue upload_queue_;
+  std::uint64_t upload_deferrals_{0};
+  bool logged_upload_overflow_{false};
   // Monotonic frame number, for deciding when retired GPU resources are safe
   // to free. Distinct from frame_index_, which cycles 0..max_frames_in_flight-1.
   std::uint64_t frame_counter_{0};

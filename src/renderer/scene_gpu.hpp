@@ -48,17 +48,26 @@ auto sync_scene_meshes(
     if (slot.revision == source.revision)
       continue;
 
-    if (slot.revision != 0)
-      retire(std::move(slot.gpu));
-    slot.gpu = MeshGpu{};
-
     if (source.alive) {
-      if (!slot.gpu.upload(physical_device, device, uploads, source.source, source.bounds)) {
-        // Staging is full for this frame. Leave the revision unmarked so this
-        // slot is retried next frame rather than drawn half-uploaded.
-        continue;
-      }
+      // Upload into a fresh slot and only take it once it has succeeded.
+      //
+      // Retiring the live mesh first and then bailing out on a full staging
+      // ring left the slot holding an empty MeshGpu while still marked alive,
+      // so the rest of the frame drew an unbound vertex buffer -- stretched
+      // black triangles wherever a section happened to lose the race. The old
+      // mesh is perfectly good until the new one is ready; keep drawing it.
+      MeshGpu fresh;
+      if (!fresh.upload(physical_device, device, uploads, source.source, source.bounds))
+        continue; // retried next frame, still drawing the previous mesh
+      if (slot.revision != 0)
+        retire(std::move(slot.gpu));
+      slot.gpu = std::move(fresh);
+    } else {
+      if (slot.revision != 0)
+        retire(std::move(slot.gpu));
+      slot.gpu = MeshGpu{};
     }
+
     slot.revision = source.revision;
     slot.alive = source.alive;
     ++changed;
