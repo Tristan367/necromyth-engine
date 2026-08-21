@@ -41,6 +41,7 @@
 #include <cstdint>
 #include <functional>
 #include <iomanip>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -269,6 +270,15 @@ public:
   // geometry is arriving faster than it can be uploaded, and the ring wants to
   // be bigger.
   [[nodiscard]] auto upload_deferrals() const -> std::uint64_t { return upload_deferrals_; }
+
+  // Writes the next presented frame to an image file.
+  //
+  // Being able to look at a frame without a human in front of the window is the
+  // difference between "something renders wrong" and knowing what. It reads the
+  // swapchain image back after the frame is submitted, which is slow and
+  // synchronises the device -- fine, because a screenshot is never in a hot
+  // path and a correct picture matters more than the frame it costs.
+  void request_screenshot(std::string path) { screenshot_path_ = std::move(path); }
 
   void sync_scene(const Scene &scene) {
     if (gpu_shutdown_complete_)
@@ -590,6 +600,9 @@ public:
     device_.graphics_queue().submit2(submit_info, *in_flight_fences_[frame_index_]);
     submit_guard.submitted = true;
     gpu_profiler_.mark_frame_recorded(frame_index_);
+
+    if (!screenshot_path_.empty())
+      capture_swapchain_image(image_index);
 
 
 
@@ -1254,6 +1267,89 @@ private:
   bool skinned_pipelines_built_{false};
   std::vector<MeshGpuSlot> mesh_gpus_;
   DeferredDelete<MeshGpu> retired_meshes_;
+  void capture_swapchain_image(std::uint32_t image_index) {
+    const std::string path = screenshot_path_;
+    screenshot_path_.clear();
+
+    device_.device().waitIdle();
+
+    const vk::Extent2D extent = swapchain_.extent();
+    const vk::DeviceSize bytes =
+        static_cast<vk::DeviceSize>(extent.width) * extent.height * 4;
+
+    vk::raii::Buffer staging(device_.device(), vk::BufferCreateInfo{
+        .size = bytes,
+        .usage = vk::BufferUsageFlagBits::eTransferDst,
+        .sharingMode = vk::SharingMode::eExclusive,
+    });
+    const vk::MemoryRequirements requirements = staging.getMemoryRequirements();
+    vk::raii::DeviceMemory memory(device_.device(), vk::MemoryAllocateInfo{
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = detail::find_memory_type(
+            device_.physical_device().getMemoryProperties(), requirements.memoryTypeBits,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
+    });
+    staging.bindMemory(*memory, 0);
+
+    vk::raii::CommandBuffers buffers(device_.device(), vk::CommandBufferAllocateInfo{
+        .commandPool = *command_pool_,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    });
+    vk::raii::CommandBuffer &copy = buffers.front();
+    copy.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+    const vk::Image image = swapchain_.images()[image_index];
+    const auto barrier = [&](vk::ImageLayout from, vk::ImageLayout to,
+                             vk::AccessFlags2 src, vk::AccessFlags2 dst) {
+      const vk::ImageMemoryBarrier2 b{
+          .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+          .srcAccessMask = src,
+          .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+          .dstAccessMask = dst,
+          .oldLayout = from,
+          .newLayout = to,
+          .image = image,
+          .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+      };
+      copy.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
+                                               .pImageMemoryBarriers = &b});
+    };
+
+    barrier(vk::ImageLayout::ePresentSrcKHR, vk::ImageLayout::eTransferSrcOptimal,
+            vk::AccessFlagBits2::eMemoryRead, vk::AccessFlagBits2::eTransferRead);
+    copy.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, *staging,
+                           vk::BufferImageCopy{
+                               .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                               .imageExtent = {extent.width, extent.height, 1},
+                           });
+    barrier(vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::ePresentSrcKHR,
+            vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eMemoryRead);
+    copy.end();
+
+    device_.graphics_queue().submit(vk::SubmitInfo{
+        .commandBufferCount = 1, .pCommandBuffers = &*copy});
+    device_.graphics_queue().waitIdle();
+
+    const auto *pixels = static_cast<const unsigned char *>(memory.mapMemory(0, bytes));
+    const bool bgr = swapchain_.image_format() == vk::Format::eB8G8R8A8Srgb ||
+                     swapchain_.image_format() == vk::Format::eB8G8R8A8Unorm;
+
+    // Plain PPM: no encoder to depend on, and every viewer and script reads it.
+    std::ofstream out(path, std::ios::binary);
+    out << "P6\n" << extent.width << " " << extent.height << "\n255\n";
+    for (std::uint32_t i = 0; i < extent.width * extent.height; ++i) {
+      const unsigned char *p = pixels + static_cast<std::size_t>(i) * 4;
+      const char rgb[3] = {static_cast<char>(bgr ? p[2] : p[0]), static_cast<char>(p[1]),
+                           static_cast<char>(bgr ? p[0] : p[2])};
+      out.write(rgb, 3);
+    }
+    memory.unmapMemory();
+    std::cout << "screenshot written to " << path << " (" << extent.width << "x"
+              << extent.height << ")\n";
+  }
+
+  std::string screenshot_path_;
   UploadQueue upload_queue_;
   std::uint64_t upload_deferrals_{0};
   bool logged_upload_overflow_{false};
