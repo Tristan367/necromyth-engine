@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/animation_types.hpp"
+#include "scene/texture_array_layer.hpp"
 #include "scene/bounds.hpp"
 #include "scene/camera.hpp"
 #include "scene/directional_light.hpp"
@@ -63,7 +64,7 @@ public:
     return texture_paths_;
   }
 
-  [[nodiscard]] auto texture_array_layer_paths() const -> const std::vector<std::string> & {
+  [[nodiscard]] auto texture_array_layer_paths() const -> const std::vector<TextureArrayLayer> & {
     return texture_array_layer_paths_;
   }
 
@@ -195,9 +196,15 @@ public:
     return index;
   }
 
-  [[nodiscard]] auto add_texture_array_layer(std::string path) -> std::uint32_t {
+  // `overlay`, when given, is alpha-composited over the base image as the layer
+  // is loaded. It exists so a game can ship one wear/crack/frost image and get a
+  // worn variant of every tile for free, instead of authoring and shipping N of
+  // them. Doing it here rather than in a shader keeps the cost at load time:
+  // sampling a second texture and blending per fragment would be paid forever.
+  [[nodiscard]] auto add_texture_array_layer(std::string path, std::string overlay = {})
+      -> std::uint32_t {
     const std::uint32_t index = static_cast<std::uint32_t>(texture_array_layer_paths_.size());
-    texture_array_layer_paths_.push_back(std::move(path));
+    texture_array_layer_paths_.push_back({std::move(path), std::move(overlay)});
     return index;
   }
 
@@ -301,7 +308,7 @@ private:
   std::vector<std::uint32_t> free_mesh_slots_;
   std::vector<std::string> texture_paths_;
   std::unordered_map<std::string, std::uint32_t> texture_path_index_;
-  std::vector<std::string> texture_array_layer_paths_;
+  std::vector<TextureArrayLayer> texture_array_layer_paths_;
   std::vector<MeshInstance> instances_;
   std::vector<std::uint32_t> free_instance_slots_;
   std::vector<SkeletonAsset> skeletons_;

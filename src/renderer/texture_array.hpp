@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/texture_image.hpp"
+#include "scene/texture_array_layer.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -18,7 +19,7 @@ public:
       vk::raii::Device &device,
       vk::raii::CommandPool &command_pool,
       vk::raii::Queue &queue,
-      std::span<const std::string> paths) {
+      std::span<const TextureArrayLayer> paths) {
     if (paths.empty())
       throw std::runtime_error("Texture array requires at least one layer path");
 
@@ -30,8 +31,10 @@ public:
     std::vector<detail::RgbaImageData> layers;
     layers.reserve(paths.size());
 
-    for (const std::string &path : paths) {
-      detail::RgbaImageData layer = detail::load_rgba_image(path);
+    for (const TextureArrayLayer &source : paths) {
+      detail::RgbaImageData layer = detail::load_rgba_image(source.path);
+      if (!source.overlay.empty())
+        detail::composite_over(layer, detail::load_rgba_image(source.overlay), source.path);
       if (layers.empty()) {
         extent_ = vk::Extent3D{
             .width = static_cast<std::uint32_t>(layer.width),
@@ -40,7 +43,7 @@ public:
         };
       } else if (static_cast<std::uint32_t>(layer.width) != extent_.width ||
                  static_cast<std::uint32_t>(layer.height) != extent_.height)
-        throw std::runtime_error("Texture array layers must share dimensions: " + path);
+        throw std::runtime_error("Texture array layers must share dimensions: " + source.path);
 
       layers.push_back(std::move(layer));
     }

@@ -68,6 +68,34 @@ struct RgbaImageData {
   std::int32_t height{};
 };
 
+// Straight source-over alpha composite of `overlay` onto `base`, in place.
+//
+// Both images must be the same size: an overlay authored at a different
+// resolution to the tiles it decorates is a content mistake, and silently
+// stretching it would hide that until someone noticed the cracks were blurry.
+inline void composite_over(RgbaImageData &base, const RgbaImageData &overlay,
+                           std::string_view base_path) {
+  if (overlay.width != base.width || overlay.height != base.height)
+    throw std::runtime_error("Texture array overlay size does not match layer " +
+                             std::string(base_path));
+
+  const std::size_t pixels = static_cast<std::size_t>(base.width) *
+                             static_cast<std::size_t>(base.height);
+  for (std::size_t i = 0; i < pixels; ++i) {
+    const std::size_t p = i * 4;
+    const float alpha = static_cast<float>(overlay.pixels[p + 3]) / 255.0F;
+    if (alpha <= 0.0F)
+      continue;
+    for (std::size_t c = 0; c < 3; ++c) {
+      const float src = static_cast<float>(overlay.pixels[p + c]);
+      const float dst = static_cast<float>(base.pixels[p + c]);
+      base.pixels[p + c] = static_cast<stbi_uc>(src * alpha + dst * (1.0F - alpha));
+    }
+    // Alpha stays the base's: an overlay decorates a tile, it does not punch
+    // holes in one or fill in the cutouts of a leaf texture.
+  }
+}
+
 [[nodiscard]] inline auto load_rgba_image(std::string_view path) -> RgbaImageData {
   std::int32_t width{};
   std::int32_t height{};
