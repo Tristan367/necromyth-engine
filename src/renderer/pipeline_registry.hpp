@@ -125,10 +125,20 @@ private:
         continue;
 
       GraphicsPipelineRasterState raster{};
-      if (alpha_mode != MeshAlphaMode::Opaque)
+      // Cutout keeps back-face culling. It is a hole in a solid surface -- a
+      // window, a stair riser -- and drawing the inside of one costs a second
+      // full-rate rasterisation of every such face for nothing. Foliage is the
+      // case that genuinely wants both sides, and a cross-billboard gets them
+      // by emitting both quads, which is what it has to do for correct normals
+      // anyway.
+      //
+      // Alpha-to-coverage stays double-sided, because the things that reach for
+      // it are exactly the things that are one-sided geometry pretending to be
+      // volume.
+      if (alpha_mode == MeshAlphaMode::AlphaToCoverage) {
         raster.cull_mode = vk::CullModeFlagBits::eNone;
-      if (alpha_mode == MeshAlphaMode::AlphaToCoverage)
         raster.alpha_to_coverage = sample_count_ != vk::SampleCountFlagBits::e1;
+      }
 
       const char *frag_entry = textured_fragment_entry(
           profile_.shadow_filter, alpha_mode, profile_.cascade_mode);

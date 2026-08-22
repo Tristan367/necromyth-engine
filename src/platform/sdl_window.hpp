@@ -4,6 +4,7 @@
 #include <SDL3/SDL_video.h>
 
 #include <stdexcept>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 
@@ -38,11 +39,20 @@ public:
 class SdlWindow {
 public:
     SdlWindow(std::string_view title, int width, int height) {
-        window_ = SDL_CreateWindow(
-            std::string(title).c_str(),
-            width,
-            height,
-            SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+        // ENGINE_BACKGROUND_WINDOW=1 asks the compositor not to hand this
+        // window the keyboard.
+        //
+        // For automated runs -- benchmarks, screenshot passes, soak tests --
+        // the window has to exist, because Vulkan needs a surface, but it has
+        // no business taking focus from whatever the person at the keyboard is
+        // actually doing. Without this, every headless run yanks the caret out
+        // of their editor for the second and a half it lives.
+        SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+        if (const char *env = std::getenv("ENGINE_BACKGROUND_WINDOW");
+            env != nullptr && env[0] == '1')
+            flags |= SDL_WINDOW_NOT_FOCUSABLE;
+
+        window_ = SDL_CreateWindow(std::string(title).c_str(), width, height, flags);
 
         if (window_ == nullptr)
             throw detail::sdl_error("Failed to create SDL window");

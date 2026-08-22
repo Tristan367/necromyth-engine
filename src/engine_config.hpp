@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -65,6 +66,17 @@ struct EngineConfig {
   config.present_mode = present_mode_preference_from_environment();
   if (const char *env = std::getenv("ENGINE_PROFILE"); env != nullptr && env[0] != '\0')
     config.profile_to_stdout = env[0] != '0';
+  // ENGINE_WINDOW=1920x1080. Chiefly so a benchmark can put a real fragment
+  // load on the GPU: a profile taken in a 960x540 window is measuring the
+  // vertex path and calling it a frame time.
+  if (const char *env = std::getenv("ENGINE_WINDOW"); env != nullptr && env[0] != '\0') {
+    int w = 0;
+    int h = 0;
+    if (std::sscanf(env, "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+      config.window_width = w;
+      config.window_height = h;
+    }
+  }
   return config;
 }
 
