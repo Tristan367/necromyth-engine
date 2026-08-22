@@ -61,7 +61,12 @@ class VulkanContext {
 public:
   VulkanContext(SDL_Window *window, const EngineConfig &config, const Scene &scene)
       : window_(window),
-        msaa_config_(resolve_msaa_for_scene(config.msaa, scene_uses_alpha_to_coverage(scene.instances()))),
+        streaming_alpha_modes_(config.streaming_alpha_modes),
+        msaa_config_(resolve_msaa_for_scene(
+            config.msaa,
+            scene_uses_alpha_to_coverage(scene.instances()) ||
+                config.streaming_alpha_modes[static_cast<std::size_t>(
+                    MeshAlphaMode::AlphaToCoverage)])),
         startup_point_shadow_filter_(scene.shadow_settings().point_shadow_filter),
         startup_shadow_filter_mode_(scene.shadow_settings().filter_mode),
         startup_cascade_mode_(scene.shadow_settings().cascade_mode),
@@ -1032,10 +1037,14 @@ private:
   }
 
   void create_pipelines(const Scene &scene) {
+    std::array<bool, 3> alpha_modes = collect_used_alpha_modes(scene.instances());
+    for (std::size_t i = 0; i < alpha_modes.size(); ++i)
+      alpha_modes[i] = alpha_modes[i] || streaming_alpha_modes_[i];
+
     const PipelineBuildProfile profile{
         .shadow_filter = startup_shadow_filter_mode_,
         .cascade_mode = startup_cascade_mode_,
-        .textured_alpha_modes = collect_used_alpha_modes(scene.instances()),
+        .textured_alpha_modes = alpha_modes,
         .build_skinned = has_skinned_instances(scene.instances(), scene),
         .has_point_shadows = has_point_shadow_lights(scene.point_lights()),
     };
@@ -1207,6 +1216,8 @@ private:
   // constraint that keeps GpuProfiler below device_.
   mutable CpuProfiler cpu_profiler_;
   std::uint32_t profile_window_frames_{0};
+  // Declared before msaa_config_ on purpose: the MSAA decision reads it.
+  std::array<bool, 3> streaming_alpha_modes_{{false, false, false}};
   MsaaSettings msaa_config_{};
   bool startup_point_shadow_filter_{false};
   ShadowFilterMode startup_shadow_filter_mode_{ShadowFilterMode::Pcf3x3};

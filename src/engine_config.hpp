@@ -1,8 +1,10 @@
 #pragma once
 
 #include "renderer/render_settings.hpp"
+#include "scene/mesh_instance.hpp"
 #include "scene/shadow_utils.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -35,6 +37,20 @@ struct EngineConfig {
   // fit; anything that does not is deferred to the next frame rather than
   // stalling. 32 MB comfortably covers a streaming voxel world.
   std::uint64_t staging_bytes_per_frame{32ULL * 1024 * 1024};
+  // Alpha modes the application will use later, on top of whatever the scene
+  // already contains when the device is created.
+  //
+  // Pipelines are compiled once, from what the scene shows at startup, so that
+  // a build only carries the ones it needs. That works for everything present
+  // up front and not at all for geometry that streams in: the first chunk
+  // containing a window arrives long after the pipelines are fixed. Declaring
+  // the mode here is how a streaming application says which ones to expect.
+  std::array<bool, 3> streaming_alpha_modes{{false, false, false}};
+
+  void declare_alpha_mode(MeshAlphaMode mode) {
+    streaming_alpha_modes[static_cast<std::size_t>(mode)] = true;
+  }
+
   // Print a per-pass CPU/GPU timing breakdown every profiling window.
   // ENGINE_PROFILE=1. Timestamps are always collected and readable via
   // VulkanContext::profile_report(); this only controls the periodic dump.
