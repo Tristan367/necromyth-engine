@@ -49,8 +49,13 @@ public:
         // of their editor for the second and a half it lives.
         SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
         if (const char *env = std::getenv("ENGINE_BACKGROUND_WINDOW");
-            env != nullptr && env[0] == '1')
-            flags |= SDL_WINDOW_NOT_FOCUSABLE;
+            env != nullptr && env[0] == '1') {
+            // Never mapped, never focusable. The compositor does not show it,
+            // does not give it the keyboard, and does not move the pointer to
+            // it -- which is the only arrangement that lets an automated run
+            // share a desktop with a person who is using it.
+            flags |= SDL_WINDOW_NOT_FOCUSABLE | SDL_WINDOW_HIDDEN;
+        }
 
         window_ = SDL_CreateWindow(std::string(title).c_str(), width, height, flags);
 
