@@ -387,9 +387,19 @@ private:
 
 class Character {
 public:
-  // One voxel plus a little, so a single-block step and the lip between two
-  // marching-cubes cells are both taken in stride.
-  static constexpr float k_step_height = 1.05F;
+  // Deliberately LESS than one voxel.
+  //
+  // It was 1.05, which meant every cubic block in the world was a free step:
+  // walk into a crate and the controller lifted you onto it. A block you can
+  // walk onto is a block that is not an obstacle, and if a one-voxel wall is
+  // not an obstacle then neither is anything the player builds out of them.
+  //
+  // 0.6 clears the lip where two marching-cubes cells meet, which is a fraction
+  // of a voxel, and stops at anything a whole voxel tall. Terrain that actually
+  // rises a full voxel does it over a cell's width, which is 45 degrees, and
+  // mMaxSlopeAngle lets the character walk that -- so terrain never needed the
+  // step to be a metre in the first place. Everything else, you jump.
+  static constexpr float k_step_height = 0.6F;
 
   // How far the controller may pull the character back down to keep contact.
   //
