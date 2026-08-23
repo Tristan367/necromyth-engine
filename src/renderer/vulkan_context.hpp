@@ -1037,7 +1037,7 @@ private:
   }
 
   void create_pipelines(const Scene &scene) {
-    std::array<bool, 3> alpha_modes = collect_used_alpha_modes(scene.instances());
+    AlphaModeSet alpha_modes = collect_used_alpha_modes(scene.instances());
     for (std::size_t i = 0; i < alpha_modes.size(); ++i)
       alpha_modes[i] = alpha_modes[i] || streaming_alpha_modes_[i];
 
@@ -1217,7 +1217,7 @@ private:
   mutable CpuProfiler cpu_profiler_;
   std::uint32_t profile_window_frames_{0};
   // Declared before msaa_config_ on purpose: the MSAA decision reads it.
-  std::array<bool, 3> streaming_alpha_modes_{{false, false, false}};
+  AlphaModeSet streaming_alpha_modes_{};
   MsaaSettings msaa_config_{};
   bool startup_point_shadow_filter_{false};
   ShadowFilterMode startup_shadow_filter_mode_{ShadowFilterMode::Pcf3x3};

@@ -44,6 +44,22 @@ enum class MeshAlphaMode : std::uint8_t {
   Opaque = 0,
   Cutout = 1,
   AlphaToCoverage = 2,
+  // Ordinary alpha blending: depth-tested, but not depth-written, so what is
+  // behind a translucent surface still draws and still shows through.
+  //
+  // The one thing that genuinely needs it is water, and water is why this is
+  // worth a fourth pipeline: a hole cannot be a lake. Everything else in this
+  // engine that looked like it wanted transparency wanted a hole instead --
+  // see docs/PERF_NOTES.md on windows -- and a hole is strictly cheaper,
+  // because a blended fragment writes no depth and so cannot reject anything
+  // drawn after it.
+  //
+  // No per-draw sorting. Blended draws sort after everything else by
+  // RenderLayer::Transparent, which is the ordering that matters; among
+  // themselves they are unsorted, which is wrong only where one translucent
+  // surface is seen through another. For a sheet of water at one level, that
+  // case does not arise.
+  Blend = 3,
 };
 
 struct MeshInstance {

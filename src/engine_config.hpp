@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/pipeline_id.hpp"
 #include "renderer/render_settings.hpp"
 #include "scene/mesh_instance.hpp"
 #include "scene/shadow_utils.hpp"
@@ -46,7 +47,7 @@ struct EngineConfig {
   // up front and not at all for geometry that streams in: the first chunk
   // containing a window arrives long after the pipelines are fixed. Declaring
   // the mode here is how a streaming application says which ones to expect.
-  std::array<bool, 3> streaming_alpha_modes{{false, false, false}};
+  AlphaModeSet streaming_alpha_modes{};
 
   void declare_alpha_mode(MeshAlphaMode mode) {
     streaming_alpha_modes[static_cast<std::size_t>(mode)] = true;

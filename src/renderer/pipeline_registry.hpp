@@ -106,7 +106,9 @@ private:
          .depth_test = false, .depth_write = false});
 
     static constexpr std::array k_alpha_modes{
-        MeshAlphaMode::Opaque, MeshAlphaMode::Cutout, MeshAlphaMode::AlphaToCoverage};
+        MeshAlphaMode::Opaque, MeshAlphaMode::Cutout, MeshAlphaMode::AlphaToCoverage,
+        MeshAlphaMode::Blend};
+    static_assert(k_alpha_modes.size() == k_alpha_mode_count);
 
     // Specialization constant: constant_id=0 = kHasPointShadows (bool)
     const vk::Bool32 spec_has_point_shadows = profile_.has_point_shadows ? vk::True : vk::False;
@@ -138,6 +140,23 @@ private:
       if (alpha_mode == MeshAlphaMode::AlphaToCoverage) {
         raster.cull_mode = vk::CullModeFlagBits::eNone;
         raster.alpha_to_coverage = sample_count_ != vk::SampleCountFlagBits::e1;
+      }
+
+      // Blended surfaces test depth but do not write it.
+      //
+      // Writing depth would let the nearest translucent fragment hide the ones
+      // behind it, which is precisely what it must not do -- you would see
+      // water and nothing through it. Not writing depth is also what makes the
+      // ordering rule "after everything solid" sufficient: the solid world has
+      // already laid down the depth these fragments are tested against.
+      //
+      // Double-sided, because the inside of a body of water is a place the
+      // camera goes. A single-sided surface seen from underneath disappears,
+      // and swimming under a lake that has no ceiling is not a lake.
+      if (alpha_mode == MeshAlphaMode::Blend) {
+        raster.cull_mode = vk::CullModeFlagBits::eNone;
+        raster.depth_write = false;
+        raster.blend_enable = true;
       }
 
       const char *frag_entry = textured_fragment_entry(

@@ -4,73 +4,77 @@
 #include "scene/render_layer.hpp"
 #include "scene/shadow_utils.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace engine {
+
+// The four textured surface pipelines are kept contiguous, static first and
+// then skinned, because three predicates below are range checks over them and a
+// range check is only correct while the range is unbroken.
+inline constexpr std::size_t k_alpha_mode_count = 4;
 
 enum class PipelineId : std::uint8_t {
   Background = 0,
   TexturedOpaque = 1,
   TexturedCutout = 2,
   TexturedAlphaToCoverage = 3,
-  ShadowDepth = 4,
-  TexturedOpaqueSkinned = 5,
-  TexturedCutoutSkinned = 6,
-  TexturedAlphaToCoverageSkinned = 7,
-  ShadowDepthSkinned = 8,
-  PointShadowDepth = 9,
-  PointShadowDepthSkinned = 10,
-  ParticleBillboard = 11,
+  TexturedBlend = 4,
+  ShadowDepth = 5,
+  TexturedOpaqueSkinned = 6,
+  TexturedCutoutSkinned = 7,
+  TexturedAlphaToCoverageSkinned = 8,
+  TexturedBlendSkinned = 9,
+  ShadowDepthSkinned = 10,
+  PointShadowDepth = 11,
+  PointShadowDepthSkinned = 12,
+  ParticleBillboard = 13,
 };
 
+inline constexpr auto k_first_textured = static_cast<std::uint8_t>(PipelineId::TexturedOpaque);
+inline constexpr auto k_first_textured_skinned =
+    static_cast<std::uint8_t>(PipelineId::TexturedOpaqueSkinned);
+
 [[nodiscard]] constexpr auto textured_pipeline(MeshAlphaMode alpha_mode, bool skinned = false) -> PipelineId {
-  if (skinned) {
-    switch (alpha_mode) {
-    case MeshAlphaMode::Cutout:
-      return PipelineId::TexturedCutoutSkinned;
-    case MeshAlphaMode::AlphaToCoverage:
-      return PipelineId::TexturedAlphaToCoverageSkinned;
-    case MeshAlphaMode::Opaque:
-    default:
-      return PipelineId::TexturedOpaqueSkinned;
-    }
-  }
-  switch (alpha_mode) {
-  case MeshAlphaMode::Cutout:
-    return PipelineId::TexturedCutout;
-  case MeshAlphaMode::AlphaToCoverage:
-    return PipelineId::TexturedAlphaToCoverage;
-  case MeshAlphaMode::Opaque:
-  default:
-    return PipelineId::TexturedOpaque;
-  }
+  auto index = static_cast<std::uint8_t>(alpha_mode);
+  if (index >= k_alpha_mode_count)
+    index = 0;
+  return static_cast<PipelineId>((skinned ? k_first_textured_skinned : k_first_textured) + index);
 }
 
 [[nodiscard]] inline auto textured_fragment_entry(
     ShadowFilterMode filter,
     MeshAlphaMode alpha_mode,
     ShadowCascadeMode cascade_mode) -> const char * {
-  static constexpr const char *k_entries[2][2][3] = {
-      {{"fragOpaqueHard", "fragCutoutHard", "fragA2CHard"},
-       {"fragOpaquePcf", "fragCutoutPcf", "fragA2CPcf"}},
-      {{"fragOpaqueHardCsm2", "fragCutoutHardCsm2", "fragA2CHardCsm2"},
-       {"fragOpaquePcfCsm2", "fragCutoutPcfCsm2", "fragA2CPcfCsm2"}},
+  // Blend shares the opaque entry point deliberately. A blended surface shades
+  // exactly like a solid one and then hands its alpha to the blender, so it
+  // needs pipeline state -- blending on, depth writes off -- and not a line of
+  // shader code of its own. Four more entry points here would be four more
+  // SPIR-V functions saying the same thing.
+  static constexpr const char *k_entries[2][2][k_alpha_mode_count] = {
+      {{"fragOpaqueHard", "fragCutoutHard", "fragA2CHard", "fragOpaqueHard"},
+       {"fragOpaquePcf", "fragCutoutPcf", "fragA2CPcf", "fragOpaquePcf"}},
+      {{"fragOpaqueHardCsm2", "fragCutoutHardCsm2", "fragA2CHardCsm2", "fragOpaqueHardCsm2"},
+       {"fragOpaquePcfCsm2", "fragCutoutPcfCsm2", "fragA2CPcfCsm2", "fragOpaquePcfCsm2"}},
   };
   return k_entries[cascade_mode == ShadowCascadeMode::Dual ? 1 : 0]
                   [filter == ShadowFilterMode::Pcf3x3 ? 1 : 0]
                   [static_cast<std::uint8_t>(alpha_mode)];
 }
 
-[[nodiscard]] inline auto collect_used_alpha_modes(const std::vector<MeshInstance> &instances) -> std::array<bool, 3> {
-  std::array<bool, 3> used{false, false, false};
+using AlphaModeSet = std::array<bool, k_alpha_mode_count>;
+
+[[nodiscard]] inline auto collect_used_alpha_modes(const std::vector<MeshInstance> &instances) -> AlphaModeSet {
+  AlphaModeSet used{};
   for (const MeshInstance &instance : instances) {
     if (instance.layer == RenderLayer::Background)
       continue;
     used[static_cast<std::size_t>(instance.alpha_mode)] = true;
   }
-  if (!used[0] && !used[1] && !used[2])
+  if (std::ranges::none_of(used, [](bool b) { return b; }))
     used[0] = true;
   return used;
 }
@@ -81,22 +85,35 @@ enum class PipelineId : std::uint8_t {
 
 [[nodiscard]] constexpr auto is_textured_surface_pipeline(PipelineId id) -> bool {
   const auto v = static_cast<std::uint8_t>(id);
-  return (v >= 1 && v <= 3) || (v >= 5 && v <= 7);
+  return (v >= k_first_textured && v < k_first_textured + k_alpha_mode_count) ||
+         (v >= k_first_textured_skinned && v < k_first_textured_skinned + k_alpha_mode_count);
+}
+
+[[nodiscard]] constexpr auto is_blend_pipeline(PipelineId id) -> bool {
+  return id == PipelineId::TexturedBlend || id == PipelineId::TexturedBlendSkinned;
 }
 
 [[nodiscard]] constexpr auto is_skinned_pipeline(PipelineId id) -> bool {
   const auto v = static_cast<std::uint8_t>(id);
-  return (v >= 5 && v <= 8) || v == 10;
+  return (v >= k_first_textured_skinned &&
+          v <= static_cast<std::uint8_t>(PipelineId::ShadowDepthSkinned)) ||
+         id == PipelineId::PointShadowDepthSkinned;
 }
 
+// Translucent surfaces do not cast shadows.
+//
+// Not a simplification -- it is what a shadow map can actually represent. The
+// depth-only pass records "something is here", so a blended caster would throw
+// the same hard black shadow a wall does, and a lake would sit in a lake-shaped
+// hole of darkness. Skipping it is both more correct and one fewer draw.
 [[nodiscard]] constexpr auto casts_shadow(PipelineId id) -> bool {
-  return is_textured_surface_pipeline(id);
+  return is_textured_surface_pipeline(id) && !is_blend_pipeline(id);
 }
 
 struct PipelineBuildProfile {
   ShadowFilterMode shadow_filter{ShadowFilterMode::Pcf3x3};
   ShadowCascadeMode cascade_mode{ShadowCascadeMode::Dual};
-  std::array<bool, 3> textured_alpha_modes{{true, false, false}};
+  AlphaModeSet textured_alpha_modes{{true, false, false, false}};
   bool build_skinned{false};
   bool has_point_shadows{false};
 };
