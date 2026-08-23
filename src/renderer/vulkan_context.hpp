@@ -39,6 +39,7 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_timer.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <iomanip>
@@ -82,6 +83,15 @@ public:
             scene.shadow_settings().map_resolution,
             config.shadow_scale)),
         device_(window, msaa_config_, config.gpu_device_index) {
+    // How many spot lights may hold a shadow map at once. This sizes the atlas
+    // grid, so it is a real quality knob: an app with a single flashlight
+    // declares 1 and that light gets the whole atlas, while a street full of
+    // lamps declares 16 and each gets a sixteenth. Fixed at startup rather than
+    // tracking the live count, because a grid that resized as lights came in
+    // and out of view would make every shadow's resolution visibly pop.
+    //
+    // (This config field existed and was read by nothing at all until now.)
+    spot_shadow_capacity_ = std::clamp(config.max_spot_shadow_lights, 1U, k_max_spot_shadow_lights);
     swapchain_.create(device_, window, config.present_mode);
     // Before anything uploads geometry: every pooled buffer allocation goes
     // through this, including the sync_mesh_slots below.
@@ -309,6 +319,24 @@ public:
   // path and a correct picture matters more than the frame it costs.
   void request_screenshot(std::string path) { screenshot_path_ = std::move(path); }
 
+  // True between request_screenshot() and the frame that actually writes it.
+  //
+  // A caller cannot just count frames and quit: draw_frame returns without
+  // drawing when the swapchain has no image ready, so the Nth call to it is not
+  // necessarily the Nth rendered frame. Anything scripting a capture should
+  // keep looping until this goes false.
+  [[nodiscard]] auto screenshot_pending() const -> bool { return !screenshot_path_.empty(); }
+
+  // Writes the spot shadow atlas to a greyscale image, after the next frame
+  // renders it. Near is dark, far is white, and an untouched tile is pure
+  // white -- so the picture shows both what each light saw and which slots were
+  // used at all.
+  void request_spot_atlas_dump(std::string path) { spot_atlas_dump_path_ = std::move(path); }
+
+  [[nodiscard]] auto spot_atlas_dump_pending() const -> bool {
+    return !spot_atlas_dump_path_.empty();
+  }
+
   void sync_scene(const Scene &scene) {
     if (gpu_shutdown_complete_)
       return;
@@ -445,15 +473,36 @@ public:
         scene.directional_light(),
         shadow_settings);
 
-    // Compute spot shadow VP matrices for the UBO
+    // Decide which lights get a shadow map before anything is written or drawn:
+    // the UBO's spot matrices, the light buffer, the point-shadow SSBO and the
+    // shadow passes all key off the slot each light was given, and they have to
+    // agree. This used to be computed further down, after the UBO was already
+    // written from a separately-derived ordering.
+    const Frustum camera_frustum = Frustum::from_view_proj(scene.camera().view_projection_matrix());
+    const ShadowSlotAssignment shadow_slots = assign_shadow_slots(
+        scene.point_lights(),
+        scene.spot_lights(),
+        camera_frustum,
+        point_shadow_capacity_,
+        spot_shadow_capacity_);
+
+    // Spot shadow VP matrices for the UBO, indexed by SLOT.
+    //
+    // The depth shader reads ubo.spotLightViewProj[cascade - 2] and the pass
+    // pushes cascade = 2 + slot, so this array is addressed by slot and by
+    // nothing else. It was previously filled in scene order over
+    // shadow-casting lights, which matched what the pass did at the time but
+    // is a different sequence from the slot assignment as soon as a light is
+    // culled for being off screen.
     std::array<glm::mat4, k_max_spot_shadow_lights> spot_vps{};
-    std::size_t spot_vp_count = 0;
-    for (const SpotLight &sl : scene.spot_lights()) {
-      if (sl.casts_shadow && spot_vp_count < k_max_spot_shadow_lights) {
-        // Depth pass VS needs clip-space VP (NO bias remap) for SV_Position.
-        spot_vps[spot_vp_count] = LightStorageBuffer::compute_shadow_view_proj(sl);
-        ++spot_vp_count;
-      }
+    for (std::size_t i = 0; i < scene.spot_lights().size(); ++i) {
+      const std::int32_t slot =
+          i < shadow_slots.spot_slots.size() ? shadow_slots.spot_slots[i] : k_no_shadow_slot;
+      if (slot == k_no_shadow_slot)
+        continue;
+      // Depth pass VS needs clip-space VP (NO bias remap) for SV_Position.
+      spot_vps[static_cast<std::size_t>(slot)] =
+          LightStorageBuffer::compute_shadow_view_proj(scene.spot_lights()[i]);
     }
 
     // Point shadow: cubemap (Sascha omni model). First shadow-casting
@@ -486,19 +535,8 @@ public:
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
         });
 
-    // Decide which lights get a shadow map before anything is written or drawn:
-    // the light buffer, the point-shadow SSBO and the shadow pass all have to
-    // agree on the slot each light was given.
-    const Frustum camera_frustum = Frustum::from_view_proj(scene.camera().view_projection_matrix());
-    const ShadowSlotAssignment shadow_slots = assign_shadow_slots(
-        scene.point_lights(),
-        scene.spot_lights(),
-        camera_frustum,
-        point_shadow_capacity_,
-        k_max_spot_shadow_lights);
-
     light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(), shadow_slots,
-                         static_cast<float>(startup_spot_atlas_size_));
+                        spot_shadow_capacity_);
 
     cpu_profiler_.begin(CpuZone::Animation);
     if (bone_palette_.valid()) {
@@ -577,7 +615,8 @@ public:
     if (has_spot_shadows)
       pass_recorder().record_spot_shadow_pass(command_buffer, frame_index_, pass_layouts_, scene,
                                                 shadow_draw_list_, *spot_atlas_, *spot_atlas_view_,
-                                                startup_spot_atlas_size_);
+                                                startup_spot_atlas_size_, shadow_slots,
+                                                spot_shadow_capacity_);
     else
       ensure_shadow_sampler_readable(command_buffer, *spot_atlas_, pass_layouts_.spot_atlas_layout, 1);
 
@@ -648,6 +687,10 @@ public:
 
     if (!screenshot_path_.empty())
       capture_swapchain_image(image_index);
+    // Only meaningful once the pass has actually run; dumping a cleared atlas
+    // would say nothing.
+    if (!spot_atlas_dump_path_.empty() && has_spot_shadows)
+      capture_spot_atlas(startup_spot_atlas_size_);
 
 
 
@@ -844,7 +887,12 @@ private:
     img_info.arrayLayers = 1;
     img_info.samples = vk::SampleCountFlagBits::e1;
     img_info.tiling = vk::ImageTiling::eOptimal;
-    img_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
+    // TransferSrc so the atlas can be dumped to a file. A shadow atlas is a
+    // grid of depth renders that nothing on screen shows directly, so without
+    // a way to look at it the only evidence it is laid out correctly is that
+    // the lighting looks plausible -- which is how a wrong layout survives.
+    img_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment |
+                     vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc;
     spot_atlas_ = vk::raii::Image(device_.device(), img_info);
 
     auto reqs = spot_atlas_.getMemoryRequirements();
@@ -1327,6 +1375,7 @@ private:
   std::uint32_t pt_shadow_max_lights_{0};
   std::uint32_t point_cube_layer_count_{0};   // image array layers = cubes * 6
   std::uint32_t point_shadow_capacity_{0};    // cubes, i.e. shadow-casting lights
+  std::uint32_t spot_shadow_capacity_{k_max_spot_shadow_lights}; // atlas grid slots
   ParticleSystem particle_system_;
   TextureTable texture_table_;
   TextureArray texture_array_;
@@ -1431,7 +1480,91 @@ private:
               << extent.height << ")\n";
   }
 
+  // Reads the D32 spot atlas back and writes it as a greyscale PGM.
+  //
+  // Slow and fully synchronising, like the screenshot path, and for the same
+  // reason: it runs when a human asks to look at something, never in a frame
+  // that matters.
+  void capture_spot_atlas(std::uint32_t atlas_size) {
+    const std::string path = spot_atlas_dump_path_;
+    spot_atlas_dump_path_.clear();
+
+    device_.device().waitIdle();
+
+    const vk::DeviceSize bytes =
+        static_cast<vk::DeviceSize>(atlas_size) * atlas_size * sizeof(float);
+
+    vk::raii::Buffer staging(device_.device(), vk::BufferCreateInfo{
+        .size = bytes,
+        .usage = vk::BufferUsageFlagBits::eTransferDst,
+        .sharingMode = vk::SharingMode::eExclusive,
+    });
+    const vk::MemoryRequirements requirements = staging.getMemoryRequirements();
+    vk::raii::DeviceMemory memory(device_.device(), vk::MemoryAllocateInfo{
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = detail::find_memory_type(
+            device_.physical_device().getMemoryProperties(), requirements.memoryTypeBits,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
+    });
+    staging.bindMemory(*memory, 0);
+
+    vk::raii::CommandBuffers buffers(device_.device(), vk::CommandBufferAllocateInfo{
+        .commandPool = *command_pool_,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    });
+    vk::raii::CommandBuffer &copy = buffers.front();
+    copy.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+    // The pass leaves the atlas in DEPTH_STENCIL_READ_ONLY_OPTIMAL, and puts it
+    // back before returning, so the tracked layout stays true.
+    transition_image_layout(copy, *spot_atlas_, pass_layouts_.spot_atlas_layout,
+                            vk::ImageLayout::eTransferSrcOptimal,
+                            vk::AccessFlagBits2::eShaderRead, vk::AccessFlagBits2::eTransferRead,
+                            vk::PipelineStageFlagBits2::eFragmentShader,
+                            vk::PipelineStageFlagBits2::eTransfer,
+                            vk::ImageAspectFlagBits::eDepth);
+    copy.copyImageToBuffer(*spot_atlas_, vk::ImageLayout::eTransferSrcOptimal, *staging,
+                           vk::BufferImageCopy{
+                               .imageSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
+                               .imageExtent = {atlas_size, atlas_size, 1},
+                           });
+    transition_image_layout(copy, *spot_atlas_, vk::ImageLayout::eTransferSrcOptimal,
+                            pass_layouts_.spot_atlas_layout,
+                            vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eShaderRead,
+                            vk::PipelineStageFlagBits2::eTransfer,
+                            vk::PipelineStageFlagBits2::eFragmentShader,
+                            vk::ImageAspectFlagBits::eDepth);
+    copy.end();
+
+    device_.graphics_queue().submit(vk::SubmitInfo{
+        .commandBufferCount = 1, .pCommandBuffers = &*copy});
+    device_.graphics_queue().waitIdle();
+
+    const auto *depths = static_cast<const float *>(memory.mapMemory(0, bytes));
+
+    // A depth buffer is almost all values very near 1.0, so a linear mapping
+    // renders as a white square with nothing in it. Stretching the range that
+    // is actually occupied is what makes the tiles visible.
+    float nearest = 1.0F;
+    for (std::uint32_t i = 0; i < atlas_size * atlas_size; ++i)
+      nearest = std::min(nearest, depths[i]);
+    const float span = std::max(1.0F - nearest, 1e-4F);
+
+    std::ofstream out(path, std::ios::binary);
+    out << "P5\n" << atlas_size << " " << atlas_size << "\n255\n";
+    for (std::uint32_t i = 0; i < atlas_size * atlas_size; ++i) {
+      const float normalised = (depths[i] - nearest) / span;
+      const auto value = static_cast<char>(std::clamp(normalised, 0.0F, 1.0F) * 255.0F);
+      out.write(&value, 1);
+    }
+    memory.unmapMemory();
+    std::cout << "spot atlas written to " << path << " (" << atlas_size << 'x' << atlas_size
+              << ", nearest depth " << nearest << ")\n";
+  }
+
   std::string screenshot_path_;
+  std::string spot_atlas_dump_path_;
   UploadQueue upload_queue_;
   std::uint64_t upload_deferrals_{0};
   std::size_t pending_mesh_uploads_{0};

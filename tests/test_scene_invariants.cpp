@@ -12,6 +12,7 @@
 #include "scene/animation_state_machine.hpp"
 #include "scene/animation_utils.hpp"
 #include "scene/shadow_assignment.hpp"
+#include "scene/shadow_utils.hpp"
 #include "scene/scene.hpp"
 
 #include <cstdio>
@@ -637,6 +638,60 @@ void test_pose_stack_survives_owner_relocation() {
         "the last pose remains readable after the owner is gone");
 }
 
+// Both halves of the spot shadow atlas -- the pass that renders a tile and the
+// light buffer that tells the shader where to sample -- used to compute the
+// layout independently. They agreed by luck, and they agreed on a layout that
+// was wrong in two ways: it divided the atlas by the number of spot lights in
+// the SCENE (so a light casting no shadow shrank everyone else's map), and it
+// produced strips, when the light's projection is built with aspect 1.0 and
+// wants a square.
+//
+// The layout now lives in one function. This pins its contract, because with
+// one spot light every version of it looks identical -- and one spot light is
+// all the demo has, so nothing else would notice a regression.
+void test_spot_atlas_tiles_are_square_and_disjoint() {
+  constexpr std::uint32_t k_slots = engine::k_max_spot_shadow_lights;
+  const std::uint32_t side = engine::spot_atlas_grid_side(k_slots);
+  check(side * side >= k_slots, "grid is big enough for every slot");
+
+  std::vector<engine::SpotAtlasTile> tiles;
+  for (std::uint32_t slot = 0; slot < k_slots; ++slot)
+    tiles.push_back(engine::spot_atlas_tile(slot, k_slots));
+
+  bool square = true;
+  bool inside = true;
+  for (const engine::SpotAtlasTile &tile : tiles) {
+    if (tile.width != tile.height)
+      square = false;
+    if (tile.u < 0.0F || tile.v < 0.0F || tile.u + tile.width > 1.0F + 1e-6F ||
+        tile.v + tile.height > 1.0F + 1e-6F)
+      inside = false;
+  }
+  check(square, "every tile is square, matching the light's aspect-1.0 projection");
+  check(inside, "every tile lies inside the atlas");
+
+  // The one that actually matters: two lights must never share texels, or each
+  // one's shadow bleeds into the other's lookup.
+  bool disjoint = true;
+  for (std::size_t a = 0; a < tiles.size(); ++a) {
+    for (std::size_t b = a + 1; b < tiles.size(); ++b) {
+      const bool separated_x = tiles[a].u + tiles[a].width <= tiles[b].u + 1e-6F ||
+                               tiles[b].u + tiles[b].width <= tiles[a].u + 1e-6F;
+      const bool separated_y = tiles[a].v + tiles[a].height <= tiles[b].v + 1e-6F ||
+                               tiles[b].v + tiles[b].height <= tiles[a].v + 1e-6F;
+      if (!separated_x && !separated_y)
+        disjoint = false;
+    }
+  }
+  check(disjoint, "no two slots overlap in the atlas");
+
+  // Tile size must not depend on how many lights the scene happens to hold --
+  // that dependency was the original bug.
+  const engine::SpotAtlasTile first = engine::spot_atlas_tile(0, k_slots);
+  check(first.width == 1.0F / static_cast<float>(side),
+        "tile size is fixed by the slot count, not by the scene's light count");
+}
+
 } // namespace
 
 auto main() -> int {
@@ -651,6 +706,7 @@ auto main() -> int {
   test_deferred_delete_holds_for_frames_in_flight();
   test_bone_slot_offsets_are_distinct_and_aligned();
   test_shadow_slot_assignment();
+  test_spot_atlas_tiles_are_square_and_disjoint();
   test_instance_handles_detect_reuse();
   test_bone_attachment_ignores_stale_target();
   test_pose_stack_survives_owner_relocation();

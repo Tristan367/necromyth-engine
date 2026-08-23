@@ -303,6 +303,18 @@ struct PassRecorder {
     state.material = material_key;
   }
 
+  // Which shadow pass is recording. This used to be inferred from the cascade
+  // index -- "cascade_index >= 10 means point light" -- with the point pass
+  // passing a literal 10 to say so.
+  //
+  // That works only while no other pass can reach 10, and the spot pass numbers
+  // its cascades 2 + slot. The ninth spot shadow slot is cascade 10, so it bound
+  // the point-shadow pipeline inside the spot atlas pass: a multiview pipeline
+  // (viewMask 0x3f) in a pass rendering a single view. Nothing had nine spot
+  // lights, so nobody found out. Passing the kind removes the collision instead
+  // of moving the constant somewhere it collides less often.
+  enum class ShadowPassKind : std::uint8_t { Directional, Spot, Point };
+
    void draw_shadow_mesh(
        vk::raii::CommandBuffer &command_buffer,
        const DrawCommand &draw,
@@ -310,6 +322,7 @@ struct PassRecorder {
        std::uint32_t frame_index,
        const glm::mat4 &light_vp,
        DrawBindState &state,
+       ShadowPassKind kind,
        std::uint32_t instance_count = 1,
        std::uint32_t point_light_index = 0) const {
     const MeshGpu *mesh = mesh_for(draw.mesh_index);
@@ -317,8 +330,7 @@ struct PassRecorder {
       return;
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
-    const bool is_point = cascade_index >= 10;
-
+    const bool is_point = kind == ShadowPassKind::Point;
 
     const PipelineId shadow_pipeline = is_point
         ? (is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth)
@@ -790,7 +802,8 @@ struct PassRecorder {
       const Frustum cascade_cull = Frustum::from_view_proj(vp);
       select_shadow_casters(shadow_draws, &cascade_cull, nullptr, 0.0F, *shadow_visible_draws);
       for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
-        draw_shadow_mesh(command_buffer, first, cascade_index, frame_index, vp, bind_state, count);
+        draw_shadow_mesh(command_buffer, first, cascade_index, frame_index, vp, bind_state,
+                         ShadowPassKind::Directional, count);
         if (stats != nullptr)
           ++stats->shadow_batches_submitted;
       });
@@ -826,7 +839,9 @@ struct PassRecorder {
       const std::vector<DrawCommand> &draw_list,
       vk::Image atlas_image,
       vk::ImageView atlas_view,
-      std::uint32_t atlas_size = 1024) const {
+      std::uint32_t atlas_size,
+      const ShadowSlotAssignment &shadows,
+      std::uint32_t spot_shadow_capacity) const {
     const ScopedGpuZone gpu_zone(*this, command_buffer, GpuZone::ShadowSpot);
     DrawBindState bind_state{};
     bind_state.frame_index = frame_index;
@@ -844,9 +859,6 @@ struct PassRecorder {
           vk::ImageAspectFlagBits::eDepth, 0, 1);
       layouts.spot_atlas_layout = vk::ImageLayout::eDepthAttachmentOptimal;
     }
-
-    const float num_spot = static_cast<float>(scene.spot_lights().size());
-    const float region_h = num_spot > 0.0F ? static_cast<float>(atlas_size) / num_spot : static_cast<float>(atlas_size);
 
     // Clear the entire atlas once up front (single clear, not per-light).
     {
@@ -874,19 +886,29 @@ struct PassRecorder {
         vk::PipelineStageFlagBits2::eLateFragmentTests, vk::PipelineStageFlagBits2::eEarlyFragmentTests,
         vk::ImageAspectFlagBits::eDepth);
 
-    std::uint32_t light_idx = 0;
+    std::uint32_t rendered = 0;
     for (std::uint32_t si = 0; si < scene.spot_lights().size(); ++si) {
       const SpotLight &sl = scene.spot_lights()[si];
-      if (!sl.casts_shadow) continue;
-      if (light_idx >= static_cast<int>(k_max_spot_shadow_lights)) break;
 
-      // Sub-rect: each spotlight slot occupies a vertical strip of the atlas.
-      // The sub-rect index matches the spotlight's index in the scene array,
-      // which is the same slot index used in the SSBO (atlas_rect UVs).
-      const std::uint32_t rh_int = static_cast<std::uint32_t>(region_h);
-      const int y_off = static_cast<int>(si * rh_int);
-      const std::uint32_t rh = rh_int;
-      const vk::Rect2D sub_rect{{0, y_off}, {atlas_ext.width, rh}};
+      // Render into the slot the assignment gave this light, and skip it
+      // entirely when it has none. That is the same rule the point pass already
+      // follows, and it brings the same two benefits: the tile the shader
+      // samples is the tile that was drawn, and a light whose sphere of
+      // influence misses the camera costs nothing. Previously this loop ignored
+      // the assignment completely and re-derived its own index, so every
+      // shadow-casting spot light in the scene was rendered whether or not
+      // anything it lit was on screen.
+      const std::int32_t slot =
+          si < shadows.spot_slots.size() ? shadows.spot_slots[si] : k_no_shadow_slot;
+      if (slot == k_no_shadow_slot)
+        continue;
+
+      const SpotAtlasTile tile =
+          spot_atlas_tile(static_cast<std::uint32_t>(slot), spot_shadow_capacity);
+      const auto tile_size = static_cast<std::uint32_t>(tile.width * static_cast<float>(atlas_size));
+      const auto x_off = static_cast<int>(tile.u * static_cast<float>(atlas_size));
+      const int y_off = static_cast<int>(tile.v * static_cast<float>(atlas_size));
+      const vk::Rect2D sub_rect{{x_off, y_off}, {tile_size, tile_size}};
 
       vk::RenderingAttachmentInfo depth_attach{};
       depth_attach.imageView = atlas_view;
@@ -901,24 +923,31 @@ struct PassRecorder {
 
       command_buffer.beginRendering(ri);
       bind_pass_descriptors(command_buffer, frame_index);
-      command_buffer.setViewport(0, vk::Viewport{0.0F, static_cast<float>(y_off),
-          static_cast<float>(atlas_ext.width), static_cast<float>(rh), 0.0F, 1.0F});
+      // Square viewport, matching the square projection compute_shadow_view_proj
+      // builds (aspect 1.0). The old strip was 1024 wide by 1024/N tall, which
+      // squeezed that square projection flat and threw away nearly all of its
+      // vertical resolution once there was more than one spot light.
+      command_buffer.setViewport(0, vk::Viewport{static_cast<float>(x_off), static_cast<float>(y_off),
+          static_cast<float>(tile_size), static_cast<float>(tile_size), 0.0F, 1.0F});
       command_buffer.setScissor(0, sub_rect);
       command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
-      const std::uint32_t cascade_idx = 2 + light_idx;
+      const std::uint32_t cascade_idx = 2 + static_cast<std::uint32_t>(slot);
       const glm::mat4 spot_vp = LightStorageBuffer::compute_shadow_view_proj(sl);
       const Frustum spot_cull = Frustum::from_view_proj(spot_vp);
       select_shadow_casters(draw_list, &spot_cull, &sl.position, sl.range, *shadow_visible_draws);
       for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
-        draw_shadow_mesh(command_buffer, first, cascade_idx, frame_index, spot_vp, bind_state, count);
+        draw_shadow_mesh(command_buffer, first, cascade_idx, frame_index, spot_vp, bind_state,
+                         ShadowPassKind::Spot, count);
         if (stats != nullptr)
           ++stats->shadow_batches_submitted;
       });
 
       command_buffer.endRendering();
-      ++light_idx;
-      if (si + 1 < scene.spot_lights().size())
+      ++rendered;
+      // Between tiles only. The last one is followed by the read-only
+      // transition below, which already orders the writes against the sampling.
+      if (rendered < shadows.spot_count)
         transition_image_layout(command_buffer, atlas_image,
             vk::ImageLayout::eDepthAttachmentOptimal, vk::ImageLayout::eDepthAttachmentOptimal,
             vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
@@ -1006,7 +1035,8 @@ struct PassRecorder {
 
       select_shadow_casters(draw_list, nullptr, &pl.position, pl.range, *shadow_visible_draws);
       for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
-        draw_shadow_mesh(command_buffer, first, 10, frame_index, glm::mat4(1.0F), bind_state, count, si);
+        draw_shadow_mesh(command_buffer, first, 0, frame_index, glm::mat4(1.0F), bind_state,
+                         ShadowPassKind::Point, count, si);
         if (stats != nullptr)
           ++stats->shadow_batches_submitted;
       });

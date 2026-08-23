@@ -94,7 +94,7 @@ public:
              const std::vector<PointLight> &point_lights,
              const std::vector<SpotLight> &spot_lights,
              const ShadowSlotAssignment &shadows,
-             float atlas_size = 2048.0F) {
+             std::uint32_t spot_shadow_capacity) {
     if (frame_index >= k_frames_in_flight) return;
     const std::size_t num_point = std::min(point_lights.size(), max_lights_);
     const std::size_t num_spot = std::min(spot_lights.size(), max_lights_ - num_point);
@@ -149,18 +149,24 @@ public:
       sptr[i].angles[2] = 0.0f;
       sptr[i].angles[3] = 0.0f;
 
-      if (spot_lights[i].casts_shadow) {
+      // The slot the shadow pass actually rendered this light into -- not its
+      // index in the scene array. Point lights were fixed to work this way
+      // already (see shadow_assignment.hpp, which explains why); spot lights
+      // still read their own scene index and divided the atlas by the total
+      // light count, so a light that casts no shadow shrank everyone else's map
+      // and a culled light pointed at a tile nobody had drawn.
+      const std::int32_t slot =
+          i < shadows.spot_slots.size() ? shadows.spot_slots[i] : k_no_shadow_slot;
+
+      if (slot != k_no_shadow_slot) {
         const glm::mat4 sm = glm::transpose(compute_shadow_matrix(spot_lights[i]));
         std::memcpy(sptr[i].shadow_matrix, &sm[0][0], sizeof(sm));
-        const float region_h = atlas_size / static_cast<float>(num_spot);
-        const float uv_x = 0.0F;
-        const float uv_y = static_cast<float>(i) * region_h / atlas_size;
-        const float uv_w = 1.0F;
-        const float uv_h = region_h / atlas_size;
-        sptr[i].atlas_rect[0] = uv_x;
-        sptr[i].atlas_rect[1] = uv_y;
-        sptr[i].atlas_rect[2] = uv_w;
-        sptr[i].atlas_rect[3] = uv_h;
+        const SpotAtlasTile tile =
+            spot_atlas_tile(static_cast<std::uint32_t>(slot), spot_shadow_capacity);
+        sptr[i].atlas_rect[0] = tile.u;
+        sptr[i].atlas_rect[1] = tile.v;
+        sptr[i].atlas_rect[2] = tile.width;
+        sptr[i].atlas_rect[3] = tile.height;
       } else {
         std::memset(sptr[i].shadow_matrix, 0, sizeof(sptr[i].shadow_matrix));
         std::memset(sptr[i].atlas_rect, 0, sizeof(sptr[i].atlas_rect));

@@ -21,6 +21,59 @@ namespace engine {
 
 inline constexpr std::uint32_t k_max_spot_shadow_lights = 16;
 inline constexpr std::uint32_t k_max_point_shadow_lights = 64;
+
+// Where a spot light's shadow map lives inside the shared atlas.
+//
+// This exists as ONE function because the bug it replaces was two: the pass
+// recorder worked out the region it rendered into, the light buffer worked out
+// the region the shader samples from, and nothing made them agree. They happened
+// to agree, which is not the same thing.
+//
+// The layout they agreed on was also wrong in two ways. It split the atlas into
+// horizontal strips one per spot light IN THE SCENE -- so adding a light that
+// casts no shadow at all still shrank every real shadow map -- and a strip is
+// the wrong shape: compute_shadow_view_proj builds the light's projection with
+// aspect 1.0, and squeezing a square projection into a 1024x64 strip throws away
+// almost all of its vertical resolution. With one spot light the strip is the
+// whole atlas and both faults are invisible, which is why they survived: the
+// game has no spot lights yet and the demo has exactly one.
+//
+// So: a square grid, indexed by the light's assigned SHADOW SLOT rather than its
+// position in the scene array. Slots are dense and capped, so the tile size is
+// fixed no matter how many lights the scene carries, and a light that was culled
+// this frame has no slot and no tile.
+struct SpotAtlasTile {
+  float u{};
+  float v{};
+  float width{};
+  float height{};
+};
+
+// Side of the slot grid: 16 slots -> 4x4. Rounded up so a non-square count still
+// fits, at the cost of a little unused atlas.
+[[nodiscard]] inline constexpr auto spot_atlas_grid_side(std::uint32_t max_slots) -> std::uint32_t {
+  std::uint32_t side = 1;
+  while (side * side < std::max(max_slots, 1U))
+    ++side;
+  return side;
+}
+
+// Normalised (0..1) rect for a slot. Multiply by the atlas size for pixels.
+[[nodiscard]] inline auto spot_atlas_tile(std::uint32_t slot, std::uint32_t max_slots)
+    -> SpotAtlasTile {
+  const std::uint32_t side = spot_atlas_grid_side(max_slots);
+  // Integer division on purpose: this is the row the slot lands on. Split out
+  // so it reads as a grid coordinate rather than as a rounding accident.
+  const std::uint32_t column = slot % side;
+  const std::uint32_t row = slot / side;
+  const float step = 1.0F / static_cast<float>(side);
+  return SpotAtlasTile{
+      .u = static_cast<float>(column) * step,
+      .v = static_cast<float>(row) * step,
+      .width = step,
+      .height = step,
+  };
+}
 inline constexpr float k_shadow_depth_bias_constant = 1.0F;
 inline constexpr float k_shadow_depth_bias_slope = 2.5F;
 // Practical split blend (GPU Gems / Sascha): 0 = uniform, 1 = logarithmic.
