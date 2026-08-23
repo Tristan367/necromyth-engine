@@ -60,6 +60,10 @@ constexpr auto resize_debounce_ms = 100U;
 // giving up on this frame. See the acquire in draw_frame: the main thread must
 // never wait on the compositor without a way out.
 constexpr std::uint64_t acquire_timeout_ns = 100'000'000ULL; // 100 ms
+// How long to let the GPU keep a frame slot before saying so. Generous -- a
+// heavy frame on a slow device is nowhere near this -- because the point is to
+// notice a hang, not to police frame time.
+constexpr std::uint64_t frame_fence_timeout_ns = 2'000'000'000ULL; // 2 s
 
 } // namespace detail
 
@@ -401,9 +405,32 @@ public:
 
     {
       const ScopedCpuZone wait_zone(cpu_profiler_, CpuZone::WaitForFrame);
-      if (device_.device().waitForFences(*in_flight_fences_[frame_index_], vk::True, UINT64_MAX) !=
-          vk::Result::eSuccess)
+      // Bounded for the same reason the acquire below is, even though this one
+      // waits on our own GPU work rather than on the compositor. A shader that
+      // hangs the device, or a driver reset, leaves this fence unsignalled --
+      // and an unbounded wait then stops the main thread, which stops the event
+      // loop, which stops the application answering the compositor's ping. The
+      // desktop puts up "not responding" and offers to kill it, and the fault
+      // it reports is the frozen window rather than the hung GPU.
+      //
+      // On timeout: return without touching the frame slot. The caller polls
+      // events, the window stays alive, and the next frame tries again. A
+      // genuine hang therefore looks like a stalled but responsive window, and
+      // says so, instead of a dead one that says nothing.
+      const vk::Result wait_result = device_.device().waitForFences(
+          *in_flight_fences_[frame_index_], vk::True, detail::frame_fence_timeout_ns);
+      if (wait_result == vk::Result::eTimeout) {
+        ++frame_fence_timeouts_;
+        if (frame_fence_timeouts_ == 1 || frame_fence_timeouts_ % 60 == 0)
+          std::cerr << "GPU has not finished frame slot " << frame_index_ << " after "
+                    << (static_cast<double>(detail::frame_fence_timeout_ns) * 1e-9)
+                    << "s (" << frame_fence_timeouts_
+                    << " waits). The device may be hung; the window is still responding.\n";
+        return;
+      }
+      if (wait_result != vk::Result::eSuccess)
         throw std::runtime_error("Failed to wait for frame fence");
+      frame_fence_timeouts_ = 0;
     }
 
     // The fence above guarantees this slot's previous submission has completed,
@@ -1583,6 +1610,7 @@ private:
   bool framebuffer_resized_{};
   bool logged_shadow_filter_mode_{false};
   bool gpu_shutdown_complete_{false};
+  std::uint64_t frame_fence_timeouts_{0};
   FrameOverlayCallback frame_overlay_;
   std::uint64_t last_resize_ticks_{};
 };
