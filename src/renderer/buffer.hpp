@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/device_allocator.hpp"
 #include "renderer/device_memory.hpp"
 #include "renderer/upload_queue.hpp"
 
@@ -70,8 +71,39 @@ inline void copy_buffer(
 
 } // namespace detail
 
+// A device-local buffer whose memory comes from the shared DeviceAllocator
+// rather than a vkAllocateMemory of its own. See device_allocator.hpp for the
+// measurement that motivated the change.
+//
+// The move operations are written out rather than defaulted, and have to be: a
+// defaulted move would copy the allocator pointer and the allocation handle and
+// leave the source still holding both, so the range would be returned to the
+// pool twice -- and the second return would hand out memory another buffer is
+// using. Retired meshes are moved (DeferredDelete<MeshGpu>), so this is the
+// common path, not an edge case.
 class DeviceLocalBuffer {
 public:
+  DeviceLocalBuffer() = default;
+  ~DeviceLocalBuffer() { release(); }
+
+  DeviceLocalBuffer(const DeviceLocalBuffer &) = delete;
+  auto operator=(const DeviceLocalBuffer &) -> DeviceLocalBuffer & = delete;
+
+  DeviceLocalBuffer(DeviceLocalBuffer &&other) noexcept
+      : buffer_(std::move(other.buffer_)),
+        allocator_(std::exchange(other.allocator_, nullptr)),
+        allocation_(std::exchange(other.allocation_, {})) {}
+
+  auto operator=(DeviceLocalBuffer &&other) noexcept -> DeviceLocalBuffer & {
+    if (this != &other) {
+      release();
+      buffer_ = std::move(other.buffer_);
+      allocator_ = std::exchange(other.allocator_, nullptr);
+      allocation_ = std::exchange(other.allocation_, {});
+    }
+    return *this;
+  }
+
   void upload(
       const vk::raii::PhysicalDevice &physical_device,
       vk::raii::Device &device,
@@ -137,7 +169,7 @@ public:
   // leave the slot unmarked so it retries next frame -- back-pressure rather
   // than either a stall or a buffer full of nothing.
   auto upload_deferred(
-      const vk::raii::PhysicalDevice &physical_device,
+      DeviceAllocator &allocator,
       vk::raii::Device &device,
       UploadQueue &uploads,
       vk::DeviceSize size,
@@ -146,22 +178,21 @@ public:
     if (size == 0)
       return true;
 
+    // Release before allocating, not after. A remesh replaces this buffer's
+    // contents, and holding the old range while asking for a new one makes the
+    // pool carry both -- which for a chunk being remeshed every frame is a
+    // steadily growing pool that looks exactly like a leak.
+    release();
+
     buffer_ = vk::raii::Buffer(device, vk::BufferCreateInfo{
         .size = size,
         .usage = usage | vk::BufferUsageFlagBits::eTransferDst,
         .sharingMode = vk::SharingMode::eExclusive,
     });
     const vk::MemoryRequirements requirements = buffer_.getMemoryRequirements();
-    memory_ = vk::raii::DeviceMemory{
-        device,
-        vk::MemoryAllocateInfo{
-            .allocationSize = requirements.size,
-            .memoryTypeIndex = detail::find_memory_type(
-                physical_device.getMemoryProperties(),
-                requirements.memoryTypeBits,
-                vk::MemoryPropertyFlagBits::eDeviceLocal),
-        }};
-    buffer_.bindMemory(*memory_, 0);
+    allocation_ = allocator.allocate(requirements, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    allocator_ = &allocator;
+    buffer_.bindMemory(allocation_.memory, allocation_.offset);
 
     return uploads.stage(*buffer_, size, data);
   }
@@ -171,8 +202,19 @@ public:
   }
 
 private:
+  void release() {
+    if (allocator_ != nullptr)
+      allocator_->free(allocation_);
+    allocator_ = nullptr;
+    allocation_ = {};
+  }
+
   vk::raii::Buffer buffer_{nullptr};
+  // Only set on the pooled path (upload_deferred). The blocking upload() above
+  // is startup-only and keeps its own dedicated allocation.
   vk::raii::DeviceMemory memory_{nullptr};
+  DeviceAllocator *allocator_{nullptr};
+  DeviceAllocator::Allocation allocation_{};
 };
 
 } // namespace engine

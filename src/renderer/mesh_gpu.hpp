@@ -22,7 +22,7 @@ public:
   // into the frame's command buffer, so a streaming world pays no GPU round trip
   // per mesh.
   auto upload(
-      const vk::raii::PhysicalDevice &physical_device,
+      DeviceAllocator &allocator,
       vk::raii::Device &device,
       UploadQueue &uploads,
       const MeshSource &mesh,
@@ -30,14 +30,14 @@ public:
     index_count_ = static_cast<std::uint32_t>(mesh.indices.size());
     bounds_ = bounds;
     const bool vertices_staged = vertex_buffer_.upload_deferred(
-        physical_device,
+        allocator,
         device,
         uploads,
         static_cast<vk::DeviceSize>(sizeof(MeshVertex) * mesh.vertices.size()),
         vk::BufferUsageFlagBits::eVertexBuffer,
         mesh.vertices.data());
     const bool indices_staged = index_buffer_.upload_deferred(
-        physical_device,
+        allocator,
         device,
         uploads,
         static_cast<vk::DeviceSize>(sizeof(std::uint32_t) * mesh.indices.size()),

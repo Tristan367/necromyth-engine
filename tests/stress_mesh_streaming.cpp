@@ -136,6 +136,24 @@ auto main(int argc, char **argv) -> int {
   std::printf("mesh slot capacity=%zu (live=%zu) -- must stay bounded, not grow with `created`\n",
               scene.mesh_count(), scene.live_mesh_count());
 
+  // The buffer pool has to behave the same way: bounded by the working set, not
+  // by total churn. Two numbers say whether it does -- how many device
+  // allocations it ever made (under the old dedicated scheme this was two per
+  // upload, so 14238 here), and how many bytes it is still holding out.
+  const auto &pool = runtime.vulkan().buffer_pool();
+  std::printf("buffer pool: %llu device allocations for %zu uploads, %zu blocks, "
+              "%.1f MB in use of %.1f MB reserved\n",
+              static_cast<unsigned long long>(pool.device_allocations()),
+              (total_created + total_updated) * 2, pool.block_count(),
+              static_cast<double>(pool.bytes_in_use()) / (1024.0 * 1024.0),
+              static_cast<double>(pool.bytes_reserved()) / (1024.0 * 1024.0));
+
+  if (pool.device_allocations() > (total_created + total_updated) / 4) {
+    std::printf("FAIL: pool made %llu device allocations -- it is not reusing memory\n",
+                static_cast<unsigned long long>(pool.device_allocations()));
+    return EXIT_FAILURE;
+  }
+
   // The point of slot reuse: capacity tracks the working set, not total churn.
   if (total_created > 200 && peak_slots > total_created / 2) {
     std::printf("FAIL: slot capacity %zu grew with churn (%zu created) -- slots are not being reused\n",

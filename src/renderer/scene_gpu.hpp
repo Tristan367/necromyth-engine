@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/device_allocator.hpp"
 #include "renderer/mesh_gpu.hpp"
 #include "renderer/texture_array.hpp"
 #include "renderer/texture_table.hpp"
@@ -33,7 +34,7 @@ struct MeshGpuSlot {
 template <typename RetireFn>
 auto sync_scene_meshes(
     const Scene &scene,
-    const vk::raii::PhysicalDevice &physical_device,
+    DeviceAllocator &allocator,
     vk::raii::Device &device,
     UploadQueue &uploads,
     std::vector<MeshGpuSlot> &slots,
@@ -60,7 +61,8 @@ auto sync_scene_meshes(
       // black triangles wherever a section happened to lose the race. The old
       // mesh is perfectly good until the new one is ready; keep drawing it.
       MeshGpu fresh;
-      if (!fresh.upload(physical_device, device, uploads, source.source, source.bounds))
+      if (!fresh.upload(
+        allocator, device, uploads, source.source, source.bounds))
         continue; // retried next frame, still drawing the previous mesh
       if (slot.revision != 0)
         retire(std::move(slot.gpu));

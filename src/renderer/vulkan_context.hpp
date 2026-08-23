@@ -7,6 +7,7 @@
 #include "renderer/render_host.hpp"
 #include "renderer/deferred_delete.hpp"
 #include "renderer/depth_image.hpp"
+#include "renderer/device_allocator.hpp"
 #include "renderer/descriptors.hpp"
 #include "renderer/draw_list.hpp"
 #include "renderer/instance_buffer.hpp"
@@ -82,6 +83,9 @@ public:
             config.shadow_scale)),
         device_(window, msaa_config_, config.gpu_device_index) {
     swapchain_.create(device_, window, config.present_mode);
+    // Before anything uploads geometry: every pooled buffer allocation goes
+    // through this, including the sync_mesh_slots below.
+    buffer_allocator_.create(device_.physical_device(), device_.device());
     create_pipeline_cache();
     create_msaa_color_image();
     create_render_color_image();
@@ -185,6 +189,12 @@ public:
   [[nodiscard]] auto gpu_name() const -> const std::string & {
     return device_.gpu_name();
   }
+
+  // Buffer memory pool: blocks held, bytes handed out, and how many
+  // vkAllocateMemory calls it has ever made. The last one is the point -- under
+  // dedicated allocation it equalled the number of buffers ever created, and a
+  // streaming world creates them without end.
+  [[nodiscard]] auto buffer_pool() const -> const DeviceAllocator & { return buffer_allocator_; }
 
   [[nodiscard]] auto validation_enabled() const -> bool { return device_.validation_enabled(); }
   [[nodiscard]] auto sync_validation_enabled() const -> bool {
@@ -755,7 +765,7 @@ private:
     }
     engine::sync_scene_meshes(
         scene,
-        device_.physical_device(),
+        buffer_allocator_,
         device_.device(),
         upload_queue_,
         mesh_gpus_,
@@ -1275,6 +1285,9 @@ private:
   // order, so anything owning a Vulkan handle has to be declared after the
   // device that created it or it will outlive the device and leak.
   mutable GpuProfiler gpu_profiler_;
+  // After device_, like every other Vulkan-owning member: reverse declaration
+  // order at destruction means the blocks must die before the device does.
+  DeviceAllocator buffer_allocator_;
   vk::raii::PipelineCache pipeline_cache_{nullptr};
   vk::raii::CommandPool command_pool_{nullptr};
   vk::raii::CommandBuffers command_buffers_{nullptr};
