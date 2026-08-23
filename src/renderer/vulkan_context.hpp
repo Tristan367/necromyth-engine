@@ -54,6 +54,10 @@ namespace detail {
 
 constexpr auto max_frames_in_flight = 2U;
 constexpr auto resize_debounce_ms = 100U;
+// How long to wait for the compositor to hand over a swapchain image before
+// giving up on this frame. See the acquire in draw_frame: the main thread must
+// never wait on the compositor without a way out.
+constexpr std::uint64_t acquire_timeout_ns = 100'000'000ULL; // 100 ms
 
 } // namespace detail
 
@@ -340,8 +344,13 @@ public:
       if (SDL_GetTicks() - last_resize_ticks_ < detail::resize_debounce_ms)
         return;
 
-      recreate_swapchain();
-      framebuffer_resized_ = false;
+      // Only clear the flag if it actually happened. A window with no drawable
+      // extent -- one the compositor has unmapped, because it was moved to
+      // another workspace -- stays pending, and this returns every frame until
+      // it comes back. The frame loop keeps running throughout, which is the
+      // whole point.
+      if (recreate_swapchain())
+        framebuffer_resized_ = false;
       return;
     }
 
@@ -359,14 +368,26 @@ public:
     gpu_profiler_.collect(frame_index_);
 
     cpu_profiler_.begin(CpuZone::AcquireImage);
+    // Bounded, and deliberately so. This is a wait on the compositor, and the
+    // main thread must never wait on the compositor without a way out: an
+    // unbounded acquire is one unmapped surface away from a frozen window that
+    // cannot answer a ping. A tenth of a second is far longer than a frame and
+    // far shorter than a person notices.
     auto [acquire_result, image_index] = swapchain_.handle().acquireNextImage(
-        UINT64_MAX,
+        detail::acquire_timeout_ns,
         *image_available_semaphores_[frame_index_],
         nullptr);
     cpu_profiler_.end(CpuZone::AcquireImage);
 
+    if (acquire_result == vk::Result::eTimeout || acquire_result == vk::Result::eNotReady) {
+      // The compositor has no image for us yet. Nothing is wrong; go round
+      // again. The fence has NOT been reset at this point, so the frame slot is
+      // untouched and the next attempt starts clean.
+      return;
+    }
     if (acquire_result == vk::Result::eErrorOutOfDateKHR) {
-      recreate_swapchain();
+      if (!recreate_swapchain())
+        framebuffer_resized_ = true; // no extent yet; try again next frame
       return;
     }
     if (acquire_result != vk::Result::eSuccess && acquire_result != vk::Result::eSuboptimalKHR)
@@ -626,8 +647,10 @@ public:
     cpu_profiler_.begin(CpuZone::Present);
     const vk::Result present_result = device_.present_queue().presentKHR(present_info);
     cpu_profiler_.end(CpuZone::Present);
-    if (present_result == vk::Result::eErrorOutOfDateKHR)
-      recreate_swapchain();
+    if (present_result == vk::Result::eErrorOutOfDateKHR) {
+      if (!recreate_swapchain())
+        framebuffer_resized_ = true;
+    }
     else if (present_result != vk::Result::eSuccess && present_result != vk::Result::eSuboptimalKHR)
       throw std::runtime_error("Failed to present swapchain image");
 
@@ -1157,27 +1180,41 @@ private:
     pass_layouts_.render_color_layout = vk::ImageLayout::eUndefined;
   }
 
-  void wait_for_nonzero_extent() const {
+  // Whether the window currently has a surface worth drawing to.
+  //
+  // This used to be a loop: spin here until the extent goes non-zero, pumping
+  // and DISCARDING SDL events while it waited. Two things wrong with that, and
+  // the first one froze the game.
+  //
+  // A zero extent is a state the compositor decides and can hold for as long as
+  // it likes -- a window moved to another workspace is unmapped, and an unmapped
+  // surface can report nothing at all. Waiting for it on the main thread means
+  // the application stops answering the compositor's ping, and the desktop puts
+  // up "this window is not responding, terminate or wait". No input required:
+  // being moved off-screen is enough.
+  //
+  // And a renderer must never drain the event queue. Everything it swallowed --
+  // keystrokes, resizes, the very event that would have told us the window came
+  // back -- was thrown away, so the loop was also eating the news it was waiting
+  // for.
+  //
+  // The answer is to not wait. Report it, decline to recreate, and let the frame
+  // loop come back around: it polls events, it answers the ping, and it will try
+  // again in sixteen milliseconds.
+  [[nodiscard]] auto has_drawable_extent() const -> bool {
     int width{};
     int height{};
-    while (true) {
-      if (!SDL_GetWindowSizeInPixels(window_, &width, &height))
-        throw std::runtime_error(std::string("Failed to get SDL window pixel size: ") + SDL_GetError());
-
-      if (width > 0 && height > 0)
-        return;
-
-      SDL_Event e;
-      while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_EVENT_QUIT)
-          throw std::runtime_error("Quit requested while waiting for window extent");
-      }
-      SDL_Delay(16);
-    }
+    if (!SDL_GetWindowSizeInPixels(window_, &width, &height))
+      throw std::runtime_error(std::string("Failed to get SDL window pixel size: ") +
+                               SDL_GetError());
+    return width > 0 && height > 0;
   }
 
-  void recreate_swapchain() {
-    wait_for_nonzero_extent();
+  // Returns false when there is nothing to recreate onto yet, so the caller can
+  // skip the frame rather than block.
+  auto recreate_swapchain() -> bool {
+    if (!has_drawable_extent())
+      return false;
     device_.wait_idle();
     frame_index_ = 0;
     swapchain_.recreate();
@@ -1185,6 +1222,7 @@ private:
     pipelines_.recreate(device_.device(), swapchain_.image_format(), depth_image_.format());
     create_sync_objects();
     reset_image_layout_tracking();
+    return true;
   }
 
   [[nodiscard]] static auto count_skinned_instances(const std::vector<MeshInstance> &instances,
