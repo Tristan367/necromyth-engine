@@ -27,6 +27,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace engine {
@@ -165,16 +166,29 @@ struct PassRecorder {
   // (first draw, count). Every pass shares this so the batching rule lives in
   // one place -- a pass that grouped draws slightly differently from the way the
   // instance records were laid out would render the wrong objects.
-  template <typename EmitFn>
-  static void for_each_batch(const std::vector<DrawCommand> &draws, EmitFn &&emit) {
+  template <typename EmitFn, typename CanBatchFn>
+  static void for_each_batch(const std::vector<DrawCommand> &draws, EmitFn &&emit,
+                             CanBatchFn &&can_batch) {
     std::size_t i = 0;
     while (i < draws.size()) {
       std::size_t end = i + 1;
-      while (end < draws.size() && draws_can_batch(draws[end - 1], draws[end]))
+      while (end < draws.size() && can_batch(draws[end - 1], draws[end]))
         ++end;
       emit(draws[i], static_cast<std::uint32_t>(end - i));
       i = end;
     }
+  }
+
+  // The main pass rule, which has to match what draw_mesh actually binds.
+  template <typename EmitFn>
+  static void for_each_batch(const std::vector<DrawCommand> &draws, EmitFn &&emit) {
+    for_each_batch(draws, std::forward<EmitFn>(emit), draws_can_batch);
+  }
+
+  // The depth-only rule. See shadow_draws_can_batch.
+  template <typename EmitFn>
+  static void for_each_shadow_batch(const std::vector<DrawCommand> &draws, EmitFn &&emit) {
+    for_each_batch(draws, std::forward<EmitFn>(emit), shadow_draws_can_batch);
   }
 
   // Selects the shadow casters for one light or cascade into `out`, so the
@@ -801,7 +815,7 @@ struct PassRecorder {
       const glm::mat4 &vp = cascade_vps[cascade_index];
       const Frustum cascade_cull = Frustum::from_view_proj(vp);
       select_shadow_casters(shadow_draws, &cascade_cull, nullptr, 0.0F, *shadow_visible_draws);
-      for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
+      for_each_shadow_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
         draw_shadow_mesh(command_buffer, first, cascade_index, frame_index, vp, bind_state,
                          ShadowPassKind::Directional, count);
         if (stats != nullptr)
@@ -936,7 +950,7 @@ struct PassRecorder {
       const glm::mat4 spot_vp = LightStorageBuffer::compute_shadow_view_proj(sl);
       const Frustum spot_cull = Frustum::from_view_proj(spot_vp);
       select_shadow_casters(draw_list, &spot_cull, &sl.position, sl.range, *shadow_visible_draws);
-      for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
+      for_each_shadow_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
         draw_shadow_mesh(command_buffer, first, cascade_idx, frame_index, spot_vp, bind_state,
                          ShadowPassKind::Spot, count);
         if (stats != nullptr)
@@ -1034,7 +1048,7 @@ struct PassRecorder {
       command_buffer.setDepthBias(k_shadow_depth_bias_constant, 0.0F, k_shadow_depth_bias_slope);
 
       select_shadow_casters(draw_list, nullptr, &pl.position, pl.range, *shadow_visible_draws);
-      for_each_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
+      for_each_shadow_batch(*shadow_visible_draws, [&](const DrawCommand &first, std::uint32_t count) {
         draw_shadow_mesh(command_buffer, first, 0, frame_index, glm::mat4(1.0F), bind_state,
                          ShadowPassKind::Point, count, si);
         if (stats != nullptr)

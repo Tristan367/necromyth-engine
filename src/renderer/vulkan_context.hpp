@@ -277,9 +277,15 @@ public:
           << "  max " << format_ms(cpu_profiler_.stats(zone).max_ms) << '\n';
     }
 
-    out << "  draws " << render_stats_.draws_submitted << " submitted, "
+    // Batches matter as much as draws: batching needs adjacent instance records,
+    // and culling removes records from the middle of the list, so a group that
+    // would collapse into one drawIndexed can fragment into many. Submitted vs
+    // batches is how you see that happening.
+    out << "  draws " << render_stats_.draws_submitted << " submitted in "
+        << render_stats_.batches_submitted << " batches, "
         << render_stats_.draws_culled << " culled (main); "
-        << render_stats_.shadow_draws_submitted << " submitted, "
+        << render_stats_.shadow_draws_submitted << " submitted in "
+        << render_stats_.shadow_batches_submitted << " batches, "
         << render_stats_.shadow_draws_culled << " culled (shadow)\n";
     return out.str();
   }

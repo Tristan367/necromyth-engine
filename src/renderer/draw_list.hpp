@@ -45,6 +45,22 @@ struct DrawCommand {
       && b.instance_index == a.instance_index + 1;
 }
 
+// The same question for a depth-only pass, which is a weaker one.
+//
+// draw_shadow_mesh binds a pipeline chosen purely by skinned-ness, the bone set,
+// the mesh, and push constants. It binds no material and reads no texture, and
+// the shadow pass draws cutout and alpha-to-coverage surfaces as opaque
+// silhouettes anyway. So neither the texture nor the alpha mode can change what
+// gets recorded, and requiring them to match -- which the shared rule above does
+// -- split batches on a difference the pass cannot observe.
+//
+// Two instances of one mesh wearing different textures are one shadow draw.
+[[nodiscard]] inline auto shadow_draws_can_batch(const DrawCommand &a, const DrawCommand &b) -> bool {
+  return is_skinned_pipeline(a.pipeline) == is_skinned_pipeline(b.pipeline)
+      && a.mesh_index == b.mesh_index
+      && b.instance_index == a.instance_index + 1;
+}
+
 // World-space bounding sphere of a mesh AABB under a model transform.
 //
 // Radius uses the per-axis scaled half-extent rather than scaling the AABB's own
@@ -138,11 +154,19 @@ inline void build_shadow_draw_list(const std::vector<DrawCommand> &draw_list, st
       out.push_back(draw);
   }
 
+  // Sorted by exactly what shadow_draws_can_batch compares, and nothing else.
+  //
+  // The sort and the batch rule have to agree: a batch is a run of ADJACENT
+  // draws, so sorting on a key the rule ignores (texture, alpha mode) scatters
+  // draws that could have merged, and sorting on less than the rule needs would
+  // merge draws that must not. This used to sort by layer and full pipeline id,
+  // which separated opaque from cutout instances of the same mesh even though
+  // the depth pass records them identically.
   std::ranges::sort(out, [](const DrawCommand &a, const DrawCommand &b) {
-    if (a.layer != b.layer)
-      return a.layer < b.layer;
-    if (a.pipeline != b.pipeline)
-      return a.pipeline < b.pipeline;
+    const bool a_skinned = is_skinned_pipeline(a.pipeline);
+    const bool b_skinned = is_skinned_pipeline(b.pipeline);
+    if (a_skinned != b_skinned)
+      return static_cast<int>(a_skinned) < static_cast<int>(b_skinned);
     if (a.mesh_index != b.mesh_index)
       return a.mesh_index < b.mesh_index;
     return a.bone_instance_index < b.bone_instance_index;
