@@ -399,7 +399,19 @@ public:
   // rises a full voxel does it over a cell's width, which is 45 degrees, and
   // mMaxSlopeAngle lets the character walk that -- so terrain never needed the
   // step to be a metre in the first place. Everything else, you jump.
-  static constexpr float k_step_height = 0.6F;
+  // How high the controller may lift the character over something it walks
+  // into. Deliberately well under a metre.
+  //
+  // One voxel is one metre, so anything at or above 1.0 means walking into any
+  // block in the game puts you on top of it -- and 0.6 was still enough,
+  // because the capsule rides up what the stair sweep leaves it on. Getting
+  // onto a block is a JUMP, which clears 1.4 m on its own.
+  //
+  // This does not affect terrain. Marching-cubes ground rises a metre across a
+  // metre, which is a 45 degree SLOPE and is handled by slope walking, not by
+  // the stair sweep. What the step height is for is the small lip where two
+  // cells meet, and a third of a metre covers that with room to spare.
+  static constexpr float k_step_height = 0.35F;
 
   // How far the controller may pull the character back down to keep contact.
   //
@@ -458,7 +470,16 @@ public:
   // what makes a descent feel like being sucked into the hill, because the
   // controller teleports the character down faster than gravity would take it.
   // One number cannot be right for both, so the caller picks per step.
-  void update(float delta, float stick_down = k_stick_to_floor) {
+  // `step_up` is how high the controller may lift the character over an
+  // obstacle it has walked into. **Pass zero whenever the character is not
+  // standing on something**, or it will climb while airborne: walk into a
+  // one-metre block, jump a few centimetres, and the stair logic finishes the
+  // climb for you and plants you on top. That reads as teleporting onto a block
+  // you only brushed against, and no amount of tuning the height fixes it,
+  // because the height is not the problem -- running it at all while in the air
+  // is.
+  void update(float delta, float stick_down = k_stick_to_floor,
+              float step_up = k_step_height) {
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     // Both of these are measured in world units against a world made of one
     // metre voxels, so anything below 1.0 cannot deal with a single voxel.
@@ -468,7 +489,7 @@ public:
     // the lip where two marching-cubes cells meet was enough to catch on. That
     // reads as "walks for a bit, then gets stuck against a hill".
     settings.mStickToFloorStepDown = JPH::Vec3(0.0F, -std::max(stick_down, 0.0F), 0.0F);
-    settings.mWalkStairsStepUp = JPH::Vec3(0.0F, k_step_height, 0.0F);
+    settings.mWalkStairsStepUp = JPH::Vec3(0.0F, std::max(step_up, 0.0F), 0.0F);
 
     character_->ExtendedUpdate(delta,
                                JPH::Vec3(0.0F, -9.81F, 0.0F),

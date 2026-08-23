@@ -122,6 +122,198 @@ auto spawn_on(engine::physics::PhysicsWorld &world, const engine::MeshSource &gr
   return character;
 }
 
+
+// A flat floor with a single one-metre step in it at x = 0: the wall the
+// character walks into.
+auto make_step(float length = 60.0F, float width = 24.0F) -> engine::MeshSource {
+  engine::MeshSource mesh;
+  const auto quad = [&mesh](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d) {
+    const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+    for (const glm::vec3 &p : {a, b, c, d}) {
+      engine::MeshVertex v{};
+      v.pos[0] = p.x;
+      v.pos[1] = p.y;
+      v.pos[2] = p.z;
+      mesh.vertices.push_back(v);
+    }
+    mesh.indices.insert(mesh.indices.end(),
+                        {base, base + 1, base + 2, base, base + 2, base + 3});
+  };
+  const float h = width * 0.5F;
+  // Lower floor, the riser, and the upper floor.
+  quad({-length, 0, -h}, {0, 0, -h}, {0, 0, h}, {-length, 0, h});
+  quad({0, 0, -h}, {0, 1, -h}, {0, 1, h}, {0, 0, h});
+  quad({0, 1, -h}, {length, 1, -h}, {length, 1, h}, {0, 1, h});
+  return mesh;
+}
+
+// A flat floor with a ceiling `headroom` metres above it.
+auto make_room(float headroom, float size = 40.0F) -> engine::MeshSource {
+  engine::MeshSource mesh;
+  const auto quad = [&mesh](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d) {
+    const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+    for (const glm::vec3 &p : {a, b, c, d}) {
+      engine::MeshVertex v{};
+      v.pos[0] = p.x;
+      v.pos[1] = p.y;
+      v.pos[2] = p.z;
+      mesh.vertices.push_back(v);
+    }
+    mesh.indices.insert(mesh.indices.end(),
+                        {base, base + 1, base + 2, base, base + 2, base + 3});
+  };
+  const float h = size * 0.5F;
+  quad({-h, 0, -h}, {h, 0, -h}, {h, 0, h}, {-h, 0, h});
+  quad({-h, headroom, -h}, {h, headroom, -h}, {h, headroom, h}, {-h, headroom, h});
+  return mesh;
+}
+
+// Drops a character at the origin and lets it settle.
+auto spawn_at(engine::physics::PhysicsWorld &world, const engine::MeshSource &ground,
+              const glm::vec3 &at) -> std::unique_ptr<engine::physics::Character> {
+  world.create_static_mesh(ground, glm::vec3(0.0F));
+  auto character = std::make_unique<engine::physics::Character>(world, at);
+  for (int i = 0; i < 120; ++i) {
+    character->set_velocity(
+        {0.0F, std::min(character->linear_velocity().y - 9.81F * k_dt, 0.0F), 0.0F});
+    character->update(k_dt);
+    world.step(k_dt);
+  }
+  return character;
+}
+
+// Walking into a one-metre step must not climb it.
+//
+// The smallest feature this world can have is a whole voxel, so free-climbing
+// one means brushing against any block and ending up on top of it. What made it
+// happen was stair-walking running while the character was in the air: a nudge
+// against the block plus a few centimetres of jump, and the controller finished
+// the climb.
+void test_walking_into_a_one_metre_step_does_not_climb_it() {
+  std::printf("a one metre step\n");
+
+  engine::physics::PhysicsWorld world;
+  auto character = spawn_at(world, make_step(), {-4.0F, 2.0F, 0.0F});
+  check(character->is_on_ground(), "the character lands on the lower floor");
+  const float floor_y = character->position().y;
+
+  float highest = floor_y;
+  for (int frame = 0; frame < 300; ++frame) {
+    glm::vec3 velocity = character->linear_velocity();
+    velocity.x = k_speed;
+    velocity.z = 0.0F;
+    const bool grounded = character->is_on_ground();
+    if (grounded)
+      velocity.y = std::min(velocity.y, 0.0F);
+    else
+      velocity.y = std::max(velocity.y - 9.81F * k_dt, -50.0F);
+    character->set_velocity(velocity);
+    // The game passes zero step-up whenever the character is not grounded.
+    character->update(k_dt, engine::physics::Character::k_stick_to_floor,
+                      grounded ? engine::physics::Character::k_step_height : 0.0F);
+    world.step(k_dt);
+    highest = std::max(highest, character->position().y);
+  }
+  std::printf("    rose %.2f m over five seconds of walking into it\n",
+              static_cast<double>(highest - floor_y));
+  check(highest - floor_y < 0.3F, "walking into a one metre step does not climb it");
+}
+
+// ...but a jump does, because a jump clears a metre on its own.
+void test_a_jump_still_gets_onto_the_step() {
+  std::printf("jumping the step\n");
+
+  engine::physics::PhysicsWorld world;
+  auto character = spawn_at(world, make_step(), {-2.0F, 2.0F, 0.0F});
+  const float floor_y = character->position().y;
+
+  for (int frame = 0; frame < 300; ++frame) {
+    glm::vec3 velocity = character->linear_velocity();
+    velocity.x = k_speed;
+    velocity.z = 0.0F;
+    const bool grounded = character->is_on_ground();
+    // Held for a few frames, the way a key is. Setting it on one frame and
+    // zeroing it the next -- which is what "else if grounded, y = 0" does --
+    // cancels the jump before it has left the ground, because the controller
+    // still reports contact on the frame after.
+    if (frame >= 20 && frame <= 23)
+      velocity.y = 8.2F;
+    else if (grounded)
+      velocity.y = std::min(velocity.y, 0.0F);
+    else
+      velocity.y = std::max(velocity.y - 24.0F * k_dt, -50.0F);
+    character->set_velocity(velocity);
+    character->update(k_dt, engine::physics::Character::k_stick_to_floor,
+                      grounded ? engine::physics::Character::k_step_height : 0.0F);
+    world.step(k_dt);
+  }
+  std::printf("    ended %.2f m above the lower floor at x = %.1f\n",
+              static_cast<double>(character->position().y - floor_y),
+              static_cast<double>(character->position().x));
+  check(character->position().y - floor_y > 0.7F, "a jump gets onto the step");
+}
+
+// A jump into a ceiling has to stop rising.
+//
+// Nothing was cancelling upward velocity against a ceiling, so the character
+// was pinned to it for the rest of the jump's duration while gravity worked the
+// speed off -- the jump lasted exactly as long whether or not there was a roof.
+void test_bumping_your_head_stops_the_jump() {
+  std::printf("bumping your head\n");
+
+  engine::physics::PhysicsWorld world;
+  // Three metres of room and a spawn near the floor, so the capsule is not
+  // already intersecting the ceiling when the test starts -- at 2.6 m it was,
+  // and a character jammed into the roof does not jump, which reads as the
+  // ceiling working when nothing was being tested at all.
+  auto character = spawn_at(world, make_room(3.0F), {0.0F, 0.3F, 0.0F});
+  check(character->is_on_ground(), "the character lands on the floor");
+  const float floor_y = character->position().y;
+
+  int frames_at_peak = 0;
+  float peak = floor_y;
+  for (int frame = 0; frame < 200; ++frame) {
+    glm::vec3 velocity = character->linear_velocity();
+    velocity.x = 0.0F;
+    velocity.z = 0.0F;
+    const bool grounded = character->is_on_ground();
+    if (frame >= 10 && frame <= 13)
+      velocity.y = 8.2F;
+    else if (grounded)
+      velocity.y = std::min(velocity.y, 0.0F);
+    else
+      velocity.y = std::max(velocity.y - 24.0F * k_dt, -50.0F);
+    character->set_velocity(velocity);
+
+    const float before = character->position().y;
+    character->update(k_dt, engine::physics::Character::k_stick_to_floor,
+                      grounded ? engine::physics::Character::k_step_height : 0.0F);
+    world.step(k_dt);
+
+    // The fix, as the game applies it: if we meant to rise and did not, stop
+    // trying. Testing "did we go where we said we were going" rather than
+    // querying contacts keeps it true whatever the character hit.
+    if (velocity.y > 0.0F && character->position().y - before < velocity.y * k_dt * 0.5F) {
+      const glm::vec3 after = character->linear_velocity();
+      character->set_velocity({after.x, 0.0F, after.z});
+    }
+
+    const float here = character->position().y;
+    if (frame > 10) {
+      peak = std::max(peak, here);
+      if (peak > floor_y + 0.2F && here > peak - 0.05F)
+        ++frames_at_peak;
+    }
+  }
+  std::printf("    rose %.2f m, spent %d frames within 5 cm of the top\n",
+              static_cast<double>(peak - floor_y), frames_at_peak);
+  // Well short of the 1.4 m an unobstructed jump reaches, because the ceiling
+  // is doing its job -- what matters is that it left the ground at all.
+  check(peak - floor_y > 0.3F, "the jump gets off the ground");
+  check(peak - floor_y < 1.3F, "and the ceiling stops it short of a free jump");
+  check(frames_at_peak < 12, "and it comes straight back down instead of hanging there");
+}
+
 void test_walks_up_a_45_degree_slope() {
   std::printf("45 degree slope\n");
 
@@ -211,8 +403,12 @@ void test_a_single_block_step_is_taken_in_stride() {
 
   auto character = spawn_on(world, ground);
   const Walk walk = walk_along(world, *character, 3.0F);
-  check(!walk.stalled, "a one voxel step does not stop the character");
-  check(walk.climbed > 0.5F, "the character ends up on top of it");
+  // This used to assert the character ends up on TOP of a one voxel step, back
+  // when the step height was 1.05. That was the wrong call: one voxel is the
+  // smallest thing the world can contain, so free-climbing one means brushing
+  // against any block in the game and finding yourself standing on it. Getting
+  // up a block is a jump. See test_walking_into_a_one_metre_step_does_not_climb_it.
+  check(walk.climbed < 0.4F, "walking alone does not get you on top of a one voxel step");
 }
 
 } // namespace
@@ -222,6 +418,9 @@ int main() {
   test_speed_is_the_same_uphill_as_on_the_flat();
   test_a_wall_is_still_a_wall();
   test_a_single_block_step_is_taken_in_stride();
+  test_walking_into_a_one_metre_step_does_not_climb_it();
+  test_a_jump_still_gets_onto_the_step();
+  test_bumping_your_head_stops_the_jump();
 
   if (g_failures > 0) {
     std::printf("\n%d check(s) failed\n", g_failures);
