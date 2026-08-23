@@ -1325,6 +1325,16 @@ private:
     const std::string path = screenshot_path_;
     screenshot_path_.clear();
 
+    // Reading an image that was not created for reading is undefined behaviour,
+    // and this used to do exactly that -- it produced correct screenshots on
+    // this driver, which is the worst possible outcome for a bug. Say so and
+    // decline rather than writing a file whose contents mean nothing.
+    if (!swapchain_.supports_read_back()) {
+      std::cerr << "screenshot skipped: this surface does not allow TRANSFER_SRC "
+                   "on swapchain images, so the frame cannot be read back.\n";
+      return;
+    }
+
     device_.device().waitIdle();
 
     const vk::Extent2D extent = swapchain_.extent();

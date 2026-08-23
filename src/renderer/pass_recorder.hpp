@@ -390,6 +390,27 @@ struct PassRecorder {
     command_buffer.drawIndexed(mesh->index_count(), instance_count, 0, 0, 0);
   }
 
+  // The stage a barrier must name as its SOURCE the first time a frame touches
+  // an acquired swapchain image.
+  //
+  // The frame's submit waits on the image-available semaphore at
+  // COLOR_ATTACHMENT_OUTPUT (see the SubmitInfo2 in VulkanContext::draw_frame).
+  // A semaphore wait only orders work against the stages it names, so a barrier
+  // that wants to be ordered after the acquire has to name that same stage as
+  // its source. Anything else -- and this used to say TOP_OF_PIPE, then
+  // BOTTOM_OF_PIPE -- creates no execution dependency with the wait at all, and
+  // the layout transition is free to write the image while the presentation
+  // engine is still reading it.
+  //
+  // TOP_OF_PIPE as a source stage is the specific trap: it reads like "the
+  // earliest point", but as a source it means "wait for nothing", so the
+  // barrier it guards is unordered against everything before it. Found by
+  // synchronization validation as a WRITE_AFTER_READ against
+  // vkAcquireNextImageKHR; it renders correctly on hardware that happens to
+  // schedule the transition late, which is why it survived this long.
+  static constexpr vk::PipelineStageFlags2 k_acquire_wait_stage =
+      vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+
   void transition_swapchain_to_color_attachment(
       vk::raii::CommandBuffer &command_buffer,
       std::uint32_t image_index,
@@ -397,25 +418,16 @@ struct PassRecorder {
     vk::ImageLayout &tracked_layout = layouts.swapchain_image_layouts.at(image_index);
     const vk::Image image = swapchain.images()[image_index];
 
-    if (tracked_layout == vk::ImageLayout::eUndefined) {
+    if (tracked_layout == vk::ImageLayout::eUndefined ||
+        tracked_layout == vk::ImageLayout::ePresentSrcKHR) {
       transition_image_layout(
           command_buffer,
           image,
-          vk::ImageLayout::eUndefined,
+          tracked_layout,
           vk::ImageLayout::eColorAttachmentOptimal,
           {},
           vk::AccessFlagBits2::eColorAttachmentWrite,
-          vk::PipelineStageFlagBits2::eTopOfPipe,
-          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-    } else if (tracked_layout == vk::ImageLayout::ePresentSrcKHR) {
-      transition_image_layout(
-          command_buffer,
-          image,
-          vk::ImageLayout::ePresentSrcKHR,
-          vk::ImageLayout::eColorAttachmentOptimal,
-          {},
-          vk::AccessFlagBits2::eColorAttachmentWrite,
-          vk::PipelineStageFlagBits2::eBottomOfPipe,
+          k_acquire_wait_stage,
           vk::PipelineStageFlagBits2::eColorAttachmentOutput);
     }
 
@@ -507,25 +519,23 @@ struct PassRecorder {
     if (tracked_layout == vk::ImageLayout::eTransferDstOptimal)
       return;
 
-    if (tracked_layout == vk::ImageLayout::eUndefined) {
+    if (tracked_layout == vk::ImageLayout::eUndefined ||
+        tracked_layout == vk::ImageLayout::ePresentSrcKHR) {
+      // Same hazard as transition_swapchain_to_color_attachment, and the same
+      // reason: this is the first touch of a freshly acquired image, so it must
+      // be ordered against the semaphore wait. See k_acquire_wait_stage.
+      //
+      // This path only runs under ENGINE_RENDER_SCALE > 1, which is why
+      // synchronization validation did not report it on a default run -- the
+      // bug was there either way.
       transition_image_layout(
           command_buffer,
           image,
-          vk::ImageLayout::eUndefined,
+          tracked_layout,
           vk::ImageLayout::eTransferDstOptimal,
           {},
           vk::AccessFlagBits2::eTransferWrite,
-          vk::PipelineStageFlagBits2::eTopOfPipe,
-          vk::PipelineStageFlagBits2::eTransfer);
-    } else if (tracked_layout == vk::ImageLayout::ePresentSrcKHR) {
-      transition_image_layout(
-          command_buffer,
-          image,
-          vk::ImageLayout::ePresentSrcKHR,
-          vk::ImageLayout::eTransferDstOptimal,
-          {},
-          vk::AccessFlagBits2::eTransferWrite,
-          vk::PipelineStageFlagBits2::eBottomOfPipe,
+          k_acquire_wait_stage,
           vk::PipelineStageFlagBits2::eTransfer);
     } else {
       transition_image_layout(

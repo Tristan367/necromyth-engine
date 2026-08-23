@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -72,27 +74,72 @@ inline void warn_if_extension_missing(
     std::cerr << "Vulkan: optional extension not available: " << name << '\n';
 }
 
+// Counted so a headless run can fail on validation output instead of printing it
+// into a log nobody reads. See VulkanDevice::validation_messages().
+inline std::atomic<std::uint64_t> g_validation_messages{0};
+
 [[nodiscard]] inline auto debug_callback(
     vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
     vk::DebugUtilsMessageTypeFlagsEXT,
     const vk::DebugUtilsMessengerCallbackDataEXT *data,
     void *) -> vk::Bool32 {
-  if (severity >= vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
+  if (severity >= vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning) {
+    g_validation_messages.fetch_add(1, std::memory_order_relaxed);
     std::cerr << "Vulkan validation: " << data->pMessage << '\n';
+  }
 
   return vk::False;
 }
 
+// Registers only what the callback actually prints. It used to ask for eVerbose
+// as well and then drop it on the floor: the layer still formatted every one of
+// those messages, which is real work for a string nobody sees.
 [[nodiscard]] inline auto debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
   return {
-      .messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
-                         vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+      .messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
                          vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
       .messageType = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
                      vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
                      vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
       .pfnUserCallback = debug_callback,
   };
+}
+
+// Whether the environment asks for validation, and how much of it.
+//
+// Debug builds validate by default, as before. The reason this is an
+// environment variable at all is that the interesting bugs -- races between
+// passes, a barrier that does not cover the hazard it was written for -- only
+// show up under the load a Release build produces, and a Debug build is too
+// slow to reach it. ENGINE_VALIDATION=1 turns the layer on in any build.
+struct ValidationRequest {
+  bool enabled{false};
+  bool synchronization{false};
+};
+
+[[nodiscard]] inline auto validation_request_from_environment() -> ValidationRequest {
+  ValidationRequest request{};
+#ifndef NDEBUG
+  request.enabled = true;
+#endif
+  if (const char *env = std::getenv("ENGINE_VALIDATION"); env != nullptr && env[0] != '\0')
+    request.enabled = env[0] != '0';
+
+  // Synchronization validation is the half that catches what reading cannot.
+  // Core validation checks that each call is legal in isolation; this one
+  // tracks what every access reads and writes and reports the hazards between
+  // them -- a shadow map sampled before its pass finished writing it, a staging
+  // copy racing the draw that consumes it. Those render correctly on the card
+  // that happened to schedule them in order and corrupt on the next one.
+  //
+  // It is off by default because it is expensive: it shadows every resource
+  // access in the frame.
+  if (const char *env = std::getenv("ENGINE_SYNC_VALIDATION"); env != nullptr && env[0] != '\0') {
+    request.synchronization = env[0] != '0';
+    if (request.synchronization)
+      request.enabled = true;
+  }
+  return request;
 }
 
 [[nodiscard]] inline auto max_usable_sample_count(const vk::PhysicalDeviceProperties &properties) -> vk::SampleCountFlagBits {
@@ -201,6 +248,17 @@ public:
     return validation_enabled_;
   }
 
+  [[nodiscard]] auto sync_validation_enabled() const -> bool {
+    return sync_validation_enabled_;
+  }
+
+  // Warnings and errors the layer has reported since process start. A test that
+  // renders frames can assert this stayed at zero, which turns validation from
+  // something you have to read into something that fails the build.
+  [[nodiscard]] static auto validation_messages() -> std::uint64_t {
+    return detail::g_validation_messages.load(std::memory_order_relaxed);
+  }
+
   void wait_idle() const {
     if (*device_ != nullptr)
       device_.waitIdle();
@@ -214,12 +272,23 @@ private:
     if (SDL_Vulkan_GetVkGetInstanceProcAddr() == nullptr)
       throw std::runtime_error(std::string("Failed to get vkGetInstanceProcAddr: ") + SDL_GetError());
 
+    const detail::ValidationRequest validation = detail::validation_request_from_environment();
     validation_enabled_ = false;
+    if (validation.enabled) {
+      if (validation_layers_available()) {
+        validation_enabled_ = true;
+        sync_validation_enabled_ = validation.synchronization;
+      } else {
 #ifndef NDEBUG
-    if (!validation_layers_available())
-      throw std::runtime_error("Vulkan validation layer not available");
-    validation_enabled_ = true;
+        // A debug build without the layer is a broken development environment,
+        // not a runtime condition to work around.
+        throw std::runtime_error("Vulkan validation layer not available");
+#else
+        std::cerr << "ENGINE_VALIDATION requested but VK_LAYER_KHRONOS_validation "
+                     "is not installed; continuing without it.\n";
 #endif
+      }
+    }
 
     std::uint32_t sdl_extension_count{};
     const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extension_count);
@@ -242,6 +311,23 @@ private:
         debug_utils_enabled_ = true;
       } else
         std::cerr << "VK_EXT_debug_utils not available; continuing without debug messenger.\n";
+    }
+
+    if (sync_validation_enabled_) {
+      // VK_EXT_validation_features is implemented BY the validation layer, so it
+      // is absent from the unlayered extension list above and has to be looked
+      // up against the layer itself. Enabling it without that check is how you
+      // get an instance that silently ignores the feature switch.
+      const auto layer_extensions =
+          context_.enumerateInstanceExtensionProperties(std::string(detail::validation_layer));
+      if (detail::has_name(vk::EXTValidationFeaturesExtensionName, layer_extensions) ||
+          detail::has_name(vk::EXTValidationFeaturesExtensionName, available_instance_extensions)) {
+        extensions.push_back(vk::EXTValidationFeaturesExtensionName);
+      } else {
+        std::cerr << "VK_EXT_validation_features not available; synchronization "
+                     "validation cannot be enabled.\n";
+        sync_validation_enabled_ = false;
+      }
     }
 
     vk::InstanceCreateFlags instance_flags{};
@@ -268,8 +354,25 @@ private:
     const std::array layers{detail::validation_layer};
     auto debug_info = detail::debug_messenger_create_info();
 
+    // Chained ahead of the debug messenger so the layer is configured before it
+    // reports anything. Both hang off pNext; order between them does not matter
+    // to the loader, but keeping the feature switch first reads correctly.
+    constexpr std::array sync_features{
+        vk::ValidationFeatureEnableEXT::eSynchronizationValidation,
+    };
+    vk::ValidationFeaturesEXT validation_features{
+        .enabledValidationFeatureCount = static_cast<std::uint32_t>(sync_features.size()),
+        .pEnabledValidationFeatures = sync_features.data(),
+    };
+
+    const void *next = debug_utils_enabled_ ? static_cast<const void *>(&debug_info) : nullptr;
+    if (sync_validation_enabled_) {
+      validation_features.pNext = next;
+      next = &validation_features;
+    }
+
     const vk::InstanceCreateInfo create_info{
-        .pNext = debug_utils_enabled_ ? &debug_info : nullptr,
+        .pNext = next,
         .flags = instance_flags,
         .pApplicationInfo = &application_info,
         .enabledLayerCount = validation_enabled_ ? static_cast<std::uint32_t>(layers.size()) : 0,
@@ -279,6 +382,11 @@ private:
     };
 
     instance_ = vk::raii::Instance(context_, create_info);
+
+    if (validation_enabled_)
+      std::cout << "Vulkan validation: on"
+                << (sync_validation_enabled_ ? " (+ synchronization)" : "")
+                << " (ENGINE_VALIDATION / ENGINE_SYNC_VALIDATION)\n";
   }
 
   void create_debug_messenger() {
@@ -496,6 +604,7 @@ private:
   vk::SampleCountFlagBits msaa_samples_{vk::SampleCountFlagBits::e1};
   vk::SampleCountFlagBits max_msaa_samples_{vk::SampleCountFlagBits::e1};
   bool validation_enabled_{};
+  bool sync_validation_enabled_{};
   bool debug_utils_enabled_{};
   bool portability_enumeration_enabled_{};
   std::optional<std::uint32_t> gpu_device_index_{};

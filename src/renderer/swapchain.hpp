@@ -57,6 +57,13 @@ public:
     return present_mode_;
   }
 
+  // Whether these images may be read back. False means no screenshot: the
+  // surface refused TransferSrc, and copying anyway is what the screenshot path
+  // used to do.
+  [[nodiscard]] auto supports_read_back() const -> bool {
+    return (image_usage_ & vk::ImageUsageFlagBits::eTransferSrc) != vk::ImageUsageFlags{};
+  }
+
 private:
   [[nodiscard]] static auto choose_min_image_count(const vk::SurfaceCapabilitiesKHR &capabilities) -> std::uint32_t {
     auto image_count = std::max(3U, capabilities.minImageCount);
@@ -116,10 +123,20 @@ private:
     return current;
   }
 
+  // TransferDst backs the render-scale blit; TransferSrc backs the screenshot
+  // read-back.
+  //
+  // TransferSrc was missing, and the screenshot path read the image anyway --
+  // barriering it to TRANSFER_SRC_OPTIMAL and running vkCmdCopyImageToBuffer on
+  // an image that had never been created for it. It produced a correct picture
+  // on this driver and was undefined behaviour on every driver. Both are
+  // conditional because a surface is entitled to refuse either.
   [[nodiscard]] static auto choose_image_usage(vk::ImageUsageFlags supported) -> vk::ImageUsageFlags {
     vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eColorAttachment;
     if ((supported & vk::ImageUsageFlagBits::eTransferDst) != vk::ImageUsageFlags{})
       usage |= vk::ImageUsageFlagBits::eTransferDst;
+    if ((supported & vk::ImageUsageFlagBits::eTransferSrc) != vk::ImageUsageFlags{})
+      usage |= vk::ImageUsageFlagBits::eTransferSrc;
     return usage;
   }
 
@@ -161,6 +178,8 @@ private:
     const std::array queue_family_indices{queue_families.graphics, queue_families.present};
     const bool separate_present_queue = queue_families.graphics != queue_families.present;
 
+    image_usage_ = choose_image_usage(capabilities.supportedUsageFlags);
+
     const vk::SwapchainCreateInfoKHR create_info{
         .surface = *device_->surface(),
         .minImageCount = image_count,
@@ -168,7 +187,7 @@ private:
         .imageColorSpace = surface_format.colorSpace,
         .imageExtent = swapchain_extent_,
         .imageArrayLayers = 1,
-        .imageUsage = choose_image_usage(capabilities.supportedUsageFlags),
+        .imageUsage = image_usage_,
         .imageSharingMode = separate_present_queue ? vk::SharingMode::eConcurrent : vk::SharingMode::eExclusive,
         .queueFamilyIndexCount = separate_present_queue ? static_cast<std::uint32_t>(queue_family_indices.size()) : 0,
         .pQueueFamilyIndices = separate_present_queue ? queue_family_indices.data() : nullptr,
@@ -214,6 +233,7 @@ private:
   vk::raii::SwapchainKHR swapchain_{nullptr};
   vk::Format swapchain_image_format_{vk::Format::eUndefined};
   vk::Extent2D swapchain_extent_{};
+  vk::ImageUsageFlags image_usage_{};
   std::vector<vk::Image> swapchain_images_;
   std::vector<vk::raii::ImageView> swapchain_image_views_;
 };
