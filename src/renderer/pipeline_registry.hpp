@@ -241,11 +241,13 @@ private:
                    "vertMainSkinned", "fragMain", nullptr, 0b111111);
     }
 
-    // Particle billboard: no vertex input, push constants (116 bytes)
+    // Particle billboard: no vertex input, push constants (96 bytes -- a
+    // view-projection and the two camera axes). Colour and size used to be in
+    // here and are per particle now; see gpu_particle.hpp.
     const vk::PushConstantRange particle_pc{
         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
         .offset = 0,
-        .size = 128,
+        .size = 96,
     };
     const std::array particle_set_layouts{frame_layout_};
     particle_pipeline_layout_ = create_pipeline_layout(device, particle_set_layouts, particle_pc);
@@ -258,9 +260,16 @@ private:
             *particle_pipeline_layout_, sample_count_,
             empty_binding, std::span<const vk::VertexInputAttributeDescription>{},
             *pipeline_cache_,
+            // Depth-tested so particles go behind the world, but not
+            // depth-written and blended: a soft round particle has a
+            // translucent edge, and one that writes depth punches a hard
+            // triangular hole in everything drawn after it -- including the
+            // particle beside it, which is how a flame ends up looking like a
+            // pile of paper darts.
             {.cull_mode = vk::CullModeFlagBits::eNone,
              .front_face = vk::FrontFace::eCounterClockwise,
-             .depth_test = true, .depth_write = true},
+             .depth_test = true, .depth_write = false,
+             .blend_enable = true},
             "vertMain", "fragMain");
   }
 

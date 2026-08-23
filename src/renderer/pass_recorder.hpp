@@ -1141,24 +1141,19 @@ struct PassRecorder {
       vk::PipelineLayout particle_layout,
       glm::mat4 view_proj,
       glm::vec3 cam_right,
-      glm::vec3 cam_up,
-      float size,
-      glm::vec4 color) const {
+      glm::vec3 cam_up) const {
     if (active_count == 0) return;
 
+    // Colour and size left this struct when they became per-particle. See
+    // gpu_particle.hpp.
     struct ParticlePC {
       glm::mat4 viewProj;
       glm::vec4 camRight;
       glm::vec4 camUp;
-      float size;
-      float _pad[3];
-      glm::vec4 color;
     } pc{};
     pc.viewProj = view_proj;
     pc.camRight = glm::vec4(cam_right, 0.0F);
     pc.camUp = glm::vec4(cam_up, 0.0F);
-    pc.size = size;
-    pc.color = color;
 
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
     command_buffer.pushConstants<ParticlePC>(
