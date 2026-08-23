@@ -16,6 +16,8 @@
 //
 // Not part of `make test`: needs a GPU and a display.
 
+#include "gpu_test_support.hpp"
+
 #include "engine_config.hpp"
 #include "platform/engine_runtime.hpp"
 #include "renderer/gltf_loader.hpp"
@@ -95,10 +97,14 @@ auto main(int argc, char **argv) -> int {
   scene.camera().look_at({0.0F, 12.0F, static_cast<float>(side) * 2.5F}, {0.0F, 0.0F, 0.0F});
   scene.directional_light().direction_toward_light = {0.4F, 1.0F, 0.3F};
 
+  // Validation on by default here: this test exists to catch exactly the
+  // hazards the layer reports, and a run without it proves much less.
+  engine::test::request_validation();
   engine::EngineConfig config = engine::engine_config_from_environment();
   config.window_title = "VCE skinned horde stress";
   config.max_skinned_instances = static_cast<std::uint32_t>(horde_size) + 16U;
   engine::EngineRuntime runtime(config, scene);
+  const engine::test::ValidationGuard validation(runtime.vulkan());
 
   std::size_t despawned = 0;
   std::size_t respawned = 0;
@@ -182,6 +188,9 @@ auto main(int argc, char **argv) -> int {
                 "      their own slice of the bone palette.\n");
     return EXIT_FAILURE;
   }
+  if (!validation.check("skinned horde"))
+    return EXIT_FAILURE;
+
   std::printf("ok\n");
   return EXIT_SUCCESS;
 }

@@ -93,7 +93,7 @@ private:
 
     const auto mesh_binding = mesh_binding_description();
     const auto static_mesh_attributes = static_attribute_descriptions();
-    const auto mesh_attributes = attribute_descriptions();
+    const auto skinned_mesh_attributes = skinned_attribute_descriptions();
     const std::array sky_attributes{attribute_descriptions()[0]};
     const std::array shadow_attributes{attribute_descriptions()[0]};
     const auto shadow_skinned_attributes = shadow_skinned_attribute_descriptions();
@@ -173,7 +173,7 @@ private:
             create_graphics_pipeline(
                 device, color_format_, depth_format_,
                 skinned_textured_spirv_, textured_mesh_spirv_,
-                *skinned_pipeline_layout_, sample_count_, mesh_binding, mesh_attributes,
+                *skinned_pipeline_layout_, sample_count_, mesh_binding, skinned_mesh_attributes,
                 *pipeline_cache_, raster, "vertMainSkinned", frag_entry, &frag_spec_info);
     }
 

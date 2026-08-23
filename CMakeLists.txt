@@ -449,6 +449,9 @@ if(VCE_BUILD_TESTS)
     foreach(GPU_PROG stress_mesh_streaming stress_skinned_horde bench_point_shadows)
         add_executable(vce_${GPU_PROG} tests/${GPU_PROG}.cpp)
         target_link_libraries(vce_${GPU_PROG} PRIVATE vce_renderer)
+        # For gpu_test_support.hpp, which turns validation output into a
+        # pass/fail result rather than something a human has to notice.
+        target_include_directories(vce_${GPU_PROG} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
         if(NOT MSVC)
             target_compile_options(vce_${GPU_PROG} PRIVATE -Wno-missing-field-initializers)
         endif()

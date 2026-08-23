@@ -186,6 +186,11 @@ public:
     return device_.gpu_name();
   }
 
+  [[nodiscard]] auto validation_enabled() const -> bool { return device_.validation_enabled(); }
+  [[nodiscard]] auto sync_validation_enabled() const -> bool {
+    return device_.sync_validation_enabled();
+  }
+
   [[nodiscard]] auto device_ref() -> vk::raii::Device & { return device_.device(); }
   [[nodiscard]] auto color_fmt() const -> vk::Format { return swapchain_.image_format(); }
   [[nodiscard]] auto depth_fmt() const -> vk::Format { return depth_image_.format(); }

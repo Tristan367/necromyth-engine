@@ -10,6 +10,8 @@
 //
 // Needs a GPU and a display; not part of `make test`.
 
+#include "gpu_test_support.hpp"
+
 #include "engine_config.hpp"
 #include "platform/engine_runtime.hpp"
 #include "scene/scene.hpp"
@@ -121,9 +123,13 @@ auto main(int argc, char **argv) -> int {
     });
   }
 
+  // Validation on by default here: this test exists to catch exactly the
+  // hazards the layer reports, and a run without it proves much less.
+  engine::test::request_validation();
   engine::EngineConfig config = engine::engine_config_from_environment();
   config.window_title = "VCE point shadow benchmark";
   engine::EngineRuntime runtime(config, scene);
+  const engine::test::ValidationGuard validation(runtime.vulkan());
 
   constexpr int k_window = 120; // matches the profiler's averaging window
 
@@ -147,6 +153,9 @@ auto main(int argc, char **argv) -> int {
                 "      camera frustum are still being rendered.\n");
     return EXIT_FAILURE;
   }
+  if (!validation.check("point shadows"))
+    return EXIT_FAILURE;
+
   std::printf("\nok\n");
   return EXIT_SUCCESS;
 }

@@ -11,6 +11,8 @@
 // Not part of `make test`: it needs a GPU and a display. Build and run it by
 // hand, or from CI on a machine that has both.
 
+#include "gpu_test_support.hpp"
+
 #include "engine_config.hpp"
 #include "platform/engine_runtime.hpp"
 #include "scene/scene.hpp"
@@ -70,9 +72,13 @@ auto main(int argc, char **argv) -> int {
   const std::uint32_t resident = scene.add_mesh(make_chunk_mesh(4.0F));
   (void)scene.add_instance({.mesh_index = resident, .texture_index = 0});
 
+  // Validation on by default here: this test exists to catch exactly the
+  // hazards the layer reports, and a run without it proves much less.
+  engine::test::request_validation();
   engine::EngineConfig config = engine::engine_config_from_environment();
   config.window_title = "VCE mesh streaming stress";
   engine::EngineRuntime runtime(config, scene);
+  const engine::test::ValidationGuard validation(runtime.vulkan());
 
   // Slot -> instance, for the chunks currently streamed in.
   struct Chunk {
@@ -136,6 +142,9 @@ auto main(int argc, char **argv) -> int {
                 peak_slots, total_created);
     return EXIT_FAILURE;
   }
+
+  if (!validation.check("mesh streaming"))
+    return EXIT_FAILURE;
 
   std::printf("ok\n");
   return EXIT_SUCCESS;
