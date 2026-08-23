@@ -28,6 +28,71 @@ picked up automatically (CONFIGURE_DEPENDS glob); keep it self-contained.
 A GPU-side change still needs `cd ../necromyth-engine-demo && make debug` and an
 actual run with validation layers on.
 
+### Validation is a test result, not a thing you read
+
+Core validation checks each call is legal in isolation. **Synchronization
+validation** tracks what every access reads and writes and reports the hazards
+between them, which is the half that catches what reading the code cannot --
+those bugs render correctly on the card that happened to schedule them in order
+and corrupt on the next one.
+
+```bash
+ENGINE_VALIDATION=1       # the layer, in any build (Debug turns it on anyway)
+ENGINE_SYNC_VALIDATION=1  # + synchronization validation; implies the above
+```
+
+Both are environment variables rather than a Debug-only `#ifdef` on purpose:
+these hazards only appear under the load a Release build reaches, and a Debug
+build is too slow to get there. Sync validation is off by default because it
+shadows every resource access in the frame.
+
+The GPU tests in `tests/` request validation themselves and **fail** if the layer
+reported anything at warning or above (`tests/gpu_test_support.hpp`). Keep it
+that way. They count from process start rather than from their own construction,
+and must: pipelines, images and descriptor layouts are all built inside the
+`VulkanContext` constructor, so a guard baselined after that skips all of device
+setup -- the first version did exactly that and printed "validation clean" over a
+pipeline warning sitting in stderr.
+
+Its first run on this codebase found a write-after-read hazard against
+`vkAcquireNextImageKHR` that had been there since the swapchain was written.
+Assume it will find something.
+
+### Looking at what does not appear on screen
+
+A shadow atlas is a grid of depth renders that nothing on screen shows directly.
+Without a way to see it, the only evidence it is laid out correctly is that the
+lighting looks plausible -- which is exactly how a wrong layout survives, and did.
+
+```cpp
+context.request_screenshot("frame.ppm");        // the presented frame
+context.request_spot_atlas_dump("atlas.pgm");   // the spot shadow atlas
+```
+
+Both are slow and fully synchronising, which is fine: they run when a human asks
+to look at something, never in a frame that matters. Do not script a capture by
+counting `draw_frame` calls -- it returns early when the swapchain has no image
+ready, so the Nth call is not the Nth rendered frame. Poll `screenshot_pending()`
+/ `spot_atlas_dump_pending()` instead. The demo does this
+(`VCE_SCREENSHOT_FRAME`, `VCE_SPOT_ATLAS_PATH`, `VCE_SPOT_LIGHTS`).
+
+### The main thread must never wait without a way out
+
+Every wait on the main thread is bounded, and the two that are not obvious are
+the ones that bite:
+
+- **The swapchain acquire** waits on the compositor. An unbounded acquire is one
+  unmapped surface away from a window that cannot answer a ping.
+- **The per-frame fence** waits on our own GPU. A hung shader or a driver reset
+  leaves it unsignalled, and the effect is identical -- the desktop reports a
+  frozen window, which is the symptom and not the fault.
+
+Both time out and return without touching the frame slot, so the caller polls
+events and tries again. Never spin on a condition here, and never drain the SDL
+event queue from the renderer: a loop that did both is what froze the game when
+its window was dragged to another workspace, because it was throwing away the
+very events it was waiting for.
+
 ## Point light shadows: cubemap, not dual paraboloid
 
 The cubemap is the right choice; do not go back to dual paraboloid.
@@ -471,3 +536,40 @@ commit wastes time), but do push before wrapping up a session's work.
 6. **`TextureImage/TextureArray::create_sampler` identical** — ~~character-for-character duplicate (~20 lines each). Extract to `detail::create_mipmapped_sampler`.~~ Done.
 
 7. **`scene_uses_alpha_to_coverage` startup-only** — checked once in `VulkanContext` ctor. New A2C meshes added via `sync_scene` won't enable MSAA. Could be checked in `sync_scene` or deferred to a `render_settings` flag.
+
+8. **One sampler per `TextureImage`** — every table texture creates its own
+   `VkSampler`, and they differ only by `maxLod`. `maxSamplerAllocationCount` is
+   4000 on this card. Not a problem today, and honestly stated as such: the game
+   puts exactly one texture in the table and everything else in the array. A
+   sampler cache keyed on mip count collapses them if the table ever grows.
+
+9. **Texture load stalls the queue per texture** — `execute_one_time_commands`
+   ends in `queue.waitIdle()`, so N textures cost N full device stalls at load.
+   Startup-only and never a frame cost, but it is the same shape as the
+   per-buffer fence wait that made mesh streaming cost 9.8 ms a frame before the
+   upload ring replaced it. Batch into one submit if load time starts to matter.
+
+10. **`TOP_OF_PIPE` as a source stage on first-use transitions** — still present
+    for engine-owned images (depth, MSAA colour, shadow map, spot atlas, point
+    cube) where the tracked layout is `eUndefined`. Functionally correct: nothing
+    is in flight the first time, and `recreate_swapchain` waits idle before
+    resetting the tracking. `eNone` is what sync2 actually means here, and would
+    stop the pattern reading as endorsement — the identical idiom on the
+    *swapchain* was a real write-after-read hazard, and it is only safe on these
+    because of an argument you have to make separately each time.
+
+11. **`ALL_COMMANDS` on the render-finished signal** — `draw_frame` signals the
+    present semaphore at `eAllCommands` where `eColorAttachmentOutput` is what it
+    means. Conservative and correct; costs a little scheduling freedom.
+
+12. **Directional cascades are two passes** — `record_shadow_pass` runs
+    `beginRendering`/`endRendering` per cascade against a separate layer view.
+    The device already enables multiview for point shadows, so both cascades
+    could render in one pass with `gl_ViewIndex` selecting the VP. Shadows are
+    ~64% of GPU time, so this is where to look, alongside a depth pre-pass and
+    fewer PCF taps.
+
+13. **`find_queue_families` finds compute and transfer families nobody uses** —
+    `create_logical_device` only ever creates graphics and present queues. The
+    fields are dead until there is an async transfer or compute queue; harmless,
+    but it reads as though there is one.
