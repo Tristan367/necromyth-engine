@@ -573,3 +573,21 @@ commit wastes time), but do push before wrapping up a session's work.
     `create_logical_device` only ever creates graphics and present queues. The
     fields are dead until there is an async transfer or compute queue; harmless,
     but it reads as though there is one.
+
+14. **A faint vertical seam down the exact centre of a captured frame** —
+    measured, not guessed: in a game screenshot at 1280x720, column 640 is the
+    single largest column-to-column difference in the image, and 192 of 720 rows
+    show a step there of ~2% brightness. It is at x = width/2 regardless of what
+    the camera is pointing at, so it is screen space and not the world. An open
+    outdoor shot barely shows it (27 rows); a dim interior shows it plainly.
+    Not reported from play, so it is either capture-only or below the threshold
+    at which anybody notices it on a moving image -- but it makes screenshots a
+    slightly unreliable instrument, which matters, because screenshots are how
+    the game gets checked. Reproduce with:
+
+        cd build-Release/bin
+        ENGINE_BACKGROUND_WINDOW=1 NM_SAVE=off NM_FLY=1 NM_FLY_X=13 NM_FLY_Y=70 \
+        NM_FLY_Z=-57 NM_FLY_YAW=314 NM_FLY_PITCH=-8 NM_SCREENSHOT_FRAME=400 \
+        NM_SCREENSHOT_PATH=/tmp/seam.ppm NM_EXIT_AFTER=420 ./necromyth-client
+
+    then compare column 639 against column 640.
