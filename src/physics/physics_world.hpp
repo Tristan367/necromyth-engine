@@ -133,8 +133,29 @@ public:
     return id;
   }
 
+  // Drives a kinematic body to a new position, sweeping rather than teleporting.
+  //
+  // MoveKinematic rather than SetPosition, because the difference is whether
+  // anything standing on it comes along: MoveKinematic gives the body a velocity
+  // for the step, so contacts resolve and a character riding it is carried.
+  // SetPosition teleports, and whatever was standing on it is left behind in the
+  // air for a frame and then falls through.
+  //
+  // `delta_time` is the step the move should happen over -- pass the same value
+  // the next step() gets, or the implied velocity is wrong.
+  void move_kinematic(JPH::BodyID body_id, const glm::vec3 &position, float delta_time,
+                      const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F)) {
+    if (body_id.IsInvalid() || delta_time <= 0.0F)
+      return;
+    body_interface_->MoveKinematic(body_id,
+                                   JPH::RVec3(position.x, position.y, position.z),
+                                   JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w),
+                                   delta_time);
+  }
+
   [[nodiscard]] auto create_static_mesh(const MeshSource &mesh, const glm::vec3 &position,
-                                        const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F))
+                                        const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F),
+                                        JPH::EMotionType motion_type = JPH::EMotionType::Static)
         -> JPH::BodyID {
     // Vertex welding: collapse coincident positions to shared indices at
     // 0.1 mm grid resolution so Jolt's mEnhancedInternalEdgeRemoval can
@@ -177,16 +198,22 @@ public:
       return {};  // degenerate mesh — return invalid BodyID
     JPH::ShapeRefC shape = create_result.Get();
 
+    // A kinematic mesh still belongs on the non-moving layer: it is something
+    // the world collides WITH, not something that collides with the world. What
+    // kinematic buys is the right to be driven -- see move_kinematic -- which is
+    // what a falling piece of building needs and a chunk of terrain does not.
+    const bool kinematic = motion_type == JPH::EMotionType::Kinematic;
     JPH::BodyCreationSettings settings(
         shape,
         JPH::RVec3(position.x, position.y, position.z),
         JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w),
-        JPH::EMotionType::Static,
+        motion_type,
         Layers::kNonMoving);
 
     settings.mFriction = 0.8F;
 
-    JPH::BodyID id = body_interface_->CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+    JPH::BodyID id = body_interface_->CreateAndAddBody(
+        settings, kinematic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
     body_ids_.push_back(id);
     return id;
   }
