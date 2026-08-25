@@ -81,6 +81,25 @@ inline constexpr float k_shadow_split_lambda = 0.75F;
 
 // Caster bias (depth pass polygon offset). Receiver bias lives in shaders/lib/shadow.slang.
 
+// How far past the cascade sphere the light frustum reaches TOWARD the light,
+// in metres. Godot calls this the pancake size (LIGHT_PARAM_SHADOW_PANCAKE_SIZE,
+// default 20) and it exists because a cascade sphere is fitted to the RECEIVERS
+// and says nothing about where the casters are: a tower two hundred metres up
+// still shadows the pavement at its foot.
+//
+// Without it the near cascade -- radius ~26 m -- clipped away every caster more
+// than 26 m up the light direction, so tall buildings stopped casting the moment
+// you walked close enough to fall into the near cascade. That was two bugs in
+// one: the shadow vanished as you approached, and in the blend zone the near
+// cascade's wrong "lit" answer was cross-faded against the far cascade's correct
+// one, which is the bright band across the ground at the split.
+//
+// It is not a complete answer on its own -- the shadow pass also pancakes
+// anything still beyond it onto the near plane (see shadow_depth.slang), the way
+// Godot does -- but it keeps the common case out of the clamp, where depth
+// ordering between two clamped casters would be lost.
+inline constexpr float k_shadow_depth_extension = 96.0F;
+
 enum class ShadowFilterMode : std::uint8_t {
   Hard = 0,
   Pcf3x3 = 1,
@@ -282,7 +301,8 @@ namespace detail {
     const DirectionalLight &light,
     const DirectionalLightShadowSettings &settings,
     glm::vec3 focus_center,
-    float radius) -> glm::mat4 {
+    float radius,
+    float depth_extension) -> glm::mat4 {
   const glm::vec3 light_dir = glm::normalize(light.direction_toward_light);
   const glm::vec3 up = stable_up_for_light(light_dir);
   const auto [x_axis, y_axis, z_axis] = light_axes(light_dir, up);
@@ -304,12 +324,17 @@ namespace detail {
       x_axis * ((snapped[0] + snapped[1]) * 0.5F) + y_axis * ((snapped[2] + snapped[3]) * 0.5F) +
       z_axis * center_z;
 
+  // The eye is pulled back past the sphere by the extension, and the far plane
+  // pushed out to match, so the box still ends one radius BELOW the centre --
+  // receivers are unaffected, casters above are kept.
+  const float extension = std::max(depth_extension, 0.0F);
   const glm::mat4 light_view = glm::lookAt(
-      snapped_center + light_dir * radius,
+      snapped_center + light_dir * (radius + extension),
       snapped_center,
       up);
 
-  glm::mat4 light_ortho = glm::ortho(-half_x, half_x, -half_y, half_y, 0.0F, 2.0F * radius);
+  glm::mat4 light_ortho =
+      glm::ortho(-half_x, half_x, -half_y, half_y, 0.0F, 2.0F * radius + extension);
   light_ortho[1][1] *= -1.0F;
 
   return light_ortho * light_view;
@@ -327,8 +352,8 @@ namespace detail {
     float ortho_half_extent) -> glm::mat4 {
   const glm::vec3 focus_center = camera.position();
   const float radius = std::max(ortho_half_extent, 1.0F);
-  return detail::directional_light_view_projection_from_bounds(light, settings, focus_center,
-                                                               radius);
+  return detail::directional_light_view_projection_from_bounds(
+      light, settings, focus_center, radius, k_shadow_depth_extension);
 }
 
 [[nodiscard]] inline auto directional_light_view_projection(

@@ -107,12 +107,20 @@ float shadowVisibilityDual(float3 worldPos, float3 normal, float3 lightDir, int 
     const uint cascadeFar = 1u;
     const uint primary = viewZ < split ? cascadeFar : cascadeNear;
 
-    if (blendRange <= 0.0)
-        return sampleCascadeShadow(worldPos, normal, lightDir, primary, filterMode);
-
     const float distFromSplit = viewZ - split;
-    if (abs(distFromSplit) >= blendRange)
-        return sampleCascadeShadow(worldPos, normal, lightDir, primary, filterMode);
+    if (blendRange <= 0.0 || abs(distFromSplit) >= blendRange) {
+        // Outside the blend zone one cascade decides -- but "I don't cover this"
+        // is not the same answer as "it is lit". A fragment the near cascade
+        // misses is still covered by the far one, which is larger in every
+        // direction, so defer to it rather than declaring the ground unshadowed.
+        const uint other = primary == cascadeNear ? cascadeFar : cascadeNear;
+        float3 proj; float cosTheta;
+        if (projectCascadeShadow(worldPos, normal, lightDir, primary, proj, cosTheta))
+            return primary == cascadeNear
+                ? sampleFromProjectionRaw(proj, primary, filterMode, cosTheta)
+                : sampleFromProjection(proj, primary, filterMode, cosTheta);
+        return sampleCascadeShadow(worldPos, normal, lightDir, other, filterMode);
+    }
 
     // Blend zone: if one cascade doesn't cover this fragment,
     // smoothly transition to the other instead of a hard switch.

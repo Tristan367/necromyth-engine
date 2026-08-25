@@ -22,6 +22,6 @@ VSOutput vertMainSkinned(VSInputSkinned input, uint instanceId : SV_InstanceID) 
     float4 skinned = mul(skinMat, float4(input.inPosition, 1.0));
 
     float4x4 vp = selectShadowVP(cascade);
-    output.position = mul(vp, mul(inst.model, skinned));
+    output.position = pancakeShadowClip(mul(vp, mul(inst.model, skinned)), cascade);
     return output;
 }

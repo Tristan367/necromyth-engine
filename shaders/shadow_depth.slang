@@ -21,6 +21,6 @@ VSOutput vertMain(VSInputPosition input, uint instanceId : SV_InstanceID) {
     uint cascade = pushConstants.shadowCascadeIndex;
 
     float4x4 vp = selectShadowVP(cascade);
-    output.position = mul(vp, mul(inst.model, float4(input.inPosition, 1.0)));
+    output.position = pancakeShadowClip(mul(vp, mul(inst.model, float4(input.inPosition, 1.0))), cascade);
     return output;
 }

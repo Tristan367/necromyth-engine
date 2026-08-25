@@ -692,6 +692,47 @@ void test_spot_atlas_tiles_are_square_and_disjoint() {
         "tile size is fixed by the slot count, not by the scene's light count");
 }
 
+// A cascade sphere is fitted to the RECEIVERS it covers. It says nothing about
+// where the casters are, and the near cascade's sphere is only ~26 m across, so
+// without a depth extension every caster more than 26 m up the light direction
+// was clipped out of the near shadow map -- a tower stopped shadowing the
+// pavement at its foot the moment you walked close enough to be in the near
+// cascade. In the blend zone the near cascade's wrong "lit" answer was then
+// cross-faded against the far cascade's correct one, which is the bright band
+// across the ground at the split.
+void test_cascades_keep_tall_casters() {
+  std::printf("cascade depth range keeps tall casters\n");
+
+  engine::Camera camera;
+  camera.set_position({0.0F, 2.0F, 0.0F});
+  engine::DirectionalLight light;
+  light.direction_toward_light = glm::normalize(glm::vec3(0.35F, 0.85F, 0.4F));
+
+  const engine::DirectionalLightShadowSettings settings{};
+  const auto cascades = engine::directional_shadow_cascades(camera, light, settings);
+
+  // Taller than anything the city plan builds, and taller than the near
+  // cascade's own footprint by a wide margin.
+  const float caster_height = 60.0F;
+  for (std::uint32_t layer = 0; layer < engine::shadow_cascade_layer_count(settings.cascade_mode);
+       ++layer) {
+    const glm::vec4 clip = cascades.light_view_proj[layer] *
+                           glm::vec4(0.0F, 2.0F + caster_height, 0.0F, 1.0F);
+    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    check(ndc.z >= 0.0F && ndc.z <= 1.0F,
+          "cascade " + std::to_string(layer) + " draws a caster " +
+              std::to_string(static_cast<int>(caster_height)) + " m overhead (z=" +
+              std::to_string(ndc.z) + ")");
+  }
+
+  // And the receiver at ground level must still be inside the box -- extending
+  // the range toward the light must not push the ground out the far end.
+  const glm::vec4 ground = cascades.light_view_proj[0] * glm::vec4(0.0F, 2.0F, 0.0F, 1.0F);
+  const glm::vec3 ground_ndc = glm::vec3(ground) / ground.w;
+  check(ground_ndc.z > 0.0F && ground_ndc.z < 1.0F,
+        "the ground under the camera is still inside the near cascade");
+}
+
 } // namespace
 
 auto main() -> int {
@@ -710,6 +751,7 @@ auto main() -> int {
   test_instance_handles_detect_reuse();
   test_bone_attachment_ignores_stale_target();
   test_pose_stack_survives_owner_relocation();
+  test_cascades_keep_tall_casters();
 
   if (g_failures != 0) {
     std::printf("\n%d check(s) failed\n", g_failures);
