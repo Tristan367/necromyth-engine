@@ -5,12 +5,79 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace engine {
+
+namespace detail {
+
+// sRGB <-> linear. A GPU blit on an sRGB image linearises before it filters, so
+// a CPU mip chain has to as well or every mip comes out darker than the one the
+// hardware would have produced. Alpha is not sRGB-encoded and is averaged as-is.
+[[nodiscard]] inline auto srgb_to_linear(float c) -> float {
+  return c <= 0.04045F ? c / 12.92F : std::pow((c + 0.055F) / 1.055F, 2.4F);
+}
+
+[[nodiscard]] inline auto linear_to_srgb(float c) -> float {
+  return c <= 0.0031308F ? c * 12.92F : 1.055F * std::pow(c, 1.0F / 2.4F) - 0.055F;
+}
+
+// How much a mip level's alpha is lifted per halving.
+//
+// Straight from the C#'s BuildMipChainAlphaAware, which box-filters the 2x2 and
+// then does `aOut = Mathf.Min(aOut * 1.6f, 1)`.
+//
+// It exists because averaging alpha is what makes cutout detail dissolve with
+// distance. A window's mullion is a few pixels of opaque in a field of nothing;
+// halve the texture a few times and its alpha averages below the cutoff, and
+// the mullion -- and the frame, and the boarding on a window -- stops being
+// drawn at all. Lifting alpha as the level shrinks keeps thin opaque things
+// thin instead of letting them evaporate.
+//
+// Opaque textures are unaffected: their alpha is already 1 and min(1.6, 1) is 1.
+// That is why the C# turns this on for the WHOLE voxel atlas rather than
+// picking out the cutout layers, and why this does too.
+inline constexpr float k_alpha_mip_gain = 1.6F;
+
+// One box-filtered, alpha-aware halving of an RGBA8 image.
+inline void halve_alpha_aware(const std::uint8_t *src, int src_w, int src_h,
+                              std::uint8_t *dst, int dst_w, int dst_h) {
+  for (int y = 0; y < dst_h; ++y) {
+    for (int x = 0; x < dst_w; ++x) {
+      float r = 0.0F, g = 0.0F, b = 0.0F, a = 0.0F;
+      int samples = 0;
+      for (int dy = 0; dy < 2; ++dy) {
+        for (int dx = 0; dx < 2; ++dx) {
+          const int sx = x * 2 + dx;
+          const int sy = y * 2 + dy;
+          if (sx >= src_w || sy >= src_h)
+            continue;
+          const std::uint8_t *p = src + (static_cast<std::size_t>(sy) * src_w + sx) * 4;
+          r += srgb_to_linear(p[0] / 255.0F);
+          g += srgb_to_linear(p[1] / 255.0F);
+          b += srgb_to_linear(p[2] / 255.0F);
+          a += p[3] / 255.0F;
+          ++samples;
+        }
+      }
+      const float inv = 1.0F / static_cast<float>(std::max(samples, 1));
+      const float out_a = std::min(a * inv * k_alpha_mip_gain, 1.0F);
+      std::uint8_t *o = dst + (static_cast<std::size_t>(y) * dst_w + x) * 4;
+      o[0] = static_cast<std::uint8_t>(std::lround(linear_to_srgb(r * inv) * 255.0F));
+      o[1] = static_cast<std::uint8_t>(std::lround(linear_to_srgb(g * inv) * 255.0F));
+      o[2] = static_cast<std::uint8_t>(std::lround(linear_to_srgb(b * inv) * 255.0F));
+      o[3] = static_cast<std::uint8_t>(std::lround(out_a * 255.0F));
+    }
+  }
+}
+
+} // namespace detail
 
 class TextureArray {
 public:
@@ -26,7 +93,6 @@ public:
     physical_device_ = &physical_device;
     device_ = &device;
     format_ = vk::Format::eR8G8B8A8Srgb;
-    detail::assert_blit_support(physical_device, format_);
 
     std::vector<detail::RgbaImageData> layers;
     layers.reserve(paths.size());
@@ -51,7 +117,21 @@ public:
     layer_count_ = static_cast<std::uint32_t>(layers.size());
     mip_levels_ = detail::mip_level_count(static_cast<std::int32_t>(extent_.width), static_cast<std::int32_t>(extent_.height));
 
-    const vk::DeviceSize layer_size = static_cast<vk::DeviceSize>(extent_.width) * extent_.height * 4;
+    // Every mip level of every layer is built on the CPU and uploaded, rather
+    // than blitted down on the GPU, so the alpha lift in halve_alpha_aware can
+    // be applied at each halving. See k_alpha_mip_gain for why.
+    std::vector<vk::Extent2D> level_size;
+    std::vector<vk::DeviceSize> level_offset; // within one layer
+    vk::DeviceSize chain_size = 0;
+    for (std::uint32_t level = 0; level < mip_levels_; ++level) {
+      const vk::Extent2D size{std::max(extent_.width >> level, 1U),
+                              std::max(extent_.height >> level, 1U)};
+      level_size.push_back(size);
+      level_offset.push_back(chain_size);
+      chain_size += static_cast<vk::DeviceSize>(size.width) * size.height * 4;
+    }
+
+    const vk::DeviceSize layer_size = chain_size;
     const vk::DeviceSize staging_size = layer_size * layer_count_;
 
     const vk::BufferCreateInfo staging_info{
@@ -77,11 +157,17 @@ public:
     staging_buffer.bindMemory(*staging_memory, 0);
 
     void *mapped = staging_memory.mapMemory(0, staging_size);
-    for (std::uint32_t layer = 0; layer < layer_count_; ++layer)
-      std::memcpy(
-          static_cast<char *>(mapped) + static_cast<std::size_t>(layer) * static_cast<std::size_t>(layer_size),
-          layers[layer].pixels.data(),
-          static_cast<std::size_t>(layer_size));
+    for (std::uint32_t layer = 0; layer < layer_count_; ++layer) {
+      auto *chain = static_cast<std::uint8_t *>(mapped)
+                  + static_cast<std::size_t>(layer) * static_cast<std::size_t>(layer_size);
+      std::memcpy(chain, layers[layer].pixels.data(),
+                  static_cast<std::size_t>(level_size[0].width) * level_size[0].height * 4);
+      for (std::uint32_t level = 1; level < mip_levels_; ++level)
+        detail::halve_alpha_aware(
+            chain + level_offset[level - 1], static_cast<int>(level_size[level - 1].width),
+            static_cast<int>(level_size[level - 1].height), chain + level_offset[level],
+            static_cast<int>(level_size[level].width), static_cast<int>(level_size[level].height));
+    }
     staging_memory.unmapMemory();
 
     const vk::ImageCreateInfo image_info{
@@ -127,21 +213,36 @@ public:
           layer_count_);
 
       for (std::uint32_t layer = 0; layer < layer_count_; ++layer) {
-        const vk::BufferImageCopy region{
-            .bufferOffset = layer_size * layer,
-            .imageSubresource = {
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .mipLevel = 0,
-                .baseArrayLayer = layer,
-                .layerCount = 1,
-            },
-            .imageExtent = extent_,
-        };
-        command_buffer.copyBufferToImage(*staging_buffer, *image_, vk::ImageLayout::eTransferDstOptimal, region);
+        for (std::uint32_t level = 0; level < mip_levels_; ++level) {
+          const vk::BufferImageCopy region{
+              .bufferOffset = layer_size * layer + level_offset[level],
+              .imageSubresource = {
+                  .aspectMask = vk::ImageAspectFlagBits::eColor,
+                  .mipLevel = level,
+                  .baseArrayLayer = layer,
+                  .layerCount = 1,
+              },
+              .imageExtent = {level_size[level].width, level_size[level].height, 1},
+          };
+          command_buffer.copyBufferToImage(*staging_buffer, *image_,
+                                           vk::ImageLayout::eTransferDstOptimal, region);
+        }
       }
 
-      for (std::uint32_t layer = 0; layer < layer_count_; ++layer)
-        generate_mipmaps(command_buffer, layer);
+      transition_image_layout(
+          command_buffer,
+          *image_,
+          vk::ImageLayout::eTransferDstOptimal,
+          vk::ImageLayout::eShaderReadOnlyOptimal,
+          vk::AccessFlagBits2::eTransferWrite,
+          vk::AccessFlagBits2::eShaderRead,
+          vk::PipelineStageFlagBits2::eTransfer,
+          vk::PipelineStageFlagBits2::eFragmentShader,
+          vk::ImageAspectFlagBits::eColor,
+          0,
+          mip_levels_,
+          0,
+          layer_count_);
     });
 
     view_ = vk::raii::ImageView(
@@ -175,93 +276,6 @@ public:
   }
 
 private:
-  void generate_mipmaps(vk::raii::CommandBuffer &command_buffer, std::uint32_t layer) {
-    std::int32_t mip_width = static_cast<std::int32_t>(extent_.width);
-    std::int32_t mip_height = static_cast<std::int32_t>(extent_.height);
-
-    for (std::uint32_t level = 1; level < mip_levels_; ++level) {
-      transition_image_layout(
-          command_buffer,
-          *image_,
-          vk::ImageLayout::eTransferDstOptimal,
-          vk::ImageLayout::eTransferSrcOptimal,
-          vk::AccessFlagBits2::eTransferWrite,
-          vk::AccessFlagBits2::eTransferRead,
-          vk::PipelineStageFlagBits2::eTransfer,
-          vk::PipelineStageFlagBits2::eTransfer,
-          vk::ImageAspectFlagBits::eColor,
-          level - 1,
-          1,
-          layer,
-          1);
-
-      const vk::ImageBlit blit{
-          .srcSubresource = {
-              .aspectMask = vk::ImageAspectFlagBits::eColor,
-              .mipLevel = level - 1,
-              .baseArrayLayer = layer,
-              .layerCount = 1,
-          },
-          .srcOffsets = std::array{
-              vk::Offset3D{0, 0, 0},
-              vk::Offset3D{mip_width, mip_height, 1},
-          },
-          .dstSubresource = {
-              .aspectMask = vk::ImageAspectFlagBits::eColor,
-              .mipLevel = level,
-              .baseArrayLayer = layer,
-              .layerCount = 1,
-          },
-          .dstOffsets = std::array{
-              vk::Offset3D{0, 0, 0},
-              vk::Offset3D{std::max(mip_width / 2, 1), std::max(mip_height / 2, 1), 1},
-          },
-      };
-
-      command_buffer.blitImage(
-          *image_,
-          vk::ImageLayout::eTransferSrcOptimal,
-          *image_,
-          vk::ImageLayout::eTransferDstOptimal,
-          blit,
-          vk::Filter::eLinear);
-
-      transition_image_layout(
-          command_buffer,
-          *image_,
-          vk::ImageLayout::eTransferSrcOptimal,
-          vk::ImageLayout::eShaderReadOnlyOptimal,
-          vk::AccessFlagBits2::eTransferRead,
-          vk::AccessFlagBits2::eShaderRead,
-          vk::PipelineStageFlagBits2::eTransfer,
-          vk::PipelineStageFlagBits2::eFragmentShader,
-          vk::ImageAspectFlagBits::eColor,
-          level - 1,
-          1,
-          layer,
-          1);
-
-      if (mip_width > 1)
-        mip_width /= 2;
-      if (mip_height > 1)
-        mip_height /= 2;
-    }
-
-    transition_image_layout(
-        command_buffer,
-        *image_,
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageLayout::eShaderReadOnlyOptimal,
-        vk::AccessFlagBits2::eTransferWrite,
-        vk::AccessFlagBits2::eShaderRead,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::ImageAspectFlagBits::eColor,
-        mip_levels_ - 1,
-        1,
-        layer,
-        1);
-  }
 
   void create_sampler(const vk::raii::PhysicalDevice &physical_device) {
     sampler_ = detail::create_mipmapped_sampler(*device_, physical_device, mip_levels_);
