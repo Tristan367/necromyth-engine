@@ -64,34 +64,44 @@ struct Walk {
   float distance{0.0F};  // horizontal ground covered
   float climbed{0.0F};   // net height gained
   bool stalled{false};   // stopped making progress while still trying to move
+  // Vertical motion in a single frame that the character's OWN velocity does
+  // not account for: the stair sweep lifting it, the floor snap pulling it
+  // down. Both happen instantaneously, which is what reads as teleporting up a
+  // step and as jitter on uneven ground.
+  float worst_teleport{0.0F};
+  int teleports{0};
 };
 
-// Drives the character along +X for `seconds`, using the same constant-speed
-// rule the game uses.
+// Drives the character along +X for `seconds`, using the same rule the game
+// uses: velocity is horizontal, full stop, and gravity only applies in the air.
+//
+// This used to project the velocity onto the ground normal and rescale it to
+// hold horizontal speed -- which is what the game did once, and stopped doing,
+// because rescaling scales the VERTICAL part too and turns a steep contact into
+// a launch. The harness kept the old rule and its comment kept claiming it was
+// the game's, so it was measuring a controller nobody plays: walking into a
+// 20 cm step flung it upward at 5 m/s and over a metre into the air. Any number
+// this file produced about steps was about that, not about the game.
 auto walk_along(engine::physics::PhysicsWorld &world, engine::physics::Character &character,
                 float seconds) -> Walk {
   const glm::vec3 start = character.position();
   glm::vec3 previous = start;
   int stalled_frames = 0;
+  float worst_teleport = 0.0F;
+  int teleports = 0;
 
   const int frames = static_cast<int>(seconds / k_dt);
   for (int frame = 0; frame < frames; ++frame) {
-    glm::vec3 velocity = character.linear_velocity();
-    velocity.x = k_speed;
-    velocity.z = 0.0F;
-
+    glm::vec3 velocity{k_speed, 0.0F, 0.0F};
     if (character.is_on_ground()) {
-      const glm::vec3 normal = character.ground_normal();
-      glm::vec3 along = velocity - normal * glm::dot(velocity, normal);
-      const float flat = std::sqrt(along.x * along.x + along.z * along.z);
-      if (flat > 0.001F) {
-        along *= k_speed / flat;
-        velocity = along;
-      } else {
-        velocity.y = std::min(velocity.y, 0.0F);
-      }
+      // The game's constant-speed rule. Gated on walkable ground, and it
+      // scales a horizontal vector rather than rotating one, so it cannot
+      // launch.
+      const float up = character.ground_normal().y;
+      if (up > 0.5F)
+        velocity *= 1.0F / (up * up);
     } else {
-      velocity.y = std::max(velocity.y - 9.81F * k_dt, -50.0F);
+      velocity.y = std::max(character.linear_velocity().y - 9.81F * k_dt, -50.0F);
     }
 
     character.set_velocity(velocity);
@@ -101,11 +111,23 @@ auto walk_along(engine::physics::PhysicsWorld &world, engine::physics::Character
     const glm::vec3 now = character.position();
     const float moved = std::hypot(now.x - previous.x, now.z - previous.z);
     stalled_frames = moved < k_speed * k_dt * 0.25F ? stalled_frames + 1 : 0;
+    if (std::getenv("TRACE_Y") != nullptr)
+      std::printf("    f%-3d y=%.4f  vy=%+.3f  dy=%+.4f  vy*dt=%+.4f  ground=%d\n", frame,
+                  static_cast<double>(now.y), static_cast<double>(velocity.y),
+                  static_cast<double>(now.y - previous.y),
+                  static_cast<double>(velocity.y * k_dt),
+                  static_cast<int>(character.is_on_ground()));
+    const float teleport = std::abs((now.y - previous.y) - velocity.y * k_dt);
+    if (teleport > 0.002F) {
+      ++teleports;
+      worst_teleport = std::max(worst_teleport, teleport);
+    }
     previous = now;
   }
 
   const glm::vec3 end = character.position();
-  return {std::hypot(end.x - start.x, end.z - start.z), end.y - start.y, stalled_frames > 30};
+  return {std::hypot(end.x - start.x, end.z - start.z), end.y - start.y, stalled_frames > 30,
+          worst_teleport, teleports};
 }
 
 // Drops a character onto the ramp at x = -4 (the flat part) and lets it settle.
@@ -125,7 +147,8 @@ auto spawn_on(engine::physics::PhysicsWorld &world, const engine::MeshSource &gr
 
 // A flat floor with a single one-metre step in it at x = 0: the wall the
 // character walks into.
-auto make_step(float length = 60.0F, float width = 24.0F) -> engine::MeshSource {
+auto make_step(float length = 60.0F, float width = 24.0F, float rise = 1.0F)
+    -> engine::MeshSource {
   engine::MeshSource mesh;
   const auto quad = [&mesh](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d) {
     const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
@@ -142,8 +165,8 @@ auto make_step(float length = 60.0F, float width = 24.0F) -> engine::MeshSource 
   const float h = width * 0.5F;
   // Lower floor, the riser, and the upper floor.
   quad({-length, 0, -h}, {0, 0, -h}, {0, 0, h}, {-length, 0, h});
-  quad({0, 0, -h}, {0, 1, -h}, {0, 1, h}, {0, 0, h});
-  quad({0, 1, -h}, {length, 1, -h}, {length, 1, h}, {0, 1, h});
+  quad({0, 0, -h}, {0, rise, -h}, {0, rise, h}, {0, 0, h});
+  quad({0, rise, -h}, {length, rise, -h}, {length, rise, h}, {0, rise, h});
   return mesh;
 }
 
@@ -346,6 +369,10 @@ void test_speed_is_the_same_uphill_as_on_the_flat() {
   check(flat > 8.0F, "the flat baseline covers ground");
   // Within a tolerance: the controller still has to resolve contacts, and the
   // first frames spend a little settling onto the slope.
+  std::printf("    flat %.1f m, 27 degrees %.1f m (%.0f%%), 45 degrees %.1f m (%.0f%%)\n",
+              static_cast<double>(flat), static_cast<double>(gentle),
+              static_cast<double>(gentle / flat * 100.0F), static_cast<double>(steep),
+              static_cast<double>(steep / flat * 100.0F));
   check(std::abs(gentle - flat) < flat * 0.15F,
         "a 27 degree climb covers the same ground as the flat");
   check(std::abs(steep - flat) < flat * 0.15F,
@@ -413,11 +440,97 @@ void test_a_single_block_step_is_taken_in_stride() {
 
 } // namespace
 
+// A 45 degree ramp -- the shape our stair voxels actually collide as -- running
+// up to a flat landing at the top. This is the reported bug: "before going all
+// the way up the stairs, we just kinda skip over to the landing from the side
+// of the stair. We just, like, teleport up on top of it really quick."
+auto make_ramp_to_landing(float height = 3.0F, float width = 24.0F) -> engine::MeshSource {
+  engine::MeshSource mesh;
+  const auto height_at = [height](float x) {
+    if (x <= 0.0F) return 0.0F;            // flat approach
+    if (x >= height) return height;        // the landing
+    return x;                              // 45 degrees, one up per one along
+  };
+
+  const int steps = 60;
+  for (int i = 0; i <= steps; ++i) {
+    const auto x = static_cast<float>(i) - 8.0F;
+    for (int side = 0; side < 2; ++side) {
+      engine::MeshVertex v{};
+      v.pos[0] = x;
+      v.pos[1] = height_at(x);
+      v.pos[2] = side == 0 ? -width * 0.5F : width * 0.5F;
+      mesh.vertices.push_back(v);
+    }
+  }
+  for (int i = 0; i < steps; ++i) {
+    const auto base = static_cast<std::uint32_t>(i * 2);
+    mesh.indices.insert(mesh.indices.end(),
+                        {base, base + 1, base + 2, base + 1, base + 3, base + 2});
+  }
+  return mesh;
+}
+
+void test_climbing_to_a_landing_is_continuous() {
+  std::printf("climbing a stair ramp onto its landing\n");
+
+  engine::physics::PhysicsWorld world;
+  const engine::MeshSource ground = make_ramp_to_landing();
+  auto character = spawn_on(world, ground);
+
+  const Walk walk = walk_along(world, *character, 5.0F);
+  check(walk.climbed > 2.5F, "the character gets up onto the landing");
+
+  // Godot's CharacterBody3D has no step-up at all; its only vertical assist is
+  // a downward floor snap, 0.1 m by default. A climb that is really a slide up
+  // a slope should produce nothing bigger than that.
+  std::printf("  (worst single-frame teleport %.3f m over %d frames)\n",
+              static_cast<double>(walk.worst_teleport), walk.teleports);
+  check(walk.worst_teleport < 0.10F,
+        "no single frame moves the character further than Godot's floor snap");
+}
+
+// The reported bug, isolated: a riser too short to be a wall and too tall to be
+// terrain -- the side of a stair tread, or the lip of a landing you brush while
+// still on the ramp. Jolt's stair sweep fires whenever horizontal motion is
+// blocked and lifts the character its whole step height in ONE frame, which is
+// the "we just teleport up on top of it really quick" the player sees.
+//
+// Godot's CharacterBody3D does not do this at all. It has no step-up mechanic:
+// you go up by sliding along a walkable slope, and its only vertical assist is
+// a downward floor snap of 0.1 m. Whatever we lift the character by, no single
+// frame should move it further than that, or the motion reads as a teleport
+// rather than as walking.
+void test_a_short_riser_is_not_teleported_over() {
+  std::printf("a short riser -- the side of a stair tread\n");
+
+  for (const float rise : {0.20F, 0.30F}) {
+    engine::physics::PhysicsWorld world;
+    const engine::MeshSource ground = make_step(60.0F, 24.0F, rise);
+    auto character = spawn_on(world, ground);
+
+    const Walk walk = walk_along(world, *character, 4.0F);
+    const std::string label = std::to_string(static_cast<int>(rise * 100.0F)) + " cm riser";
+    std::printf("  %.2f m riser: climbed %.2f m, worst single frame %.3f m\n",
+                static_cast<double>(rise), static_cast<double>(walk.climbed),
+                static_cast<double>(walk.worst_teleport));
+    check(walk.climbed > rise * 0.8F, "a " + label + " is walked up rather than blocked");
+    // The BODY has to resolve collision within the frame, so some of this is
+    // irreducible -- what stops it reading as a teleport is the low-pass on the
+    // eye in the client, measured there at roughly a third of the body's worst
+    // discontinuity. This bound is only here to catch a regression to a real
+    // one-frame hop onto the tread.
+    check(walk.worst_teleport < 0.25F, "a " + label + " is not hopped over in one frame");
+  }
+}
+
 int main() {
   test_walks_up_a_45_degree_slope();
   test_speed_is_the_same_uphill_as_on_the_flat();
   test_a_wall_is_still_a_wall();
   test_a_single_block_step_is_taken_in_stride();
+  test_climbing_to_a_landing_is_continuous();
+  test_a_short_riser_is_not_teleported_over();
   test_walking_into_a_one_metre_step_does_not_climb_it();
   test_a_jump_still_gets_onto_the_step();
   test_bumping_your_head_stops_the_jump();
