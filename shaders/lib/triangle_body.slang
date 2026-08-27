@@ -16,12 +16,21 @@ VSOutput vertMain(VSInput input, uint instanceId : SV_InstanceID) {
     output.worldNormal = normalize(mul((float3x3)inst.model, input.inNormal));
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
-    // The material field packs the texture layer in its low byte and baked voxel
-    // light above it. Meshes that never set it read as layer 0 with full light,
-    // which is what unlit geometry should look like.
+    // The material field packs the texture layer in its low byte, baked voxel
+    // light in the next byte, and a flag above that saying the light is real.
+    //
+    // The flag is the whole point. This used to test `packedLight == 0` for
+    // "this mesh carries no baked light, draw it lit" -- but a voxel in the
+    // middle of a windowless room packs to zero as well, because zero light IS
+    // its light. So interior lighting fell off smoothly to nothing and then
+    // snapped to FULL brightness at the darkest point, which is the opposite of
+    // what it should do and reads exactly like an integer wrapping around.
+    //
+    // Meshes that never set the field still read as layer 0 with no flag, so
+    // unlit geometry is unchanged.
     output.textureLayer = inst.textureLayer + (input.inMaterial & 0xFFu);
     const uint packedLight = input.inMaterial >> 8u;
-    output.bakedLight = packedLight == 0u
+    output.bakedLight = (packedLight & 0x100u) == 0u
         ? float2(1.0, 0.0)
         : float2(float(packedLight & 0xFu) / 15.0, float((packedLight >> 4u) & 0xFu) / 15.0);
     output.sampleTextureArray = inst.sampleTextureArray;
