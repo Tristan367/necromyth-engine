@@ -1035,6 +1035,83 @@ auto make_low_gap(float gap, float size = 40.0F) -> engine::MeshSource {
   return mesh;
 }
 
+// A wall with a one-voxel hole in it, `sill` voxels above the floor. A broken
+// window, in other words.
+auto make_hole_in_a_wall(float sill, float size = 40.0F) -> engine::MeshSource {
+  engine::MeshSource mesh;
+  const auto quad = [&mesh](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d) {
+    const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+    for (const glm::vec3 &p : {a, b, c, d}) {
+      engine::MeshVertex v{};
+      v.pos[0] = p.x;
+      v.pos[1] = p.y;
+      v.pos[2] = p.z;
+      mesh.vertices.push_back(v);
+    }
+    mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+  };
+  const float h = size * 0.5F;
+  quad({-size, 0, -h}, {size, 0, -h}, {size, 0, h}, {-size, 0, h}); // floor
+
+  // The wall at x = 0, one voxel thick, with a gap from `sill` to `sill + 1`.
+  const auto face = [&](float x) {
+    quad({x, 0, -h}, {x, sill, -h}, {x, sill, h}, {x, 0, h});              // under the hole
+    quad({x, sill + 1, -h}, {x, 6, -h}, {x, 6, h}, {x, sill + 1, h});      // over it
+  };
+  face(0.0F);
+  face(1.0F);
+  // The sill and the head of the opening, so the hole is a hole and not a slot.
+  quad({0, sill, -h}, {1, sill, -h}, {1, sill, h}, {0, sill, h});
+  quad({0, sill + 1, -h}, {1, sill + 1, -h}, {1, sill + 1, h}, {0, sill + 1, h});
+  return mesh;
+}
+
+// Can the player actually get through a broken window?
+//
+// Asked because the commit that added crawling said "you can crawl through the
+// window a zombie broke", and that is two claims: that a one-voxel gap is
+// passable, and that a gap ONE VOXEL UP is reachable. The controller has no
+// step-up at all -- deliberately, it is what stopped you walking up the side of
+// a staircase -- so the second does not follow from the first and wants
+// measuring rather than assuming.
+void test_how_high_a_crawl_hole_can_be() {
+  std::printf("getting through a hole in a wall\n");
+
+  const auto gets_through = [](float sill) {
+    engine::physics::PhysicsWorld world;
+    const engine::MeshSource ground = make_hole_in_a_wall(sill);
+    world.create_static_mesh(ground, glm::vec3(0.0F));
+    auto character =
+        std::make_unique<engine::physics::Character>(world, glm::vec3(-4.0F, 2.0F, 0.0F), 0.25F,
+                                                     2.0F * 0.9F - 2.0F * 0.25F);
+    for (int i = 0; i < 120; ++i) { // settle
+      character->set_velocity({0.0F, std::min(character->linear_velocity().y - 9.81F * k_dt, 0.0F),
+                               0.0F});
+      character->update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
+      world.step(k_dt);
+    }
+    // Flat, and walking at the hole.
+    character->try_set_height(0.9F, 0.25F);
+    for (int i = 0; i < 400; ++i) {
+      character->set_velocity({k_speed, 0.0F, 0.0F});
+      character->update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
+      world.step(k_dt);
+      if (character->position().x > 2.0F)
+        return true;
+    }
+    return false;
+  };
+
+  const bool at_the_floor = gets_through(0.0F);
+  const bool one_up = gets_through(1.0F);
+  std::printf("    hole at floor level: %s   one voxel up: %s\n",
+              at_the_floor ? "through" : "blocked", one_up ? "through" : "blocked");
+  check(at_the_floor, "a hole at floor level is crawlable");
+  // Whatever the answer, it is recorded rather than assumed. See the note in
+  // DESIGN_NOTES on what a broken window actually needs.
+  std::printf("    (a broken window sits one voxel above the floor)\n");
+}
+
 // Going flat to get under something, and not being able to stand back up while
 // still under it.
 //
@@ -1099,6 +1176,7 @@ int main() {
   test_a_wall_takes_your_speed_away();
   test_cresting_a_ramp_does_not_launch_then_stall();
   test_the_capsule_can_go_flat_and_back();
+  test_how_high_a_crawl_hole_can_be();
   test_walking_into_a_one_metre_step_does_not_climb_it();
   test_a_jump_still_gets_onto_the_step();
   test_bumping_your_head_stops_the_jump();
