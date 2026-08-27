@@ -446,6 +446,10 @@ if(VCE_BUILD_TESTS)
     endif()
     add_test(NAME character_slopes COMMAND vce_tests_character)
 
+    add_executable(vce_tests_mipmaps tests/test_mipmaps.cpp)
+    target_link_libraries(vce_tests_mipmaps PRIVATE vce_renderer)
+    add_test(NAME mipmaps COMMAND vce_tests_mipmaps)
+
     # GPU stress test: needs a device and a display, so it is built but never
     # run by ctest. Exercises mesh streaming (create / remesh / drop under
     # frames in flight) against the validation layers, which is the only way to

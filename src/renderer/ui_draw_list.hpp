@@ -114,6 +114,17 @@ public:
                       .color = colour});
   }
 
+  // A filled rectangle in RAW screen pixels, bypassing the HUD scale.
+  //
+  // Almost nothing wants this -- laying the HUD out in font-sized units is the
+  // point of the scale. The crosshair does: at scale 3 on a 1280-wide window the
+  // scaled grid is 426 units across, so the centre unit lands at real pixel 639
+  // when the true centre is 640, and the crosshair sits a pixel right of where
+  // you are actually aiming.
+  void rect_px(float x, float y, float w, float h, const glm::vec4 &colour) {
+    quads_.push_back({.rect = {x, y, w, h}, .uv = solid_uv(), .color = colour});
+  }
+
   // A one-pixel-thick outline, drawn as four rectangles rather than as a
   // stretched texture: at integer scale the corners then land exactly.
   void frame(int x, int y, int w, int h, const glm::vec4 &colour) {

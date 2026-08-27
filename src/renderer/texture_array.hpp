@@ -63,79 +63,82 @@ inline constexpr float k_alpha_cutoff = 0.5F;
   return static_cast<float>(passed) / static_cast<float>(count);
 }
 
-// The alpha scale that makes this mip cover as much of its area as the full-size
-// image did.
+// Makes this mip cover exactly as much of its area as the full-size image did,
+// by choosing WHICH texels are opaque rather than by scaling all of them.
 //
-// This replaces a flat 1.6x lift per halving, which was wrong in the way the
-// player described: "it's greedy towards the colored pixels... the texture kind
-// of appears to get bigger as you get further away from it. So, like, the window
-// cross texture gets wider." It does, and it must -- a fixed multiplier does not
-// know how much alpha there was to begin with, so it dilates every level, and
-// the dilation compounds down the chain until a window mullion is a blob. The
-// end state is the other half of the report: "the only thing that survives is
-// the cross in the very middle, so each window has this floating dot".
+// This replaced two earlier attempts, and the reason it had to is worth keeping.
 //
-// Matching COVERAGE instead asks the only question that matters at the far end
-// of a mip chain: what proportion of this tile is solid? Keep that proportion
-// equal to the original's and the mullion neither fattens nor collapses to a
-// dot -- it thins out and holds its shape, which is what was asked for.
+// First there was a flat 1.6x lift per halving. Wrong in the way the player
+// described: "it's greedy towards the colored pixels... the window cross texture
+// gets wider." A fixed multiplier does not know how much alpha there was to
+// begin with, so it dilates every level and the dilation compounds.
 //
-// The idea is Ignacio Castano's, and it is what Unity and Unreal do for
-// alpha-tested foliage. The search is a plain bisection because coverage is
-// monotonic in the scale: more scale can only push texels over the cutoff, never
-// back under it.
-[[nodiscard]] inline auto scale_for_coverage(const std::uint8_t *px, int w, int h, float target)
-    -> float {
-  // Nothing to preserve, or everything is opaque anyway -- which is every layer
-  // that is not a cutout, so this is also the early-out that keeps the cost off
-  // ordinary textures.
-  if (target <= 0.0F || target >= 1.0F)
-    return 1.0F;
-
-  float low = 0.0F;
-  float high = 4.0F;
-  float best = 1.0F;
-  float best_error = std::numeric_limits<float>::max();
-  for (int step = 0; step < 12; ++step) {
-    const float mid = 0.5F * (low + high);
-    const float coverage = alpha_coverage(px, w, h, mid);
-    const float error = std::abs(coverage - target);
-    // Ties go to the scale that changes the alpha LEAST.
-    //
-    // Coverage is a step function -- whole texels cross the cutoff or they do
-    // not -- so a wide range of scales gives exactly the same answer, and which
-    // one falls out of the search is otherwise an accident of where the
-    // bisection started. On the window texture that accident was 2.0 for the
-    // levels where 1.0 was already exact: identical alpha test, and every edge
-    // texel that does NOT pass it silently doubled, which is the fattening this
-    // is here to stop. It matters because a cutout can also be drawn
-    // alpha-to-coverage, where sub-cutoff alpha is not discarded but shades the
-    // edge.
-    //
-    // So: preserve the coverage, and among the scales that do, leave the
-    // texture alone.
-    const bool better = error < best_error ||
-                        (error == best_error && std::abs(mid - 1.0F) < std::abs(best - 1.0F));
-    if (better) {
-      best_error = error;
-      best = mid;
-    }
-    if (coverage < target)
-      low = mid;
-    else
-      high = mid;
-  }
-  return best;
-}
-
-// Applies a scale to every texel's alpha, in place.
-inline void scale_alpha(std::uint8_t *px, int w, int h, float scale) {
-  if (scale == 1.0F)
+// Then there was Ignacio Castano's technique proper: bisect for the single alpha
+// SCALE whose coverage matches the original's. That is what Unity and Unreal do
+// for alpha-tested foliage, and on a photographic leaf texture it works. On
+// these tiles it does not, and dumping the mip chain to images -- rather than
+// walking around the world looking at windows -- showed exactly why.
+//
+// The tile alpha is BINARY. Box-filtering a hard-edged cutout lands enormous
+// numbers of texels on exactly 0.5: at 8x8 on the window tile, sixteen of
+// sixty-four sit precisely there. Coverage as a function of scale is therefore a
+// step function that steps straight over the target -- that level could produce
+// 18.75% coverage or 43.75%, and nothing in between, when it wanted 33.98%.
+// Successive levels landed on opposite sides of the target, and the level where
+// the muntin cross finally lost the argument kept a single opaque texel in the
+// middle of a transparent tile. That is the artifact as reported: "windows have
+// this weird floating dot on them from a distance."
+//
+// So this does not look for a scale. It takes the N highest-alpha texels, N
+// being the count that matches the base coverage, and puts the threshold
+// between the Nth and the N+1th. Coverage is then exact at every level by
+// construction, and cannot swing.
+//
+// Ties -- and at 0.5 there are hundreds -- are broken by how much alpha
+// SURROUNDS a texel. Breaking them in raster order scatters the survivors;
+// keeping the ones whose neighbours are also solid keeps the frame connected,
+// which is the difference between a window and a handful of speckles. The
+// neighbourhood wraps, because these are tiles.
+inline void match_coverage(std::vector<float> &alpha, int w, int h, float target) {
+  const auto count = static_cast<int>(alpha.size());
+  if (count == 0 || target <= 0.0F || target >= 1.0F)
     return;
-  const std::size_t count = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
-  for (std::size_t i = 0; i < count; ++i)
-    px[i * 4 + 3] = static_cast<std::uint8_t>(std::lround(
-        std::min(static_cast<float>(px[i * 4 + 3]) / 255.0F * scale, 1.0F) * 255.0F));
+
+  const int want = std::clamp(
+      static_cast<int>(std::lround(target * static_cast<float>(count))), 0, count);
+
+  std::vector<float> around(alpha.size(), 0.0F);
+  for (int y = 0; y < h; ++y)
+    for (int x = 0; x < w; ++x) {
+      float sum = 0.0F;
+      for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+          sum += alpha[static_cast<std::size_t>((y + dy + h) % h) * w + ((x + dx + w) % w)];
+      around[static_cast<std::size_t>(y) * w + x] = sum;
+    }
+
+  std::vector<int> order(alpha.size());
+  for (int i = 0; i < count; ++i)
+    order[static_cast<std::size_t>(i)] = i;
+  std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+    const auto i = static_cast<std::size_t>(a);
+    const auto j = static_cast<std::size_t>(b);
+    if (alpha[i] != alpha[j])
+      return alpha[i] > alpha[j];
+    return around[i] > around[j];
+  });
+
+  // Nudged just clear of the cutoff rather than set to 0 and 1. Which side of
+  // the line a texel is on is all a cutout pass reads, and leaving the value
+  // otherwise alone keeps the edge shading that alpha-to-coverage would use.
+  constexpr float k_margin = 0.02F;
+  std::vector<float> out(alpha.size());
+  for (int i = 0; i < count; ++i) {
+    const auto t = static_cast<std::size_t>(order[static_cast<std::size_t>(i)]);
+    out[t] = i < want ? std::max(alpha[t], k_alpha_cutoff + k_margin)
+                      : std::min(alpha[t], k_alpha_cutoff - k_margin);
+  }
+  alpha.swap(out);
 }
 
 // One box-filtered halving of an RGBA8 image.
@@ -260,21 +263,58 @@ public:
                   static_cast<std::size_t>(level_size[0].width) * level_size[0].height * 4);
       // Coverage is measured on the full-size image ONCE and every level is
       // matched to it. Matching each level to the one above instead lets the
-      // error compound, which is how a fixed multiplier behaved.
+      // error compound.
       const float base_coverage = detail::alpha_coverage(
           chain, static_cast<int>(level_size[0].width), static_cast<int>(level_size[0].height),
           1.0F);
+
+      // The UNCORRECTED alpha of the previous level, which is what the next
+      // halving reads.
+      //
+      // This is the part the old comment claimed and the old code did not do.
+      // It halved level N from level N-1 *after* writing the corrected alpha
+      // back into it, so every correction fed the next downsample and the error
+      // compounded down the chain -- the exact failure the comment said was
+      // being avoided.
+      std::vector<float> previous_alpha(
+          static_cast<std::size_t>(level_size[0].width) * level_size[0].height);
+      for (std::size_t i = 0; i < previous_alpha.size(); ++i)
+        previous_alpha[i] = static_cast<float>(chain[i * 4 + 3]) / 255.0F;
+
       for (std::uint32_t level = 1; level < mip_levels_; ++level) {
         const int width = static_cast<int>(level_size[level].width);
         const int height = static_cast<int>(level_size[level].height);
-        detail::halve_alpha_aware(
-            chain + level_offset[level - 1], static_cast<int>(level_size[level - 1].width),
-            static_cast<int>(level_size[level - 1].height), chain + level_offset[level],
-            width, height);
-        detail::scale_alpha(
-            chain + level_offset[level], width, height,
-            detail::scale_for_coverage(chain + level_offset[level], width, height,
-                                       base_coverage));
+        const int src_w = static_cast<int>(level_size[level - 1].width);
+        const int src_h = static_cast<int>(level_size[level - 1].height);
+
+        // Colour from the previous level's colour; alpha from its raw alpha.
+        detail::halve_alpha_aware(chain + level_offset[level - 1], src_w, src_h,
+                                  chain + level_offset[level], width, height);
+
+        std::vector<float> alpha(static_cast<std::size_t>(width) * height);
+        for (int y = 0; y < height; ++y)
+          for (int x = 0; x < width; ++x) {
+            float sum = 0.0F;
+            int taken = 0;
+            for (int dy = 0; dy < 2; ++dy)
+              for (int dx = 0; dx < 2; ++dx) {
+                const int sx = x * 2 + dx;
+                const int sy = y * 2 + dy;
+                if (sx >= src_w || sy >= src_h)
+                  continue;
+                sum += previous_alpha[static_cast<std::size_t>(sy) * src_w + sx];
+                ++taken;
+              }
+            alpha[static_cast<std::size_t>(y) * width + x] =
+                sum / static_cast<float>(std::max(taken, 1));
+          }
+        previous_alpha = alpha; // raw, for the next level down
+
+        detail::match_coverage(alpha, width, height, base_coverage);
+        std::uint8_t *dst = chain + level_offset[level];
+        for (std::size_t i = 0; i < alpha.size(); ++i)
+          dst[i * 4 + 3] = static_cast<std::uint8_t>(
+              std::lround(std::clamp(alpha[i], 0.0F, 1.0F) * 255.0F));
       }
     }
     staging_memory.unmapMemory();
