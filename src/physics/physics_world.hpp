@@ -414,31 +414,41 @@ private:
 
 class Character {
 public:
-  // Deliberately LESS than one voxel.
+  // Zero. The controller does not lift the character over anything.
   //
-  // It was 1.05, which meant every cubic block in the world was a free step:
-  // walk into a crate and the controller lifted you onto it. A block you can
-  // walk onto is a block that is not an obstacle, and if a one-voxel wall is
-  // not an obstacle then neither is anything the player builds out of them.
+  // This is Godot's answer -- CharacterBody3D has no step-up mechanic at all --
+  // and it took a bug report to see why it is the right one. Jolt's stair sweep
+  // goes UP by this much, then FORWARD, then DOWN, and it commits to whatever
+  // the down-sweep lands on. Against anything whose height varies across the
+  // capsule's own footprint, that ratchets: it finds the low corner, steps up,
+  // lands higher, and does it again next frame.
   //
-  // 0.6 clears the lip where two marching-cubes cells meet, which is a fraction
-  // of a voxel, and stops at anything a whole voxel tall. Terrain that actually
-  // rises a full voxel does it over a cell's width, which is 45 degrees, and
-  // mMaxSlopeAngle lets the character walk that -- so terrain never needed the
-  // step to be a metre in the first place. Everything else, you jump.
-  // How high the controller may lift the character over something it walks
-  // into. Deliberately well under a metre.
+  // The side of a staircase is exactly that shape. A stair collides as a wedge,
+  // so its side is a triangle rising from nothing at the foot to a metre at the
+  // head, and walking into one from the side climbed it -- reported as "you go
+  // up the non-ramp side and you just instantly teleport to the middle of the
+  // ramp on top of it". Measured against a single stair voxel, walking in from
+  // the side:
   //
-  // One voxel is one metre, so anything at or above 1.0 means walking into any
-  // block in the game puts you on top of it -- and 0.6 was still enough,
-  // because the capsule rides up what the stair sweep leaves it on. Getting
-  // onto a block is a JUMP, which clears 1.4 m on its own.
+  //     step-up 0.35   climbed 0.83 m
+  //     step-up 0.10   climbed 0.57 m
+  //     step-up 0      climbed 0.28 m
   //
-  // This does not affect terrain. Marching-cubes ground rises a metre across a
-  // metre, which is a 45 degree SLOPE and is handled by slope walking, not by
-  // the stair sweep. What the step height is for is the small lip where two
-  // cells meet, and a third of a metre covers that with room to spare.
-  static constexpr float k_step_height = 0.35F;
+  // Note the amplification. The climb is never the step height; it is roughly
+  // twice it plus what the capsule's own rounded bottom manages. So no value of
+  // this number is safe, which is why it is zero rather than smaller.
+  //
+  // What it cost: a 30 cm vertical riser is no longer walkable. Nothing in the
+  // game has one. Stairs collide as a smooth ramp from foot to head -- that is
+  // collide_stair's whole point -- terrain rises across a marching-cubes cell
+  // as a 45 degree slope, and a block is a metre, which is a jump. The only
+  // thing that ever needed the sweep was a shape the world does not contain.
+  //
+  // Everything the sweep genuinely did still works without it: a 20 cm lip is
+  // walked over by the capsule's rounded bottom alone, rolling ground is
+  // unchanged frame for frame, and 35 of the 36 character checks pass either
+  // way.
+  static constexpr float k_step_height = 0.0F;
 
   // How far the controller may pull the character back down to keep contact.
   //

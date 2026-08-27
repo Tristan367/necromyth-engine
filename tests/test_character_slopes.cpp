@@ -41,6 +41,13 @@ constexpr float k_speed = 4.0F;
 // motion up by the distance actually lost and that is bounded by the distance
 // asked for.
 constexpr float k_slope_cap = 2.0F;
+// The game's own numbers, from nm::game::Player. Kept here rather than included
+// because the engine does not depend on the game -- and kept in step for the
+// same reason the controller settings are: a harness measuring different
+// numbers from the ones shipped is measuring a controller nobody plays.
+constexpr float k_sprint = 7.5F;
+constexpr float k_accelerate = 12.0F;
+constexpr float k_decelerate = 26.0F;
 
 // Overrides, so the knobs can be swept in seconds against a deterministic
 // surface instead of over a town whose save drifts between runs.
@@ -540,29 +547,37 @@ void test_climbing_to_a_landing_is_continuous() {
 // a downward floor snap of 0.1 m. Whatever we lift the character by, no single
 // frame should move it further than that, or the motion reads as a teleport
 // rather than as walking.
-void test_a_short_riser_is_not_teleported_over() {
-  std::printf("a short riser -- the side of a stair tread\n");
+// A lip in the ground -- the kind marching cubes leaves where two cells meet.
+//
+// This used to walk a 20 cm and a 30 cm riser and call them "the side of a stair
+// tread", which was measuring something the game does not contain: a stair
+// collides as a smooth ramp from foot to head, so there is no tread to catch on.
+// The 30 cm case was the only thing in the whole suite that needed the stair
+// sweep, and it was keeping a mechanic alive for a shape with no source.
+//
+// What IS real is a small lip, and the capsule's own rounded bottom takes those
+// without any sweep at all.
+void test_a_lip_in_the_ground_is_taken_in_stride() {
+  std::printf("a lip in the ground\n");
 
-  for (const float rise : {0.20F, 0.30F}) {
+  for (const float rise : {0.10F, 0.20F}) {
     engine::physics::PhysicsWorld world;
     const engine::MeshSource ground = make_step(60.0F, 24.0F, rise);
     auto character = spawn_on(world, ground);
+    const Walk walk = walk_along(world, *character, 3.0F);
 
-    const Walk walk = walk_along(world, *character, 4.0F);
-    const std::string label = std::to_string(static_cast<int>(rise * 100.0F)) + " cm riser";
-    std::printf("  %.2f m riser: climbed %.2f m, worst single frame %.3f m\n",
-                static_cast<double>(rise), static_cast<double>(walk.climbed),
-                static_cast<double>(walk.worst_teleport));
-    check(walk.climbed > rise * 0.8F, "a " + label + " is walked up rather than blocked");
+    const auto label = std::to_string(static_cast<int>(rise * 100.0F)) + " cm lip";
+    std::printf("  %s: climbed %.2f m, worst single frame %.3f m\n", label.c_str(),
+                static_cast<double>(walk.climbed), static_cast<double>(walk.worst_teleport));
+    check(walk.climbed > rise * 0.8F, "a " + label + " is walked over rather than blocked");
     // The BODY has to resolve collision within the frame, so some of this is
     // irreducible. There is no longer a low-pass on the eye hiding it -- the
     // camera rides the body the way a Godot camera rides its CharacterBody3D,
     // because a filter that lags the eye behind the body turns every jump into
     // a soar. So this bound is the real one now: it is what the player sees.
-    check(walk.worst_teleport < 0.25F, "a " + label + " is not hopped over in one frame");
+    check(walk.worst_teleport < 0.10F, "a " + label + " is not hopped over in one frame");
   }
 }
-
 
 // Rolling ground, the way marching cubes actually makes it: a surface whose
 // height varies continuously, so the slope under the character changes every
@@ -711,15 +726,202 @@ void test_the_slope_compensation_cannot_run_away() {
   }
 }
 
+// One stair voxel, collided the way the game collides one: a closed WEDGE --
+// floor, head wall, two triangular sides and the slope across the top. See
+// collide_stair in the game's voxel_mesher.
+//
+// The sides are what this is about. They are vertical triangles rising from
+// nothing at the foot of the wedge to a full metre at its head, so walking into
+// one from the side is walking into a wall whose height depends on exactly
+// where along it you arrive.
+auto make_stair_wedge(float width = 24.0F) -> engine::MeshSource {
+  engine::MeshSource mesh;
+  const auto tri = [&mesh](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 outward) {
+    if (glm::dot(glm::cross(b - a, c - a), outward) < 0.0F)
+      std::swap(b, c);
+    const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+    for (const glm::vec3 &p : {a, b, c}) {
+      engine::MeshVertex v{};
+      v.pos[0] = p.x;
+      v.pos[1] = p.y;
+      v.pos[2] = p.z;
+      mesh.vertices.push_back(v);
+    }
+    mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2});
+  };
+  const auto quad = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 outward) {
+    tri(a, b, c, outward);
+    tri(a, c, d, outward);
+  };
+
+  const float h = width * 0.5F;
+  quad({-20, 0, -h}, {20, 0, -h}, {20, 0, h}, {-20, 0, h}, {0, 1, 0}); // the floor it stands on
+
+  // One voxel, climbing toward +x, spanning z in [0, 1].
+  quad({0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1}, {0, -1, 0});
+  quad({1, 0, 0}, {1, 1, 0}, {1, 1, 1}, {1, 0, 1}, {1, 0, 0});
+  quad({0, 0, 0}, {1, 1, 0}, {1, 1, 1}, {0, 0, 1}, {0, 1, 0});
+  tri({0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 0, -1});
+  tri({0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 0, 1});
+  return mesh;
+}
+
+// Walking into the SIDE of a stair must not put you on top of it.
+//
+// Reported as: "instead of going up the ramp like you normally would, you go up
+// the non-ramp side, like the side of it, and you just instantly teleport to the
+// middle of the ramp on top of it."
+//
+// Swept along the whole length of the wedge rather than sampled at one place,
+// because the side's height varies from nothing to a metre across it and the
+// interesting part is wherever the stair sweep decides it is a step. The sweep
+// does not put you down where it lifted you: it goes UP, then FORWARD, then
+// DOWN, and what it lands on is the sloped top of the wedge.
+void test_walking_into_the_side_of_a_stair_does_not_climb_it() {
+  std::printf("the side of a stair is a wall\n");
+
+  float worst_climb = 0.0F;
+  float worst_at = 0.0F;
+  for (int i = 1; i < 20; ++i) {
+    const float x = static_cast<float>(i) * 0.05F;
+    engine::physics::PhysicsWorld world;
+    world.create_static_mesh(make_stair_wedge(), glm::vec3(0.0F));
+    auto character =
+        std::make_unique<engine::physics::Character>(world, glm::vec3(x, 2.0F, -3.0F));
+    for (int f = 0; f < 120; ++f) { // settle on the floor beside the wedge
+      character->set_velocity({0.0F, std::min(character->linear_velocity().y - 9.81F * k_dt, 0.0F),
+                               0.0F});
+      character->update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
+      world.step(k_dt);
+    }
+    const float floor_y = character->position().y;
+
+    float highest = floor_y;
+    for (int f = 0; f < 150; ++f) {
+      glm::vec3 velocity{0.0F, 0.0F, k_speed};
+      const bool grounded = character->is_on_ground();
+      if (!grounded)
+        velocity.y = std::max(character->linear_velocity().y - 9.81F * k_dt, -50.0F);
+      character->set_velocity(velocity);
+      const bool hold = grounded && velocity.y <= 0.0F;
+      character->update(k_dt, hold ? tuned("SNAP", engine::physics::Character::k_floor_snap) : 0.0F,
+                        hold ? tuned("STEP", engine::physics::Character::k_step_height) : 0.0F);
+      world.step(k_dt);
+      highest = std::max(highest, character->position().y);
+    }
+    const float climbed = highest - floor_y;
+    if (climbed > worst_climb) {
+      worst_climb = climbed;
+      worst_at = x;
+    }
+    if (std::getenv("TRACE_STAIR") != nullptr)
+      std::printf("      x = %.2f: climbed %.2f m\n", static_cast<double>(x),
+                  static_cast<double>(climbed));
+  }
+
+  std::printf("    worst climb %.2f m, walking in at x = %.2f\n",
+              static_cast<double>(worst_climb), static_cast<double>(worst_at));
+  // The step-up is what you are allowed to walk over. Getting onto a stair from
+  // its side is a jump, the same as getting onto a block.
+  // With no stair sweep this is the capsule's rounded bottom riding the corner
+  // where the wedge's side is genuinely only a few centimetres tall, which is
+  // the same thing that gets it over a lip in the ground. A third of a metre is
+  // the bar because getting ONTO a stair from the side is a jump.
+  check(worst_climb < 0.35F, "walking into the side of a stair does not climb onto it");
+}
+
+// Run into a wall, then immediately walk back. You have to move at once.
+//
+// Reported as: "if I run and sprint into a wall and then immediately try to walk
+// backwards, I'm froze and stuck into the wall for a couple seconds". The cause
+// is not the wall -- the controller stops the character dead every frame. It is
+// that the game's own speed accumulator never hears about it: it ramps toward
+// the input and nothing tells it the last four metres a second did not happen,
+// so reversing has to unwind a velocity the character never had.
+void test_a_wall_takes_your_speed_away() {
+  std::printf("a wall takes your speed away\n");
+
+  engine::physics::PhysicsWorld world;
+  const engine::MeshSource ground = make_step(60.0F, 24.0F, 4.0F); // a 4 m wall at x = 0
+  auto character = spawn_on(world, ground);
+  check(character->is_on_ground(), "the character lands on the floor");
+
+  // Sprint into the wall for a second and a half.
+  glm::vec3 speed{0.0F};
+  const auto drive = [&](float wish_x, int frames) {
+    for (int i = 0; i < frames; ++i) {
+      const glm::vec3 before = character->position();
+      const glm::vec3 wish{wish_x, 0.0F, 0.0F};
+      const glm::vec3 towards = wish - speed;
+      const float gap = glm::length(towards);
+      const float rate = glm::length(wish) > glm::length(speed) ? k_accelerate : k_decelerate;
+      if (gap > 0.0001F)
+        speed += (towards / gap) * std::min(rate * k_dt, gap);
+
+      glm::vec3 velocity{speed.x, 0.0F, speed.z};
+      const bool grounded = character->is_on_ground();
+      if (!grounded)
+        velocity.y = std::max(character->linear_velocity().y - 9.81F * k_dt, -50.0F);
+      character->set_velocity(velocity);
+      const bool hold = grounded && velocity.y <= 0.0F;
+      character->update(k_dt, hold ? engine::physics::Character::k_floor_snap : 0.0F,
+                        hold ? engine::physics::Character::k_step_height : 0.0F);
+      world.step(k_dt);
+
+      // Godot's move_and_slide writes the resolved velocity back into
+      // `velocity`; this is that write-back. Whatever the character was stopped
+      // from doing is taken out of the accumulator, along the direction it
+      // failed in -- which leaves speed along a wall untouched and speed into
+      // one at zero.
+      if (!tuned("NOWRITEBACK", 0.0F)) {
+        const glm::vec3 moved = character->position() - before;
+        const glm::vec3 wanted{velocity.x * k_dt, 0.0F, velocity.z * k_dt};
+        const glm::vec3 blocked{wanted.x - moved.x, 0.0F, wanted.z - moved.z};
+        const float missed = glm::length(blocked);
+        if (missed > 0.001F) {
+          const glm::vec3 n = blocked / missed;
+          speed -= n * std::max(0.0F, glm::dot(speed, n));
+        }
+      }
+    }
+  };
+
+  drive(k_sprint, 90);
+  const float into_wall = speed.x;
+  std::printf("    after a second and a half against the wall, speed into it is %.2f m/s\n",
+              static_cast<double>(into_wall));
+
+  // Now walk back, and count how long before the character actually moves.
+  const float x_at_wall = character->position().x;
+  int frames_stuck = 0;
+  for (int i = 0; i < 120; ++i) {
+    const float before_x = character->position().x;
+    drive(-k_speed, 1);
+    if (character->position().x < before_x - 0.001F)
+      break;
+    ++frames_stuck;
+  }
+  std::printf("    %d frames (%.2f s) before it started backing away from x = %.2f\n", frames_stuck,
+              static_cast<double>(static_cast<float>(frames_stuck) * k_dt),
+              static_cast<double>(x_at_wall));
+
+  check(into_wall < 0.5F, "a wall does not leave you holding the speed you hit it with");
+  // A tenth of a second is a couple of frames of the acceleration ramp. Seconds
+  // is the bug.
+  check(frames_stuck < 8, "and backing off starts at once rather than after a wind-down");
+}
+
 int main() {
   test_walks_up_a_45_degree_slope();
   test_speed_is_the_same_uphill_as_on_the_flat();
   test_a_wall_is_still_a_wall();
   test_a_single_block_step_is_taken_in_stride();
   test_climbing_to_a_landing_is_continuous();
-  test_a_short_riser_is_not_teleported_over();
+  test_a_lip_in_the_ground_is_taken_in_stride();
   test_walking_over_rolling_ground_stays_on_it();
   test_the_slope_compensation_cannot_run_away();
+  test_walking_into_the_side_of_a_stair_does_not_climb_it();
+  test_a_wall_takes_your_speed_away();
   test_walking_into_a_one_metre_step_does_not_climb_it();
   test_a_jump_still_gets_onto_the_step();
   test_bumping_your_head_stops_the_jump();
