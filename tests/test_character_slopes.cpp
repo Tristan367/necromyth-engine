@@ -13,6 +13,7 @@
 // something that is not. Horizontal speed is therefore constant on any slope
 // the character can climb at all, and what stops you is the slope limit.
 
+#include "physics/character_motion.hpp"
 #include "physics/physics_world.hpp"
 
 #include <algorithm>
@@ -108,36 +109,41 @@ auto walk_along(engine::physics::PhysicsWorld &world, engine::physics::Character
                 float seconds) -> Walk {
   const glm::vec3 start = character.position();
   glm::vec3 previous = start;
+  // One rule, shared with the game. See character_motion.hpp for why that is
+  // not a convenience.
+  engine::physics::GroundMotion motion(k_accelerate, k_decelerate);
   int stalled_frames = 0;
+  int overspeed_frames = 0;
+  float overspeed_distance = 0.0F;
   float worst_teleport = 0.0F;
   int teleports = 0;
 
   const int frames = static_cast<int>(seconds / k_dt);
   for (int frame = 0; frame < frames; ++frame) {
     const glm::vec3 ground_normal = character.ground_normal();
-    glm::vec3 velocity{k_speed, 0.0F, 0.0F};
-    if (character.is_on_ground()) {
-      // The game's constant-speed rule. Gated on walkable ground, and it
-      // scales a horizontal vector rather than rotating one, so it cannot
-      // launch. Capped, because 1/cos^2 runs away to 4 at the slope limit --
-      // see k_slope_cap.
-      const float up = ground_normal.y;
-      if (up > 0.5F)
-        velocity *= std::min(1.0F / (up * up), tuned("SLOPECAP", k_slope_cap));
-    } else {
+    glm::vec3 velocity = motion.plan(character, {k_speed, 0.0F, 0.0F}, k_dt);
+    if (!character.is_on_ground())
       velocity.y = std::max(character.linear_velocity().y - 9.81F * k_dt, -50.0F);
-    }
 
     character.set_velocity(velocity);
     // Godot's floor-snap rule, which is the game's: you were on the ground and
     // you are not trying to leave it, so hold on to it -- by a tenth of a
-    // metre, not by more. Same for the stair sweep. Keeping this in step with
-    // main.cpp is the whole value of the harness; it drifted once already and
-    // spent a session measuring a controller nobody plays.
+    // metre, not by more. Same for the stair sweep.
     const bool hold_ground = character.is_on_ground() && velocity.y <= 0.0F;
     character.update(k_dt, hold_ground ? tuned("SNAP", engine::physics::Character::k_floor_snap) : 0.0F,
                      hold_ground ? tuned("STEP", engine::physics::Character::k_step_height) : 0.0F);
     world.step(k_dt);
+
+    // The rest of Godot's slide loop: top the horizontal motion up by what the
+    // climb ate, measured, until nothing is owed.
+    motion.finish_climb(character, character.position() - previous, k_dt,
+                        [&](const glm::vec3 &v) {
+                          const glm::vec3 at = character.position();
+                          character.set_velocity(v);
+                          character.update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
+                          return character.position() - at;
+                        });
+    motion.resolve(character);
 
     const glm::vec3 now = character.position();
     const float moved = std::hypot(now.x - previous.x, now.z - previous.z);
@@ -869,19 +875,14 @@ void test_a_wall_takes_your_speed_away() {
       world.step(k_dt);
 
       // Godot's move_and_slide writes the resolved velocity back into
-      // `velocity`; this is that write-back. Whatever the character was stopped
-      // from doing is taken out of the accumulator, along the direction it
-      // failed in -- which leaves speed along a wall untouched and speed into
-      // one at zero.
+      // `velocity`; this is that write-back, and its rule is Godot's:
+      // velocity.slide(wall_normal). Speed into the wall goes, speed along it
+      // stays, and a slope -- which is a floor, not a wall -- is untouched.
+      (void)before;
       if (!tuned("NOWRITEBACK", 0.0F)) {
-        const glm::vec3 moved = character->position() - before;
-        const glm::vec3 wanted{velocity.x * k_dt, 0.0F, velocity.z * k_dt};
-        const glm::vec3 blocked{wanted.x - moved.x, 0.0F, wanted.z - moved.z};
-        const float missed = glm::length(blocked);
-        if (missed > 0.001F) {
-          const glm::vec3 n = blocked / missed;
-          speed -= n * std::max(0.0F, glm::dot(speed, n));
-        }
+        const glm::vec3 wall = character->wall_normal();
+        if (glm::dot(wall, wall) > 0.0F)
+          speed -= wall * glm::dot(speed, wall);
       }
     }
   };
@@ -911,6 +912,105 @@ void test_a_wall_takes_your_speed_away() {
   check(frames_stuck < 8, "and backing off starts at once rather than after a wind-down");
 }
 
+
+// Up a 45 degree ramp and out onto the landing, with the game's WHOLE movement
+// rule -- acceleration ramp, slope compensation, floor snap, and the write-back
+// that takes your speed away when something is in the way.
+//
+// Reported as: "I shoot forward a little bit, not into the air, but I go fast,
+// and then all of a sudden I'm stopped instantly. Like, after I've already
+// summited the ramp, like a metre after walking away from the ramp."
+//
+// Two symptoms, so the trace records two things: the horizontal speed the
+// character actually achieved each frame, and the accumulator that is supposed
+// to be driving it. A spike in the first is the shoot-forward; a collapse in the
+// second is the stop.
+void test_cresting_a_ramp_does_not_launch_then_stall() {
+  std::printf("cresting a ramp\n");
+
+  engine::physics::PhysicsWorld world;
+  const engine::MeshSource ground = make_ramp_to_landing(3.0F);
+  auto character = spawn_on(world, ground);
+  check(character->is_on_ground(), "the character lands on the flat approach");
+
+  glm::vec3 speed{0.0F};
+  engine::physics::GroundMotion motion(k_accelerate, k_decelerate);
+  const int frames = static_cast<int>(6.0F / k_dt);
+  float fastest = 0.0F;
+  float fastest_at_x = 0.0F;
+  float slowest_after_crest = k_speed;
+  float slowest_at_x = 0.0F;
+  int stalled_frames = 0;
+  int overspeed_frames = 0;
+  float overspeed_distance = 0.0F;
+
+  for (int f = 0; f < frames; ++f) {
+    const glm::vec3 before = character->position();
+
+    const bool grounded = character->is_on_ground();
+    glm::vec3 velocity = motion.plan(*character, {k_speed, 0.0F, 0.0F}, k_dt);
+    if (!grounded)
+      velocity.y = std::max(character->linear_velocity().y - 9.81F * k_dt, -50.0F);
+
+    character->set_velocity(velocity);
+    const bool hold = grounded && velocity.y <= 0.0F;
+    character->update(k_dt, hold ? engine::physics::Character::k_floor_snap : 0.0F,
+                      hold ? engine::physics::Character::k_step_height : 0.0F);
+    world.step(k_dt);
+
+    glm::vec3 moved = character->position() - before;
+    moved += motion.finish_climb(*character, moved, k_dt, [&](const glm::vec3 &v) {
+      const glm::vec3 at = character->position();
+      character->set_velocity(v);
+      character->update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
+      return character->position() - at;
+    });
+    motion.resolve(*character);
+    speed = motion.velocity();
+
+    const float achieved = std::hypot(moved.x, moved.z) / k_dt;
+    const float x = character->position().x;
+    if (achieved > fastest) {
+      fastest = achieved;
+      fastest_at_x = x;
+    }
+    if (achieved > k_speed * 1.02F) {
+      ++overspeed_frames;
+      overspeed_distance += (achieved - k_speed) * k_dt;
+    }
+    // "A metre after walking away from the ramp" -- the landing starts at x = 3.
+    if (x > 3.5F) {
+      if (achieved < slowest_after_crest) {
+        slowest_after_crest = achieved;
+        slowest_at_x = x;
+      }
+      if (achieved < k_speed * 0.5F)
+        ++stalled_frames;
+    }
+    if (std::getenv("TRACE_RAMP") != nullptr && f % 4 == 0)
+      std::printf("      f%-3d x=%6.2f y=%5.2f  achieved=%5.2f  accumulator=%5.2f  up=%.3f\n", f,
+                  static_cast<double>(x), static_cast<double>(character->position().y),
+                  static_cast<double>(achieved), static_cast<double>(glm::length(speed)),
+                  static_cast<double>(character->ground_normal().y));
+  }
+
+  std::printf("    fastest %.2f m/s at x = %.2f (walk is %.2f)\n", static_cast<double>(fastest),
+              static_cast<double>(fastest_at_x), static_cast<double>(k_speed));
+  std::printf("    past the crest: slowest %.2f m/s at x = %.2f, %d frames under half speed\n",
+              static_cast<double>(slowest_after_crest), static_cast<double>(slowest_at_x),
+              stalled_frames);
+  std::printf("    overspeed on %d frames, %.1f cm of extra travel in total\n",
+              overspeed_frames, static_cast<double>(overspeed_distance * 100.0F));
+  std::printf("    ended at x = %.2f\n", static_cast<double>(character->position().x));
+
+  // Nothing may go FASTER than the walk. Constant speed means constant, and an
+  // overspeed at the crest is the compensation still being applied after the
+  // ground it was compensating for has gone.
+  check(fastest < k_speed * 1.15F, "cresting a ramp does not shoot you forward");
+  // And nothing may stall on the flat afterwards.
+  check(stalled_frames == 0, "and does not stop you dead once you are over it");
+}
+
 int main() {
   test_walks_up_a_45_degree_slope();
   test_speed_is_the_same_uphill_as_on_the_flat();
@@ -922,6 +1022,7 @@ int main() {
   test_the_slope_compensation_cannot_run_away();
   test_walking_into_the_side_of_a_stair_does_not_climb_it();
   test_a_wall_takes_your_speed_away();
+  test_cresting_a_ramp_does_not_launch_then_stall();
   test_walking_into_a_one_metre_step_does_not_climb_it();
   test_a_jump_still_gets_onto_the_step();
   test_bumping_your_head_stops_the_jump();

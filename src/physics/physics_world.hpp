@@ -27,6 +27,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -590,6 +591,44 @@ public:
       return {0.0F, 1.0F, 0.0F};
     const JPH::Vec3 n = character_->GetGroundNormal();
     return {n.GetX(), n.GetY(), n.GetZ()};
+  }
+
+  // The wall the character is pressed against, or zero if it is not touching
+  // one. Points away from the wall, toward the character.
+  //
+  // A WALL, specifically: a contact too steep to stand on. That distinction is
+  // the whole reason this exists. Speed lost to a wall should be gone, and speed
+  // lost to a slope should not -- climbing costs horizontal distance because the
+  // ground goes up, not because anything blocked you -- and the two are
+  // indistinguishable if you try to infer them from how far the character
+  // actually moved, which is what the first version of the write-back did. It
+  // zeroed your speed the moment you set foot on a ramp.
+  //
+  // Godot classifies every collision the same way and by the same test
+  // (character_body_3d.cpp, _set_collision_direction): floor if the normal is
+  // within the slope limit of up, ceiling if it is within the limit of down,
+  // wall otherwise. Several walls at once are averaged, which is what stops a
+  // corner picking one of its two faces and jittering between them.
+  [[nodiscard]] auto wall_normal() const -> glm::vec3 {
+    const float limit = std::cos(JPH::DegreesToRadians(k_max_slope_degrees));
+    JPH::Vec3 sum = JPH::Vec3::sZero();
+    int walls = 0;
+    for (const JPH::CharacterContact &contact : character_->GetActiveContacts()) {
+      if (!contact.mHadCollision)
+        continue;
+      const JPH::Vec3 n = contact.mSurfaceNormal;
+      const float up = n.GetY();
+      if (up >= limit || up <= -limit)
+        continue; // floor or ceiling, not a wall
+      sum += n;
+      ++walls;
+    }
+    if (walls == 0)
+      return {0.0F, 0.0F, 0.0F};
+    if (sum.IsNearZero())
+      return {0.0F, 0.0F, 0.0F}; // two opposed walls: wedged, no direction to slide
+    sum = sum.Normalized();
+    return {sum.GetX(), sum.GetY(), sum.GetZ()};
   }
 
   [[nodiscard]] auto is_on_ground() const -> bool {
