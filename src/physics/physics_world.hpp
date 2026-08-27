@@ -507,6 +507,7 @@ public:
         JPH::Quat::sIdentity(),
         &world_.physics_system());
     character_->SetListener(&contact_listener_);
+    current_height_ = height + 2.0F * radius;
   }
 
   ~Character() { delete character_; }
@@ -635,6 +636,40 @@ public:
     return character_->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
   }
 
+  // Swaps the capsule for a shorter one, or back, keeping the FEET where they
+  // are. Returns false if the new shape does not fit, which is the whole point
+  // of asking: standing up under a ceiling has to fail rather than push the
+  // character through it.
+  //
+  // Jolt's position is the shape's origin, and the shape is a capsule centred on
+  // it, so the centre is half the total height above the feet. Changing the
+  // height therefore has to move the position by half the difference or the
+  // character grows and shrinks from its middle -- which reads as sinking into
+  // the floor when you go down and hopping when you get up.
+  auto try_set_height(float total_height, float radius) -> bool {
+    const float half = std::max(0.5F * total_height - radius, 0.01F);
+    JPH::Ref<JPH::CapsuleShape> shape = new JPH::CapsuleShape(half, radius);
+
+    const float was = current_height_;
+    const float rise = 0.5F * (total_height - was);
+    const JPH::RVec3 at = character_->GetPosition();
+    character_->SetPosition({at.GetX(), at.GetY() + rise, at.GetZ()});
+
+    const bool fitted = character_->SetShape(
+        shape, k_shape_penetration,
+        world_.physics_system().GetDefaultBroadPhaseLayerFilter(Layers::kMoving),
+        world_.physics_system().GetDefaultLayerFilter(Layers::kMoving), {}, {},
+        world_.temp_allocator());
+    if (!fitted) {
+      character_->SetPosition(at); // put it back exactly where it was
+      return false;
+    }
+    current_height_ = total_height;
+    return true;
+  }
+
+  [[nodiscard]] auto height() const -> float { return current_height_; }
+
   void set_max_strength(float s) { character_->SetMaxStrength(s); }
   // How much of a penetration the controller works off per step. 1 means all of
   // it, in one frame, which is a teleport whenever the capsule has sunk into
@@ -648,8 +683,15 @@ public:
   void set_allow_sliding(bool allow) { contact_listener_.allow_sliding_ = allow; }
 
 private:
+  // How much the new shape may already be inside something and still be
+  // accepted. A shape swap is not a teleport: a couple of centimetres is the
+  // controller's own margin and penetration recovery will work it off, where a
+  // larger tolerance would let a character stand up into a ceiling.
+  static constexpr float k_shape_penetration = 0.02F;
+
   PhysicsWorld &world_;
   JPH::CharacterVirtual *character_{nullptr};
+  float current_height_{0.0F};
 
   class ContactBlocker : public JPH::CharacterContactListener {
   public:

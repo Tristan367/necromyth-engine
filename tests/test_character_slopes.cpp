@@ -1011,6 +1011,81 @@ void test_cresting_a_ramp_does_not_launch_then_stall() {
   check(stalled_frames == 0, "and does not stop you dead once you are over it");
 }
 
+
+// A floor with a slab over part of it, leaving `gap` voxels of headroom.
+auto make_low_gap(float gap, float size = 40.0F) -> engine::MeshSource {
+  engine::MeshSource mesh;
+  const auto quad = [&mesh](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d) {
+    const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+    for (const glm::vec3 &p : {a, b, c, d}) {
+      engine::MeshVertex v{};
+      v.pos[0] = p.x;
+      v.pos[1] = p.y;
+      v.pos[2] = p.z;
+      mesh.vertices.push_back(v);
+    }
+    mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+  };
+  const float h = size * 0.5F;
+  quad({-size, 0, -h}, {size, 0, -h}, {size, 0, h}, {-size, 0, h});           // floor
+  // The slab, from x = 0 to x = 6, its underside at `gap`.
+  quad({0, gap, -h}, {6, gap, -h}, {6, gap, h}, {0, gap, h});
+  quad({0, gap + 1, -h}, {6, gap + 1, -h}, {6, gap + 1, h}, {0, gap + 1, h});
+  quad({0, gap, -h}, {0, gap + 1, -h}, {0, gap + 1, h}, {0, gap, h});         // the near face
+  return mesh;
+}
+
+// Going flat to get under something, and not being able to stand back up while
+// still under it.
+//
+// The engine half of the design's "crawling through one-voxel gaps... it should
+// just happen". The game decides WHEN; this is the part that has to be true for
+// the decision to be safe -- shrinking keeps the feet where they are, and
+// standing up under a ceiling FAILS rather than shoving the character through
+// it.
+void test_the_capsule_can_go_flat_and_back() {
+  std::printf("going flat\n");
+
+  engine::physics::PhysicsWorld world;
+  const engine::MeshSource ground = make_low_gap(1.0F);
+  auto character = spawn_on(world, ground);
+  check(character->is_on_ground(), "the character lands on the floor");
+
+  const float standing = character->height();
+  const float feet_before = character->position().y - standing * 0.5F;
+
+  // Out in the open, where there is room either way.
+  check(character->try_set_height(0.9F, 0.25F), "it can go flat in the open");
+  const float feet_flat = character->position().y - character->height() * 0.5F;
+  std::printf("    standing %.2f m, flat %.2f m; feet moved %.3f m\n",
+              static_cast<double>(standing), static_cast<double>(character->height()),
+              static_cast<double>(std::abs(feet_flat - feet_before)));
+  check(std::abs(feet_flat - feet_before) < 0.02F, "and its feet stay where they were");
+  check(character->try_set_height(standing, 0.25F), "and it can stand back up");
+
+  // Now crawl in under the slab.
+  check(character->try_set_height(0.9F, 0.25F), "flat again");
+  // Stopped in the middle of the slab rather than driven through it: the point
+  // of the next check is that it cannot stand up WHILE under something, and it
+  // crawls the whole six metres and out the far side in well under two seconds
+  // if you let it.
+  for (int i = 0; i < 180 && character->position().x < 3.0F; ++i) {
+    character->set_velocity({k_speed, 0.0F, 0.0F});
+    character->update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
+    world.step(k_dt);
+  }
+  const float under = character->position().x;
+  std::printf("    crawled to x = %.2f (the slab runs from 0 to 6)\n",
+              static_cast<double>(under));
+  check(under > 1.0F && under < 6.0F, "it gets in under a one-metre gap");
+
+  // And it must not be able to stand up in there.
+  check(!character->try_set_height(standing, 0.25F),
+        "and cannot stand up while it is under the slab");
+  check(std::abs(character->height() - 0.9F) < 0.001F,
+        "so it is still flat, rather than half-changed");
+}
+
 int main() {
   test_walks_up_a_45_degree_slope();
   test_speed_is_the_same_uphill_as_on_the_flat();
@@ -1023,6 +1098,7 @@ int main() {
   test_walking_into_the_side_of_a_stair_does_not_climb_it();
   test_a_wall_takes_your_speed_away();
   test_cresting_a_ramp_does_not_launch_then_stall();
+  test_the_capsule_can_go_flat_and_back();
   test_walking_into_a_one_metre_step_does_not_climb_it();
   test_a_jump_still_gets_onto_the_step();
   test_bumping_your_head_stops_the_jump();
