@@ -1092,7 +1092,11 @@ auto make_hole_in_a_wall(float sill, float size = 40.0F) -> engine::MeshSource {
 void test_how_high_a_crawl_hole_can_be() {
   std::printf("getting through a hole in a wall\n");
 
-  const auto gets_through = [](float sill) {
+  // `step` is the step-up the caller allows while flat. The game gives a
+  // crawling body a voxel and a bit and a standing one nothing at all, so both
+  // are measured here: the window has to be reachable, and the staircase must
+  // not become climbable again as a side effect.
+  const auto gets_through = [](float sill, float step) {
     engine::physics::PhysicsWorld world;
     const engine::MeshSource ground = make_hole_in_a_wall(sill);
     world.create_static_mesh(ground, glm::vec3(0.0F));
@@ -1109,7 +1113,7 @@ void test_how_high_a_crawl_hole_can_be() {
     character->try_set_height(0.9F, 0.25F);
     for (int i = 0; i < 400; ++i) {
       character->set_velocity({k_speed, 0.0F, 0.0F});
-      character->update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
+      character->update(k_dt, engine::physics::Character::k_floor_snap, step);
       world.step(k_dt);
       if (character->position().x > 2.0F)
         return true;
@@ -1117,14 +1121,28 @@ void test_how_high_a_crawl_hole_can_be() {
     return false;
   };
 
-  const bool at_the_floor = gets_through(0.0F);
-  const bool one_up = gets_through(1.0F);
-  std::printf("    hole at floor level: %s   one voxel up: %s\n",
-              at_the_floor ? "through" : "blocked", one_up ? "through" : "blocked");
+  // What the game passes: k_crawl_step_up flat, zero standing.
+  constexpr float k_crawl_step = 1.1F;
+
+  const bool at_the_floor = gets_through(0.0F, k_crawl_step);
+  const bool window_height = gets_through(1.0F, k_crawl_step);
+  const bool window_without_the_step = gets_through(1.0F, 0.0F);
+
+  std::printf("    crawling, hole at floor level: %s\n", at_the_floor ? "through" : "blocked");
+  std::printf("    crawling, hole one voxel up:   %s\n", window_height ? "through" : "blocked");
+  std::printf("    with no step-up at all:        %s\n",
+              window_without_the_step ? "through" : "blocked");
+
   check(at_the_floor, "a hole at floor level is crawlable");
-  // Whatever the answer, it is recorded rather than assumed. See the note in
-  // DESIGN_NOTES on what a broken window actually needs.
-  std::printf("    (a broken window sits one voxel above the floor)\n");
+  // The correction. A window sits one voxel above the floor, and the player has
+  // to be able to use one -- "if zombies can crawl through windows, players can
+  // crawl through windows too". I had recorded the opposite as a limitation.
+  check(window_height, "and so is a hole at window height, flat on your belly");
+  // And the reason it is safe: the climb belongs to the crawl, not to the body.
+  // A standing character gets no step-up, which is what stopped you walking up
+  // the side of a staircase.
+  check(!window_without_the_step,
+        "which is the crawl's step-up doing it -- without one, the sill still blocks");
 }
 
 // Going flat to get under something, and not being able to stand back up while
