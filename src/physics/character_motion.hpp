@@ -24,21 +24,14 @@ namespace engine::physics {
 //
 //   the accumulator   velocity is STATE, ramped toward the input, not recomputed
 //                     from it. Godot keeps it on the node for the same reason.
-//   constant speed    climbing must not cost ground speed, because the things
-//                     chasing you path over terrain at a flat rate.
 //   the write-back    whatever the character was stopped from doing comes out of
 //                     the velocity. Godot's velocity.slide(wall_normal).
 //
-// Godot's slide loop runs several sweeps per frame, which is what lets it top
-// the motion up using distance already travelled THIS frame rather than guessing
-// in advance. So this runs two: see top_up().
+// Godot's third piece, floor_constant_speed, is deliberately NOT here. See the
+// note further down: it works, and it made diagonal climbing feel like being
+// shoved sideways.
 class GroundMotion {
 public:
-  // Godot's max_slides is 6. Four extra passes takes a 45 degree climb from 83%
-  // of flat speed to within a percent of it, and each further pass halves what
-  // is left, so more would be measuring noise.
-  static constexpr int k_max_climb_passes = 4;
-
   GroundMotion(float acceleration, float deceleration)
       : acceleration_(acceleration), deceleration_(deceleration) {}
 
@@ -72,93 +65,39 @@ public:
     return direction * speed;
   }
 
-  // The extra motion to sweep AFTER the first one, or zero if there is none.
+  // There is no constant-speed rule here, deliberately, and this is the second
+  // time this has been rewritten.
   //
-  // This is Godot's constant-speed rule, and it is the reason there are two
-  // sweeps rather than one:
+  // Godot has one -- floor_constant_speed -- and this used to port it: run the
+  // sweep, measure the horizontal distance actually covered against the distance
+  // asked for, and sweep the shortfall again, up to four passes. It worked as
+  // specified. A 45 degree climb ran at 98% of flat ground instead of 71%, with
+  // no overshoot at the crest.
   //
-  //     motion = motion.normalized() * MAX(0, motion_slide_up.length()
-  //                                           - travel_slide_up.length())
+  // It felt wrong anyway, and the report says exactly why:
   //
-  // -- the horizontal distance asked for, minus the horizontal distance ALREADY
-  // TRAVELLED this frame. A measurement, not a prediction, and that is the whole
-  // difference. Climbing costs ground speed because the ground goes up; giving
-  // it back has to be conditioned on the climb having actually happened, and
-  // only a second look inside the same frame can know that.
+  //   "if I go up a ramp diagonally, and I'm going forward and to the left, then
+  //   it pushes me to the left a little bit... I guess slide more to the left,
+  //   because going up is harder for me than going sideways. But because you
+  //   have it where our speed never changes, it feels like I'm dashing to the
+  //   side."
   //
-  // Two things were tried before this and both failed at the crest, which is
-  // exactly where a prediction has to be wrong:
+  // That is the rule working as designed, and the design being wrong for this
+  // game. Climbing diagonally, the sweep is resisted along the uphill component
+  // and not at all across it, so the character is deflected sideways. Restoring
+  // the total DISTANCE then feeds that deflection: you keep full speed, and the
+  // speed you keep is pointing further sideways than you asked for. Constant
+  // speed does not mean constant direction, and it is direction the hands feel.
   //
-  //   scale by 1/cos^2   Correct about the geometry, wrong about the timing. The
-  //                      normal under the capsule still says ramp for several
-  //                      frames after the ground has flattened, so the scale
-  //                      keeps being applied to ground that does not need it.
-  //                      Measured 5.6 m/s against a 4.0 m/s walk for five frames
-  //                      -- "I shoot forward a little bit... I go fast".
-  //   carry the shortfall
-  //                      Repay last frame's lost distance this frame. Converges
-  //                      to exactly constant speed on a steady slope, and still
-  //                      overshoots at the crest, because the frame that
-  //                      straddles it spends a debt earned on the ramp over
-  //                      ground that is already flat. 5.7 m/s.
+  // So: climbing costs speed now, which is what the ground is for. Nothing is
+  // topped up, nothing is deflected by being topped up, and the whole rule is
+  // one sweep.
   //
-  // Measuring within the frame cannot overshoot: the top-up is bounded by
-  // distance the character demonstrably failed to cover, so on flat ground there
-  // is nothing to give back and the rule does not fire at all.
-  //
-  // Gated on walkable ground for the reason Godot gates its top-up on the
-  // surface having been classified as floor: a momentary contact with an edge or
-  // a wall face reports a steep normal, and topping up against one of those is
-  // how a character gets fired off a kerb.
-  // Runs the rest of Godot's slide loop and returns the extra distance covered.
-  //
-  // `sweep` performs one controller move and returns the displacement it
-  // produced -- set_velocity, update, and the difference in position. It must
-  // NOT step the rigid-body world: those have had their frame, and this only
-  // moves the character.
-  //
-  // It iterates because one extra sweep is not enough. The top-up motion goes up
-  // the same slope the first one did, so it loses the same fraction: on a 45
-  // degree ramp the first sweep covers half the distance asked for, the second
-  // covers half of what is left, and the total is three quarters. Measured that
-  // way a 45 degree climb ran at 83% of flat ground -- better than the 71% of no
-  // compensation at all, and still an uphill tax. Godot iterates up to
-  // max_slides for exactly this reason; four passes puts a 45 degree climb
-  // within a percent, and the loop exits as soon as there is nothing owed, so
-  // flat ground pays for one comparison and nothing else.
-  template <typename Sweep>
-  auto finish_climb(const Character &character, glm::vec3 moved, float dt, const Sweep &sweep)
-      -> glm::vec3 {
-    glm::vec3 extra{0.0F};
-    for (int pass = 0; pass < k_max_climb_passes; ++pass) {
-      const glm::vec3 velocity = top_up(character, moved, dt);
-      if (glm::dot(velocity, velocity) <= 0.0F)
-        break;
-      const glm::vec3 step = sweep(velocity);
-      extra += step;
-      moved += step;
-      // No progress means something is in the way rather than under us, and
-      // asking again would only press harder into it.
-      if (std::hypot(step.x, step.z) < 0.0005F)
-        break;
-    }
-    return extra;
-  }
-
-  [[nodiscard]] auto top_up(const Character &character, const glm::vec3 &moved, float dt) const
-      -> glm::vec3 {
-    if (dt <= 0.0F || planned_ <= 0.0F)
-      return {0.0F, 0.0F, 0.0F};
-    if (!character.is_on_ground() || character.ground_normal().y <= 0.5F)
-      return {0.0F, 0.0F, 0.0F};
-
-    const float travelled = std::hypot(moved.x, moved.z);
-    const float owed = planned_ - travelled;
-    // A millimetre is the controller's own margin, not a climb.
-    if (owed <= 0.001F)
-      return {0.0F, 0.0F, 0.0F};
-    return direction_ * (owed / dt);
-  }
+  // The reason it was ported in the first place was fairness -- "the things
+  // chasing you path over terrain at a flat rate", so a player slowed by a hill
+  // is a player the horde catches for free. That is answered where it should
+  // have been answered in the first place: zombies pay the same tax. See
+  // Mob::slope_speed_factor.
 
   // Call once both sweeps are done.
   void resolve(const Character &character) {

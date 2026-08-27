@@ -134,15 +134,7 @@ auto walk_along(engine::physics::PhysicsWorld &world, engine::physics::Character
                      hold_ground ? tuned("STEP", engine::physics::Character::k_step_height) : 0.0F);
     world.step(k_dt);
 
-    // The rest of Godot's slide loop: top the horizontal motion up by what the
-    // climb ate, measured, until nothing is owed.
-    motion.finish_climb(character, character.position() - previous, k_dt,
-                        [&](const glm::vec3 &v) {
-                          const glm::vec3 at = character.position();
-                          character.set_velocity(v);
-                          character.update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
-                          return character.position() - at;
-                        });
+    // No constant-speed top-up: climbing costs speed. See character_motion.hpp.
     motion.resolve(character);
 
     const glm::vec3 now = character.position();
@@ -419,16 +411,45 @@ void test_speed_is_the_same_uphill_as_on_the_flat() {
   const float steep = distance_on(1.0F);
 
   check(flat > 8.0F, "the flat baseline covers ground");
-  // Within a tolerance: the controller still has to resolve contacts, and the
-  // first frames spend a little settling onto the slope.
   std::printf("    flat %.1f m, 27 degrees %.1f m (%.0f%%), 45 degrees %.1f m (%.0f%%)\n",
               static_cast<double>(flat), static_cast<double>(gentle),
               static_cast<double>(gentle / flat * 100.0F), static_cast<double>(steep),
               static_cast<double>(steep / flat * 100.0F));
-  check(std::abs(gentle - flat) < flat * 0.15F,
-        "a 27 degree climb covers the same ground as the flat");
-  check(std::abs(steep - flat) < flat * 0.15F,
-        "and so does a 45 degree climb -- no uphill tax");
+
+  // Climbing COSTS speed, and this asserts how much.
+  //
+  // These checks used to say the opposite -- that a climb covers the same
+  // ground as the flat, no uphill tax -- because the controller ported Godot's
+  // floor_constant_speed. That rule is gone: it made diagonal climbing feel like
+  // being shoved sideways, because holding the speed constant while the sweep
+  // deflects you uphill means the speed you keep points somewhere you did not
+  // ask for.
+  //
+  // What replaces it is the number the horde already pays. Mob::slope_speed_factor
+  // scales a zombie's speed by 1/sqrt(1 + gradient^2) -- the cosine of the
+  // slope -- and a sliding sweep against the same slope produces the same
+  // fraction on its own, without anything having to arrange it. So the fairness
+  // the constant-speed rule was there to protect ("the things chasing you path
+  // over terrain at a flat rate") holds by the two mechanisms agreeing, rather
+  // than by cancelling the tax on one side.
+  //
+  // A tenth of tolerance: the controller still resolves contacts, and the first
+  // frames spend a little settling onto the slope, both of which cost distance
+  // the cosine does not know about.
+  const auto horde_factor = [](float gradient) {
+    return 1.0F / std::sqrt(1.0F + gradient * gradient);
+  };
+  const float gentle_expected = horde_factor(0.5F); // 27 degrees
+  const float steep_expected = horde_factor(1.0F);  // 45 degrees
+  std::printf("    a zombie on the same ground keeps %.0f%% and %.0f%%\n",
+              static_cast<double>(gentle_expected * 100.0F),
+              static_cast<double>(steep_expected * 100.0F));
+
+  check(gentle < flat && steep < gentle, "climbing costs ground, and steeper costs more");
+  check(std::abs(gentle / flat - gentle_expected) < 0.10F,
+        "a 27 degree climb costs what a zombie's 27 degree climb costs");
+  check(std::abs(steep / flat - steep_expected) < 0.10F,
+        "and a 45 degree climb costs what a zombie's does -- the hill is fair");
 }
 
 void test_a_wall_is_still_a_wall() {
@@ -958,13 +979,7 @@ void test_cresting_a_ramp_does_not_launch_then_stall() {
                       hold ? engine::physics::Character::k_step_height : 0.0F);
     world.step(k_dt);
 
-    glm::vec3 moved = character->position() - before;
-    moved += motion.finish_climb(*character, moved, k_dt, [&](const glm::vec3 &v) {
-      const glm::vec3 at = character->position();
-      character->set_velocity(v);
-      character->update(k_dt, engine::physics::Character::k_floor_snap, 0.0F);
-      return character->position() - at;
-    });
+    const glm::vec3 moved = character->position() - before;
     motion.resolve(*character);
     speed = motion.velocity();
 
