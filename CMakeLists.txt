@@ -446,7 +446,7 @@ if(VCE_BUILD_TESTS)
     # run by ctest. Exercises mesh streaming (create / remesh / drop under
     # frames in flight) against the validation layers, which is the only way to
     # catch a buffer freed while still referenced.
-    foreach(GPU_PROG stress_mesh_streaming stress_skinned_horde bench_point_shadows bench_allocation test_device_allocator)
+    foreach(GPU_PROG stress_mesh_streaming stress_skinned_horde bench_point_shadows bench_allocation test_device_allocator test_upload_queue)
         add_executable(vce_${GPU_PROG} tests/${GPU_PROG}.cpp)
         target_link_libraries(vce_${GPU_PROG} PRIVATE vce_renderer)
         # For gpu_test_support.hpp, which turns validation output into a

@@ -216,6 +216,9 @@ public:
   }
 
   [[nodiscard]] auto device_ref() -> vk::raii::Device & { return device_.device(); }
+  // For tests that have to record their own command buffer -- they need the
+  // graphics queue family to make a pool, which nothing else outside here does.
+  [[nodiscard]] auto gpu() -> VulkanDevice & { return device_; }
   [[nodiscard]] auto color_fmt() const -> vk::Format { return swapchain_.image_format(); }
   [[nodiscard]] auto depth_fmt() const -> vk::Format { return depth_image_.format(); }
   [[nodiscard]] auto frame_layout_obj() const -> vk::DescriptorSetLayout { return descriptor_resources_.frame_layout(); }

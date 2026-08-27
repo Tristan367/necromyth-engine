@@ -92,7 +92,8 @@ public:
   DeviceLocalBuffer(DeviceLocalBuffer &&other) noexcept
       : buffer_(std::move(other.buffer_)),
         allocator_(std::exchange(other.allocator_, nullptr)),
-        allocation_(std::exchange(other.allocation_, {})) {}
+        allocation_(std::exchange(other.allocation_, {})),
+        pending_queue_(std::exchange(other.pending_queue_, nullptr)) {}
 
   auto operator=(DeviceLocalBuffer &&other) noexcept -> DeviceLocalBuffer & {
     if (this != &other) {
@@ -100,6 +101,7 @@ public:
       buffer_ = std::move(other.buffer_);
       allocator_ = std::exchange(other.allocator_, nullptr);
       allocation_ = std::exchange(other.allocation_, {});
+      pending_queue_ = std::exchange(other.pending_queue_, nullptr);
     }
     return *this;
   }
@@ -194,7 +196,13 @@ public:
     allocator_ = &allocator;
     buffer_.bindMemory(allocation_.memory, allocation_.offset);
 
-    return uploads.stage(*buffer_, size, data);
+    if (!uploads.stage(*buffer_, size, data))
+      return false;
+    // Remember where the copy is queued, so this buffer can withdraw it if it
+    // is destroyed or re-uploaded before the queue is flushed. See
+    // UploadQueue::cancel.
+    pending_queue_ = &uploads;
+    return true;
   }
 
   [[nodiscard]] auto handle() const -> vk::Buffer {
@@ -203,6 +211,12 @@ public:
 
 private:
   void release() {
+    // Withdraw the queued copy BEFORE the handle goes away, not after: once
+    // vk::raii::Buffer has run its destructor there is no handle left to name.
+    if (pending_queue_ != nullptr) {
+      pending_queue_->cancel(*buffer_);
+      pending_queue_ = nullptr;
+    }
     if (allocator_ != nullptr)
       allocator_->free(allocation_);
     allocator_ = nullptr;
@@ -210,6 +224,11 @@ private:
   }
 
   vk::raii::Buffer buffer_{nullptr};
+  // The queue holding a copy into this buffer that has not been recorded yet,
+  // or null when there is none outstanding. Set by upload_deferred, cleared by
+  // release. Not an ownership pointer: the queue lives in the VulkanContext and
+  // outlives every buffer that stages into it.
+  UploadQueue *pending_queue_{nullptr};
   // Only set on the pooled path (upload_deferred). The blocking upload() above
   // is startup-only and keeps its own dedicated allocation.
   vk::raii::DeviceMemory memory_{nullptr};

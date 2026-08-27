@@ -68,8 +68,26 @@ public:
       return;
     current_frame_ = frame_counter;
     started_ = true;
-    segment_base_ = static_cast<vk::DeviceSize>(frame_index % segment_count_) * segment_size_;
-    offset_ = 0;
+    const auto base = static_cast<vk::DeviceSize>(frame_index % segment_count_) * segment_size_;
+
+    // Copies left over from a frame that never rendered are NOT dropped.
+    //
+    // draw_frame returns early on a swapchain resize, a minimised window and an
+    // out-of-date acquire -- all of them after sync_scene has already staged
+    // this frame's geometry. The mesh slots have been marked uploaded by then,
+    // so dropping the copies would leave those buffers holding whatever the
+    // pool last had in them and nothing would ever ask for them again. They
+    // have to survive to the next frame that actually records.
+    //
+    // Their source bytes live at absolute offsets in the ring, so a different
+    // segment leaves them alone. Landing back on the SAME segment is the one
+    // case that would overwrite them, and there the offset has to carry over
+    // instead of restarting -- which costs the frame a little staging room and
+    // nothing else, because the segment is sized for a frame's worth of
+    // uploads and a frame that never rendered did not spend its share.
+    if (copies_.empty() || base != segment_base_)
+      offset_ = 0;
+    segment_base_ = base;
   }
 
   // Copies `data` into this frame's staging segment and records a copy into
@@ -95,6 +113,28 @@ public:
                            .size = size});
     offset_ += size;
     return true;
+  }
+
+  // Forgets every queued copy into `destination`. Called by the buffer that
+  // owns the handle, on its way out.
+  //
+  // A staged copy holds a raw VkBuffer and flush() replays it later -- so
+  // between the two, that buffer has to still exist. It did not always. A mesh
+  // slot re-uploaded before the flush destroys and recreates its buffer inside
+  // upload_deferred, and a frame that never rendered carries its copies into
+  // the next one, where sync_scene rebuilds the geometry underneath them.
+  // Either way vkCmdCopyBuffer is handed a handle that no longer names
+  // anything, which is what the validation layer was reporting.
+  //
+  // Cancelling at the owner rather than validating at the flush is the only
+  // version that can be right: once the buffer is gone there is nothing left
+  // to ask.
+  void cancel(vk::Buffer destination) {
+    if (copies_.empty())
+      return;
+    std::erase_if(copies_, [destination](const Copy &copy) {
+      return copy.destination == destination;
+    });
   }
 
   [[nodiscard]] auto overflowed() const -> bool { return overflowed_; }
