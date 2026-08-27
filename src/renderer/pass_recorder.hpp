@@ -1223,6 +1223,32 @@ struct PassRecorder {
         nullptr);
     command_buffer.draw(3, active_count, 0, 0);
   }
+
+  // The HUD. One instanced draw over every quad the game asked for.
+  //
+  // Last thing in the frame and over everything, which is what a HUD is. The
+  // ordering WITHIN it is simply the order the draw list was built in -- a panel
+  // and then its label -- which needs no sorting because a HUD is authored, not
+  // simulated.
+  void draw_ui(vk::raii::CommandBuffer &command_buffer, std::uint32_t frame_index,
+               std::uint32_t quad_count, vk::Pipeline pipeline, vk::PipelineLayout ui_layout,
+               vk::Extent2D extent) const {
+    if (quad_count == 0 || extent.width == 0 || extent.height == 0)
+      return;
+
+    struct UiPC {
+      glm::vec2 inverse_screen;
+      glm::vec2 pad;
+    } pc{};
+    pc.inverse_screen = {1.0F / static_cast<float>(extent.width),
+                         1.0F / static_cast<float>(extent.height)};
+
+    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+    command_buffer.pushConstants<UiPC>(ui_layout, vk::ShaderStageFlagBits::eVertex, 0, pc);
+    command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, ui_layout, 0,
+                                      descriptors.frame_set(frame_index), nullptr);
+    command_buffer.draw(6, quad_count, 0, 0);
+  }
 };
 
 } // namespace engine

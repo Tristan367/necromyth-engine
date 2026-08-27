@@ -26,6 +26,7 @@ public:
       std::string_view skinned_shadow_depth_spirv,
       std::string_view point_shadow_spirv,
       std::string_view particle_billboard_spirv,
+      std::string_view ui_spirv,
       vk::DescriptorSetLayout frame_layout,
       vk::DescriptorSetLayout material_layout,
       vk::DescriptorSetLayout material_skinned_layout,
@@ -46,6 +47,7 @@ public:
     skinned_shadow_depth_spirv_ = skinned_shadow_depth_spirv;
     point_shadow_spirv_ = point_shadow_spirv;
     particle_billboard_spirv_ = particle_billboard_spirv;
+    ui_spirv_ = ui_spirv;
     pipeline_cache_ = &pipeline_cache;
     profile_ = profile;
 
@@ -66,6 +68,10 @@ public:
 
   [[nodiscard]] auto pipeline_layout_for_particles() const -> vk::PipelineLayout {
     return *particle_pipeline_layout_;
+  }
+
+  [[nodiscard]] auto ui_layout() const -> vk::PipelineLayout {
+    return *ui_pipeline_layout_;
   }
 
   [[nodiscard]] auto pipeline(PipelineId id) const -> vk::Pipeline {
@@ -271,6 +277,29 @@ private:
              .depth_test = true, .depth_write = false,
              .blend_enable = true},
             "vertMain", "fragMain");
+
+    // The HUD.
+    //
+    // No depth at all -- not tested, not written. A HUD is not in the world and
+    // has no business being occluded by it, and the ordering inside the HUD is
+    // simply the order the draw list was built in, which is what a HUD wants:
+    // a panel and then its label.
+    const vk::PushConstantRange ui_pc{
+        .stageFlags = vk::ShaderStageFlagBits::eVertex,
+        .offset = 0,
+        .size = 16,
+    };
+    const std::array ui_set_layouts{frame_layout_};
+    ui_pipeline_layout_ = create_pipeline_layout(device, ui_set_layouts, ui_pc);
+    pipelines_[static_cast<std::size_t>(PipelineId::Ui)] = create_graphics_pipeline(
+        device, color_format_, depth_format_, ui_spirv_, ui_spirv_, *ui_pipeline_layout_,
+        sample_count_, empty_binding, std::span<const vk::VertexInputAttributeDescription>{},
+        *pipeline_cache_,
+        {.cull_mode = vk::CullModeFlagBits::eNone,
+         .front_face = vk::FrontFace::eCounterClockwise,
+         .depth_test = false, .depth_write = false,
+         .blend_enable = true},
+        "vertMain", "fragMain");
   }
 
   vk::DescriptorSetLayout frame_layout_{nullptr};
@@ -280,6 +309,7 @@ private:
   vk::Format depth_format_{};
   vk::Format shadow_depth_format_{};
   vk::SampleCountFlagBits sample_count_{};
+  std::string_view ui_spirv_{};
   std::string_view textured_mesh_spirv_{};
   std::string_view background_spirv_{};
   std::string_view shadow_depth_spirv_{};
@@ -292,7 +322,8 @@ private:
   vk::raii::PipelineLayout pipeline_layout_{nullptr};
   vk::raii::PipelineLayout skinned_pipeline_layout_{nullptr};
   vk::raii::PipelineLayout particle_pipeline_layout_{nullptr};
-  static constexpr auto k_pipeline_count = static_cast<std::size_t>(PipelineId::ParticleBillboard) + 1;
+  vk::raii::PipelineLayout ui_pipeline_layout_{nullptr};
+  static constexpr auto k_pipeline_count = static_cast<std::size_t>(PipelineId::Ui) + 1;
   std::array<std::optional<vk::raii::Pipeline>, k_pipeline_count> pipelines_{};
 };
 

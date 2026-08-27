@@ -32,6 +32,8 @@ enum class PipelineId : std::uint8_t {
   PointShadowDepth = 11,
   PointShadowDepthSkinned = 12,
   ParticleBillboard = 13,
+  // The game's own HUD: screen-space quads, pixel font, one instanced draw.
+  Ui = 14,
 };
 
 inline constexpr auto k_first_textured = static_cast<std::uint8_t>(PipelineId::TexturedOpaque);

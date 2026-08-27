@@ -23,6 +23,7 @@
 #include "renderer/swapchain.hpp"
 #include "renderer/texture_array.hpp"
 #include "renderer/gpu_particle.hpp"
+#include "renderer/ui_renderer.hpp"
 #include "renderer/particle_system.hpp"
 #include "renderer/texture_table.hpp"
 #include "renderer/uniform_buffer.hpp"
@@ -121,6 +122,11 @@ public:
     bone_palette_.create(device_.physical_device(), device_.device(),
                          max_skinned_instances_, detail::max_frames_in_flight);
     create_command_pool();
+    // After the command pool, because uploading the atlas needs one. Built and
+    // uploaded exactly once: the font is compiled into the binary and never
+    // changes.
+    ui_renderer_.create(device_.physical_device(), device_.device(), command_pool_,
+                        device_.graphics_queue());
     gpu_profiler_.create(device_.physical_device(), device_.device(),
                          detail::max_frames_in_flight, device_.queue_families().graphics);
     sync_mesh_slots(scene);
@@ -224,6 +230,10 @@ public:
   [[nodiscard]] auto frame_layout_obj() const -> vk::DescriptorSetLayout { return descriptor_resources_.frame_layout(); }
 
   [[nodiscard]] auto &particle_system() { return particle_system_; }
+  // The HUD. Call begin() on it each frame and draw into it; whatever is in it
+  // when draw_frame runs is what appears, over everything.
+  [[nodiscard]] auto &ui() { return ui_draw_list_; }
+  [[nodiscard]] auto swapchain_extent() const -> vk::Extent2D { return swapchain_.extent(); }
   [[nodiscard]] auto sample_count() const -> vk::SampleCountFlagBits { return device_.msaa_samples(); }
   [[nodiscard]] auto frame_set_obj(std::uint32_t i) const -> vk::DescriptorSet { return descriptor_resources_.frame_set(i); }
   [[nodiscard]] auto phys_dev() -> vk::raii::PhysicalDevice { return device_.physical_device(); }
@@ -671,16 +681,30 @@ public:
 
     const FrameOverlayCallback *overlay_ptr = frame_overlay_ ? &frame_overlay_ : nullptr;
 
+    // The HUD is written now and drawn at the end of the main pass, after the
+    // world and after the particles. Written here rather than inside the lambda
+    // because a memcpy into a mapped buffer is not command recording and has no
+    // business happening between two vkCmd calls.
+    const std::uint32_t ui_quads = ui_renderer_.write(frame_index_, ui_draw_list_);
+    const vk::Extent2D ui_extent = swapchain_.extent();
+
     std::function<void(vk::raii::CommandBuffer &)> post_geometry;
-    if (particle_system_.active_count() > 0) {
+    const bool has_particles = particle_system_.active_count() > 0;
+    if (has_particles)
       particle_system_.upload(frame_index_);
-      post_geometry = [this, &scene](vk::raii::CommandBuffer &cmd) {
-        pass_recorder().draw_particles(
-            cmd, frame_index_, particle_system_.active_count(),
-            pipelines_.pipeline(PipelineId::ParticleBillboard),
-            pipelines_.pipeline_layout_for_particles(),
-            scene.camera().view_projection_matrix(),
-            glm::vec3(scene.camera().right()), glm::vec3(scene.camera().up()));
+    if (has_particles || ui_quads > 0) {
+      post_geometry = [this, &scene, has_particles, ui_quads, ui_extent](
+                          vk::raii::CommandBuffer &cmd) {
+        if (has_particles)
+          pass_recorder().draw_particles(
+              cmd, frame_index_, particle_system_.active_count(),
+              pipelines_.pipeline(PipelineId::ParticleBillboard),
+              pipelines_.pipeline_layout_for_particles(),
+              scene.camera().view_projection_matrix(),
+              glm::vec3(scene.camera().right()), glm::vec3(scene.camera().up()));
+        if (ui_quads > 0)
+          pass_recorder().draw_ui(cmd, frame_index_, ui_quads, pipelines_.pipeline(PipelineId::Ui),
+                                  pipelines_.ui_layout(), ui_extent);
       };
     }
 
@@ -1145,6 +1169,12 @@ private:
       particle_bufs[i] = particle_system_.buffer(i);
     descriptor_resources_.update_particle_ssbo(device_.device(), particle_bufs);
 
+    std::array<vk::Buffer, UiRenderer::k_frames_in_flight> ui_bufs{};
+    for (std::uint32_t i = 0; i < UiRenderer::k_frames_in_flight; ++i)
+      ui_bufs[i] = ui_renderer_.buffer(i);
+    descriptor_resources_.update_ui(device_.device(), ui_bufs, ui_renderer_.atlas_sampler(),
+                                    ui_renderer_.atlas_view());
+
     if (skinned)
       descriptor_resources_.allocate_skinned_sets(
           device_.device(),
@@ -1199,6 +1229,7 @@ private:
         ENGINE_SKINNED_SHADOW_DEPTH_SPIRV,
         ENGINE_POINT_SHADOW_SPIRV,
         ENGINE_PARTICLE_BILLBOARD_SPIRV,
+        ENGINE_UI_SPIRV,
         descriptor_resources_.frame_layout(),
         descriptor_resources_.material_layout(),
         descriptor_resources_.material_skinned_layout(),
@@ -1413,6 +1444,10 @@ private:
   std::uint32_t point_shadow_capacity_{0};    // cubes, i.e. shadow-casting lights
   std::uint32_t spot_shadow_capacity_{k_max_spot_shadow_lights}; // atlas grid slots
   ParticleSystem particle_system_;
+  UiRenderer ui_renderer_;
+  // Rebuilt from nothing every frame by the game. Held here so its storage is
+  // reused rather than reallocated sixty times a second.
+  ui::DrawList ui_draw_list_;
   TextureTable texture_table_;
   TextureArray texture_array_;
   BonePalette bone_palette_;

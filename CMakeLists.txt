@@ -60,6 +60,7 @@ set(VCE_DEBUG_LINE_SPIRV "")
 set(VCE_POINT_SHADOW_SPIRV "")
 set(VCE_NO_POINT_SHADER_SPIRV "")
 set(VCE_PARTICLE_BILLBOARD_SPIRV "")
+set(VCE_UI_SPIRV "")
 
 foreach(SHADER_SOURCE ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME_WE)
@@ -239,6 +240,8 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
         set(VCE_POINT_SHADOW_SPIRV "${SHADER_SPIRV}")
     elseif(SHADER_NAME STREQUAL "particle_billboard")
         set(VCE_PARTICLE_BILLBOARD_SPIRV "${SHADER_SPIRV}")
+    elseif(SHADER_NAME STREQUAL "ui")
+        set(VCE_UI_SPIRV "${SHADER_SPIRV}")
     endif()
 endforeach()
 
@@ -336,6 +339,7 @@ target_compile_definitions(vce_renderer INTERFACE
     ENGINE_NO_POINT_SHADER_SPIRV="${VCE_NO_POINT_SHADER_SPIRV}"
     ENGINE_DEBUG_LINE_SPIRV="${VCE_DEBUG_LINE_SPIRV}"
     ENGINE_PARTICLE_BILLBOARD_SPIRV="${VCE_PARTICLE_BILLBOARD_SPIRV}"
+    ENGINE_UI_SPIRV="${VCE_UI_SPIRV}"
 )
 
 target_link_libraries(vce_renderer INTERFACE

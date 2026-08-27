@@ -74,6 +74,23 @@ public:
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eVertex,
         },
+        // The HUD: one storage buffer of screen-space quads and the pixel-font
+        // atlas they sample. In the FRAME set rather than a set of their own
+        // because the HUD is per frame and nothing else about it varies -- a
+        // second set would be a second thing to allocate, bind and keep in step
+        // for one buffer and one texture.
+        vk::DescriptorSetLayoutBinding{
+            .binding = 9,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex,
+        },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 10,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
     };
 
     const std::array material_bindings{
@@ -149,12 +166,14 @@ public:
             .descriptorCount = frame_count,
         },
         vk::DescriptorPoolSize{
+            // Four per frame, plus one for the pixel-font atlas at binding 10.
             .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = frame_count * 4 + texture_count + skinned_sets,
+            .descriptorCount = frame_count * 5 + texture_count + skinned_sets,
         },
         vk::DescriptorPoolSize{
+            // Four per frame, plus one for the HUD's quads at binding 9.
             .type = vk::DescriptorType::eStorageBuffer,
-            .descriptorCount = frame_count * 4 + skinned_sets,
+            .descriptorCount = frame_count * 5 + skinned_sets,
         },
     };
 
@@ -459,6 +478,40 @@ public:
               .pBufferInfo = &info,
           },
           nullptr);
+    }
+  }
+
+  // The HUD's quads and the pixel-font atlas, bindings 9 and 10.
+  //
+  // Written for EVERY frame set even when the HUD has nothing to draw. A
+  // descriptor a bound set declares must point at something valid whether or not
+  // any shader reads it, and "the HUD happened to be empty this frame" is not a
+  // state the validation layer distinguishes from a bug.
+  void update_ui(vk::raii::Device &device, std::span<const vk::Buffer> buffers,
+                 vk::Sampler atlas_sampler, vk::ImageView atlas_view) {
+    for (std::size_t i = 0; i < frame_sets_.size() && i < buffers.size(); ++i) {
+      if (buffers[i] == vk::Buffer{})
+        continue;
+      const vk::DescriptorBufferInfo quads{
+          .buffer = buffers[i], .offset = 0, .range = vk::WholeSize};
+      const vk::DescriptorImageInfo atlas{
+          .sampler = atlas_sampler,
+          .imageView = atlas_view,
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+      };
+      const std::array writes{
+          vk::WriteDescriptorSet{
+              .dstSet = *frame_sets_[i], .dstBinding = 9, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eStorageBuffer,
+              .pBufferInfo = &quads,
+          },
+          vk::WriteDescriptorSet{
+              .dstSet = *frame_sets_[i], .dstBinding = 10, .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &atlas,
+          },
+      };
+      device.updateDescriptorSets(writes, nullptr);
     }
   }
 
