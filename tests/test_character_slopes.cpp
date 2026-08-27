@@ -15,6 +15,7 @@
 
 #include "physics/physics_world.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +34,20 @@ void check(bool condition, const std::string &what) {
 
 constexpr float k_dt = 1.0F / 60.0F;
 constexpr float k_speed = 4.0F;
+// The ceiling on the constant-speed compensation, matching the game's
+// NM_SLOPE_CAP default. 1/cos^2 is 2 at 45 degrees and 4 at the controller's
+// 60 degree limit, and a 4x boost turns a walk into a launch off the next
+// crest. Godot's version of this rule cannot run away, because it tops the
+// motion up by the distance actually lost and that is bounded by the distance
+// asked for.
+constexpr float k_slope_cap = 2.0F;
+
+// Overrides, so the knobs can be swept in seconds against a deterministic
+// surface instead of over a town whose save drifts between runs.
+[[nodiscard]] auto tuned(const char *name, float fallback) -> float {
+  const char *value = std::getenv(name);
+  return value == nullptr ? fallback : std::strtof(value, nullptr);
+}
 
 // A ground plane that ramps upward at `rise` metres per metre along +X, built
 // as a trimesh the way terrain colliders are.
@@ -92,20 +107,29 @@ auto walk_along(engine::physics::PhysicsWorld &world, engine::physics::Character
 
   const int frames = static_cast<int>(seconds / k_dt);
   for (int frame = 0; frame < frames; ++frame) {
+    const glm::vec3 ground_normal = character.ground_normal();
     glm::vec3 velocity{k_speed, 0.0F, 0.0F};
     if (character.is_on_ground()) {
       // The game's constant-speed rule. Gated on walkable ground, and it
       // scales a horizontal vector rather than rotating one, so it cannot
-      // launch.
-      const float up = character.ground_normal().y;
+      // launch. Capped, because 1/cos^2 runs away to 4 at the slope limit --
+      // see k_slope_cap.
+      const float up = ground_normal.y;
       if (up > 0.5F)
-        velocity *= 1.0F / (up * up);
+        velocity *= std::min(1.0F / (up * up), tuned("SLOPECAP", k_slope_cap));
     } else {
       velocity.y = std::max(character.linear_velocity().y - 9.81F * k_dt, -50.0F);
     }
 
     character.set_velocity(velocity);
-    character.update(k_dt);
+    // Godot's floor-snap rule, which is the game's: you were on the ground and
+    // you are not trying to leave it, so hold on to it -- by a tenth of a
+    // metre, not by more. Same for the stair sweep. Keeping this in step with
+    // main.cpp is the whole value of the harness; it drifted once already and
+    // spent a session measuring a controller nobody plays.
+    const bool hold_ground = character.is_on_ground() && velocity.y <= 0.0F;
+    character.update(k_dt, hold_ground ? tuned("SNAP", engine::physics::Character::k_floor_snap) : 0.0F,
+                     hold_ground ? tuned("STEP", engine::physics::Character::k_step_height) : 0.0F);
     world.step(k_dt);
 
     const glm::vec3 now = character.position();
@@ -117,7 +141,21 @@ auto walk_along(engine::physics::PhysicsWorld &world, engine::physics::Character
                   static_cast<double>(now.y - previous.y),
                   static_cast<double>(velocity.y * k_dt),
                   static_cast<int>(character.is_on_ground()));
-    const float teleport = std::abs((now.y - previous.y) - velocity.y * k_dt);
+    // How far the character rose that the GROUND does not account for.
+    //
+    // Comparing against the character's own vertical velocity is the wrong
+    // question here, because the velocity is horizontal by design and the
+    // capsule does all the climbing -- so on any slope at all, every
+    // centimetre of the climb scores as a teleport. Comparing against the
+    // surface does the right thing: given the horizontal step and the slope
+    // underfoot, the ground says exactly how far up it should have gone.
+    const glm::vec3 step = now - previous;
+    float teleport = 0.0F;
+    if (ground_normal.y > 0.05F) {
+      const float expected =
+          -(ground_normal.x * step.x + ground_normal.z * step.z) / ground_normal.y;
+      teleport = std::abs(step.y - expected);
+    }
     if (teleport > 0.002F) {
       ++teleports;
       worst_teleport = std::max(worst_teleport, teleport);
@@ -135,6 +173,7 @@ auto spawn_on(engine::physics::PhysicsWorld &world, const engine::MeshSource &gr
     -> std::unique_ptr<engine::physics::Character> {
   world.create_static_mesh(ground, glm::vec3(0.0F));
   auto character = std::make_unique<engine::physics::Character>(world, glm::vec3(-4.0F, 2.0F, 0.0F));
+  character->set_penetration_recovery(tuned("RECOVERY", character->penetration_recovery()));
   for (int i = 0; i < 120; ++i) {
     character->set_velocity({0.0F, std::min(character->linear_velocity().y - 9.81F * k_dt, 0.0F),
                              0.0F});
@@ -516,11 +555,159 @@ void test_a_short_riser_is_not_teleported_over() {
                 static_cast<double>(walk.worst_teleport));
     check(walk.climbed > rise * 0.8F, "a " + label + " is walked up rather than blocked");
     // The BODY has to resolve collision within the frame, so some of this is
-    // irreducible -- what stops it reading as a teleport is the low-pass on the
-    // eye in the client, measured there at roughly a third of the body's worst
-    // discontinuity. This bound is only here to catch a regression to a real
-    // one-frame hop onto the tread.
+    // irreducible. There is no longer a low-pass on the eye hiding it -- the
+    // camera rides the body the way a Godot camera rides its CharacterBody3D,
+    // because a filter that lags the eye behind the body turns every jump into
+    // a soar. So this bound is the real one now: it is what the player sees.
     check(walk.worst_teleport < 0.25F, "a " + label + " is not hopped over in one frame");
+  }
+}
+
+
+// Rolling ground, the way marching cubes actually makes it: a surface whose
+// height varies continuously, so the slope under the character changes every
+// frame.
+//
+// This is the case the player described as jitter, and the flat-ramp tests
+// cannot reach it. A 45 degree ramp has one slope from end to end; real terrain
+// has a different one every step, and every change is a chance for the
+// controller to resolve the difference by moving the capsule somewhere the
+// surface did not put it.
+auto make_rolling(float amplitude, float wavelength, float length = 80.0F,
+                  float width = 24.0F) -> engine::MeshSource {
+  engine::MeshSource mesh;
+  const auto height_at = [&](float x) {
+    if (x <= 0.0F)
+      return 0.0F;
+    // Two waves rather than one, so the relief is not periodic with the
+    // character's stride and the crests are not all the same shape.
+    return amplitude * (std::sin(x * 6.2831853F / wavelength) +
+                        0.4F * std::sin(x * 6.2831853F / (wavelength * 0.37F)));
+  };
+
+  const int steps = static_cast<int>(length * 2.0F); // half-metre cells
+  for (int i = 0; i <= steps; ++i) {
+    const float x = static_cast<float>(i) * 0.5F - 8.0F;
+    for (int side = 0; side < 2; ++side) {
+      const float z = side == 0 ? -width * 0.5F : width * 0.5F;
+      engine::MeshVertex v{};
+      v.pos[0] = x;
+      v.pos[1] = height_at(x);
+      v.pos[2] = z;
+      mesh.vertices.push_back(v);
+    }
+  }
+  for (int i = 0; i < steps; ++i) {
+    const auto base = static_cast<std::uint32_t>(i * 2);
+    mesh.indices.insert(mesh.indices.end(),
+                        {base, base + 1, base + 2, base + 1, base + 3, base + 2});
+  }
+  return mesh;
+}
+
+void test_walking_over_rolling_ground_stays_on_it() {
+  std::printf("walking over rolling ground stays on it\n");
+
+  // What to measure, after three metrics that measured the terrain instead.
+  //
+  // "How far did the controller move the character that the ground does not
+  // explain" is the right question and it has no honest answer on a trimesh: a
+  // capsule crossing a facet edge pivots on the EDGE, so its height above
+  // either facet is genuinely discontinuous there, and every candidate measure
+  // -- second difference of height, rise against the last normal, ride height
+  // above the surface -- is dominated by that. Each one was tried and each one
+  // reported the mesh's own faceting as jitter, at four, eight and twenty-three
+  // centimetres respectively.
+  //
+  // The invariant that IS clean: walking over rolling ground, the character
+  // should stay on it. Leaving the ground at a crest and being pulled back down
+  // is precisely what the floor snap exists to prevent, it needs no reference
+  // surface to detect, and it is what jitter is made of -- the eye rises with a
+  // hop it did not ask for and is then yanked back.
+  //
+  // The old settings could not prevent it, because the snap was not running.
+  // stick_down was `rising > 0 ? 1.2 : 0` with `rising` read straight after
+  // set_velocity, and velocity.y is zero whenever the character is grounded and
+  // not jumping -- so during an ordinary walk the snap was OFF, and during a
+  // jump's ascent it was 1.2 m, fighting the jump. Godot's rule is the other
+  // way round and its length is a tenth of a metre.
+  constexpr float k_amplitude = 0.25F;
+  constexpr float k_wavelength = 4.0F;
+  engine::physics::PhysicsWorld world;
+  const engine::MeshSource ground = make_rolling(k_amplitude, k_wavelength);
+  auto character = spawn_on(world, ground);
+  check(character->is_on_ground(), "the character lands on the flat approach");
+
+  int airborne = 0;
+  int walked_frames = 0;
+  const int frames = static_cast<int>(12.0F / k_dt);
+  const glm::vec3 start = character->position();
+
+  for (int frame = 0; frame < frames; ++frame) {
+    glm::vec3 velocity{k_speed, 0.0F, 0.0F};
+    const bool grounded = character->is_on_ground();
+    if (grounded) {
+      const float up = character->ground_normal().y;
+      if (up > 0.5F)
+        velocity *= std::min(1.0F / (up * up), tuned("SLOPECAP", k_slope_cap));
+    } else {
+      velocity.y = std::max(character->linear_velocity().y - 9.81F * k_dt, -50.0F);
+    }
+    character->set_velocity(velocity);
+    const bool hold_ground = grounded && velocity.y <= 0.0F;
+    character->update(k_dt,
+                      hold_ground ? tuned("SNAP", engine::physics::Character::k_floor_snap) : 0.0F,
+                      hold_ground ? tuned("STEP", engine::physics::Character::k_step_height) : 0.0F);
+    world.step(k_dt);
+
+    if (character->position().x < 2.0F)
+      continue; // still on the flat approach
+    ++walked_frames;
+    if (!character->is_on_ground())
+      ++airborne;
+  }
+
+  const float distance = character->position().x - start.x;
+  check(distance > 30.0F, "it covers ground the whole way");
+  std::printf("    airborne on %d of %d frames walking %.1f m of rolling ground\n", airborne,
+              walked_frames, static_cast<double>(distance));
+  // Nothing here is steeper than 40 degrees and the character is walking, not
+  // running off a cliff. Any frame off the ground is a hop over a crest.
+  check(airborne * 100 < walked_frames * 2,
+        "it does not bounce off the crests it is walking over");
+}
+
+// The constant-speed rule must not become a launcher near the slope limit.
+//
+// 1/cos^2 is 2 at 45 degrees and 4 at 60, and 60 is exactly where the
+// controller stops calling a surface walkable -- so the compensation is largest
+// precisely where the ground is steepest, and 4x on a 60 degree face is four
+// metres a second going up at seven. The moment the slope eases, that is a jump
+// nobody asked for.
+void test_the_slope_compensation_cannot_run_away() {
+  std::printf("the slope compensation cannot run away\n");
+
+  float flat_distance = 0.0F;
+  for (const float rise : {0.0F, 0.5F, 1.0F, 1.6F}) { // 0, 27, 45, 58 degrees
+    engine::physics::PhysicsWorld world;
+    const engine::MeshSource ground = make_ramp(rise);
+    auto character = spawn_on(world, ground);
+    const Walk walk = walk_along(world, *character, 2.5F);
+
+    const std::string label = "rise " + std::to_string(static_cast<int>(rise * 100.0F)) + "cm";
+    if (rise == 0.0F) {
+      flat_distance = walk.distance;
+      check(flat_distance > 8.0F, "the flat baseline covers ground");
+      continue;
+    }
+    std::printf("    %s: %.2f m against %.2f m flat\n", label.c_str(),
+                static_cast<double>(walk.distance), static_cast<double>(flat_distance));
+    // Never faster than walking on the flat. Slower is honest -- a steep climb
+    // costing you something is fine -- but faster is the compensation
+    // overshooting, and overshoot is what turns a crest into a launch.
+    check(walk.distance <= flat_distance * 1.05F,
+          "a " + label + " is never covered FASTER than flat ground");
+    check(walk.distance > flat_distance * 0.45F, "and is not reduced to a crawl either");
   }
 }
 
@@ -531,6 +718,8 @@ int main() {
   test_a_single_block_step_is_taken_in_stride();
   test_climbing_to_a_landing_is_continuous();
   test_a_short_riser_is_not_teleported_over();
+  test_walking_over_rolling_ground_stays_on_it();
+  test_the_slope_compensation_cannot_run_away();
   test_walking_into_a_one_metre_step_does_not_climb_it();
   test_a_jump_still_gets_onto_the_step();
   test_bumping_your_head_stops_the_jump();

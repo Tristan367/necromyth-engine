@@ -449,6 +449,23 @@ public:
   // little enough that running off a real drop lets gravity take over.
   static constexpr float k_stick_to_floor = 0.5F;
 
+  // How far the controller pulls the character back down to keep contact with
+  // ground it was already standing on. Godot's floor_snap_length, and Godot's
+  // default value.
+  //
+  // Godot is the reference here on purpose. Its CharacterBody3D has no step-up
+  // mechanic at all and exactly one vertical assist -- _snap_on_floor, which
+  // moves DOWN by floor_snap_length and only when the body was on the floor,
+  // is not on it now, and is not trying to move up. Ten centimetres. That is
+  // the whole of it, and it is the controller people describe as feeling
+  // right.
+  //
+  // Ours had 1.2 m, applied under the opposite condition. Anything this size
+  // is a teleport with a friendly name: the controller resolves it inside one
+  // frame, so the view moves a tenth of a metre between two frames and there
+  // is nothing gradual about it.
+  static constexpr float k_floor_snap = 0.1F;
+
   // Climbing: stick hard, so cresting a rise cannot throw the character.
   static constexpr float k_stick_climbing = 1.2F;
   // Descending: barely stick at all, so gravity does the work and a drop reads
@@ -570,6 +587,15 @@ public:
   }
 
   void set_max_strength(float s) { character_->SetMaxStrength(s); }
+  // How much of a penetration the controller works off per step. 1 means all of
+  // it, in one frame, which is a teleport whenever the capsule has sunk into
+  // anything. Exposed so a run can sweep it -- see NM_RECOVERY.
+  void set_penetration_recovery(float speed) {
+    character_->SetPenetrationRecoverySpeed(speed);
+  }
+  [[nodiscard]] auto penetration_recovery() const -> float {
+    return character_->GetPenetrationRecoverySpeed();
+  }
   void set_allow_sliding(bool allow) { contact_listener_.allow_sliding_ = allow; }
 
 private:
