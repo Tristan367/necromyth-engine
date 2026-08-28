@@ -81,7 +81,22 @@ public:
     if (!handle.is_set() || handle.index >= instances_.size())
       return nullptr;
     MeshInstance &instance = instances_[handle.index];
-    if (!instance.alive || instance.generation != handle.generation)
+    // Generation only. NOT `alive`.
+    //
+    // `alive` means "draw this", and a caller is entitled to set it false to
+    // hide something and true again later. Refusing to resolve a hidden
+    // instance made that impossible: the handle went dead the moment it was
+    // hidden, so the slot could never be revived and whatever owned it silently
+    // stopped being drawn -- forever.
+    //
+    // That is what made zombies invisible. The horde parks its surplus part
+    // instances between frames by setting alive = false; the next busy night it
+    // could not get them back, so only the first nine zombies were ever drawn
+    // while the rest walked up and hit you unseen.
+    //
+    // Whether the slot is FREE is a different question, and remove_instance
+    // bumps the generation so a handle to a released slot stops matching.
+    if (instance.generation != handle.generation)
       return nullptr;
     return &instance;
   }
@@ -234,6 +249,10 @@ public:
     if (instance == nullptr)
       return;
     instance->alive = false;
+    // Bumped here so handles to a released slot stop resolving. try_instance
+    // no longer tests `alive`, so the generation is the only thing separating
+    // "hidden" from "gone".
+    ++instance->generation;
     // Drop per-instance storage now rather than holding it until the slot is
     // reused; a horde's worth of cached bone transforms is not free.
     instance->bone_attachments.clear();
