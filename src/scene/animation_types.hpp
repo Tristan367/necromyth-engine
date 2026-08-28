@@ -47,12 +47,6 @@ struct SkeletonAsset {
   glm::mat4 inverse_skin_node_transform{1.0F};
   std::uint32_t skeleton_root{std::numeric_limits<std::uint32_t>::max()};
 
-  [[nodiscard]] auto find_joint_index(const std::string &name) const -> std::optional<std::uint32_t> {
-    for (std::size_t i = 0; i < joint_names.size(); ++i)
-      if (joint_names[i] == name)
-        return static_cast<std::uint32_t>(i);
-    return std::nullopt;
-  }
 
   std::vector<HitboxAttachment> hitboxes;
   std::optional<BodyColliderDef> body_collider;

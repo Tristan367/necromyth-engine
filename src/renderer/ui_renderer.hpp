@@ -82,9 +82,6 @@ public:
                ? **buffers_[frame_index]
                : vk::Buffer{};
   }
-  [[nodiscard]] auto buffer_bytes() const -> vk::DeviceSize {
-    return k_max_quads * sizeof(ui::Quad);
-  }
   [[nodiscard]] auto atlas_view() const -> vk::ImageView { return *view_; }
   [[nodiscard]] auto atlas_sampler() const -> vk::Sampler { return *sampler_; }
   [[nodiscard]] auto ready() const -> bool { return *view_ != VK_NULL_HANDLE; }

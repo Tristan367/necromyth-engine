@@ -52,17 +52,6 @@ public:
 
   void add_transition(AnimTransitionDef t) { transitions_.push_back(std::move(t)); }
 
-  // Speed-driven locomotion: idle ↔ walk based on a "speed" param.
-  // Internal: add_state x2 + add_transition x2 + start(idle).
-  void add_speed_driven_locomotion(const std::string &idle_name, std::uint32_t idle_clip,
-                                   const std::string &walk_name, std::uint32_t walk_clip,
-                                   float threshold = 0.01F, float blend_time = 0.25F) {
-    add_state({idle_name, idle_clip, true});
-    add_state({walk_name, walk_clip, true});
-    add_transition({idle_name, walk_name, "speed", AnimConditionOp::Greater, threshold, blend_time});
-    add_transition({walk_name, idle_name, "speed", AnimConditionOp::Less, threshold, blend_time});
-    start(idle_name);
-  }
 
   void set_param(const std::string &name, float v) { params_[name] = v; }
   void set_param(const std::string &name, bool v)  { params_[name] = v ? 1.0F : 0.0F; }
@@ -89,39 +78,7 @@ public:
     return layers_->size() - 1;
   }
 
-  // Directly drive an override layer's clip (with its own internal crossfade).
-  void set_override_clip(std::size_t layer_index, std::uint32_t clip_index,
-                         float blend_time) {
-    if (layer_index == 0 || layer_index >= layers_->size()) return;
-    PoseLayer &l = (*layers_)[layer_index];
-    if (l.clip_index == k_invalid_clip) {  // was inactive: snap on
-      l.clip_index = clip_index;
-      l.time = 0.0F;
-      l.xfade_index = k_invalid_clip;
-      l.xfade_weight = 1.0F;
-      return;
-    }
-    if (l.clip_index == clip_index) return;
-    l.xfade_index = clip_index;
-    l.xfade_time = 0.0F;
-    l.xfade_weight = 0.0F;
-    override_xfade_dur_[layer_index] = std::max(blend_time, 0.001F);
-  }
 
-  // Smoothly fade an override layer's compositing weight toward `weight` over
-  // `fade_time` seconds. Use fade_time <= 0 for an instant set.
-  void set_override_weight(std::size_t layer_index, float weight, float fade_time = 0.2F) {
-    if (layer_index == 0 || layer_index >= layers_->size()) return;
-    const float target = std::clamp(weight, 0.0F, 1.0F);
-    override_target_weight_[layer_index] = target;
-    if (fade_time <= 0.0F) {
-      (*layers_)[layer_index].weight = target;
-      override_weight_rate_[layer_index] = 0.0F;
-    } else {
-      override_weight_rate_[layer_index] =
-          std::abs(target - (*layers_)[layer_index].weight) / fade_time;
-    }
-  }
 
   // Force-switch the base layer to a state immediately (no crossfade).
   void start(const std::string &name) {
@@ -173,7 +130,6 @@ public:
     return states_.empty() ? empty_ : states_[current_index_].name;
   }
 
-  [[nodiscard]] auto is_transitioning() const -> bool { return transitioning_; }
 
 private:
   static constexpr std::size_t k_invalid = ~std::size_t{0};

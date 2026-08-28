@@ -620,9 +620,6 @@ struct GltfImportResult {
   std::vector<InstanceHandle> instances;
   std::uint32_t skeleton_index{k_invalid_skin_index};
 
-  [[nodiscard]] auto first_instance() const -> InstanceHandle {
-    return instances.empty() ? InstanceHandle{} : instances.front();
-  }
   [[nodiscard]] auto instance_count() const -> std::size_t { return instances.size(); }
 };
 
