@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/frames_in_flight.hpp"
+
 #include "renderer/device_memory.hpp"
 #include "renderer/image_barrier.hpp"
 #include "renderer/texture_image.hpp"
@@ -29,7 +31,7 @@ namespace engine {
 // do.
 class UiRenderer {
 public:
-  static constexpr std::size_t k_frames_in_flight = 3;
+  static constexpr std::size_t k_frames_in_flight = engine::k_frames_in_flight;
   // Room for a HUD, an inventory grid and a crafting list at once. A quad is 48
   // bytes, so this is 384 KB per frame in flight -- host-visible and written
   // straight through, which at a few hundred quads a frame is a memcpy nobody

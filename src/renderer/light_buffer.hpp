@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/frames_in_flight.hpp"
+
 #include "renderer/buffer.hpp"
 #include "scene/point_light.hpp"
 #include "scene/shadow_assignment.hpp"
@@ -24,7 +26,7 @@ namespace engine {
 
 class LightStorageBuffer {
 public:
-  static constexpr std::uint32_t k_frames_in_flight = 2;
+  static constexpr std::uint32_t k_frames_in_flight = engine::k_frames_in_flight;
   static constexpr vk::DeviceSize k_header_size = 16;  // num_point + num_spot (2× u32), 8B pad
 
   // 48 bytes. The previous layout carried a 64-byte shadow_matrix that a point

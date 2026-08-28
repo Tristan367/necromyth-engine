@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/frames_in_flight.hpp"
+
 #include "renderer/texture_image.hpp"
 #include "renderer/uniform_buffer.hpp"
 
@@ -327,8 +329,9 @@ public:
 
   [[nodiscard]] auto shadow_bone_set() const -> vk::DescriptorSet { return *shadow_bone_set_; }
 
-  void update_light_buffers(vk::raii::Device &device, const std::array<vk::Buffer, 2> &light_buffers) {
-    for (std::uint32_t i = 0; i < frame_count_ && i < 2; ++i) {
+  void update_light_buffers(vk::raii::Device &device,
+                            const std::array<vk::Buffer, k_frames_in_flight> &light_buffers) {
+    for (std::uint32_t i = 0; i < frame_count_ && i < k_frames_in_flight; ++i) {
       const vk::DescriptorBufferInfo light_info{
           .buffer = light_buffers[i],
           .offset = 0,

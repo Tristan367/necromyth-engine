@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/frames_in_flight.hpp"
+
 #include "engine_config.hpp"
 #include "renderer/bone_buffer.hpp"
 #include "renderer/light_buffer.hpp"
@@ -55,7 +57,7 @@ namespace engine {
 
 namespace detail {
 
-constexpr auto max_frames_in_flight = 2U;
+constexpr auto max_frames_in_flight = k_frames_in_flight;
 constexpr auto resize_debounce_ms = 100U;
 // How long to wait for the compositor to hand over a swapchain image before
 // giving up on this frame. See the acquire in draw_frame: the main thread must
@@ -1148,7 +1150,8 @@ private:
         shadow_map_.sampler_for_settings(startup_point_shadow_filter_),
         shadow_map_.view());
     descriptor_resources_.update_light_buffers(device_.device(), {
-        light_buffer_.buffer_ptr(0), light_buffer_.buffer_ptr(1)});
+        light_buffer_.buffer_ptr(0), light_buffer_.buffer_ptr(1),
+        light_buffer_.buffer_ptr(2)});
     descriptor_resources_.update_spot_shadow_sampler(device_.device(), *spot_atlas_sampler_,
                                                        *spot_atlas_view_);
     descriptor_resources_.update_point_cube_sampler(device_.device(), *point_cube_sampler_,
