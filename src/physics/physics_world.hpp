@@ -154,10 +154,17 @@ public:
                                    delta_time);
   }
 
-  [[nodiscard]] auto create_static_mesh(const MeshSource &mesh, const glm::vec3 &position,
-                                        const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F),
-                                        JPH::EMotionType motion_type = JPH::EMotionType::Static)
-        -> JPH::BodyID {
+  // Building the shape and adding the body are separate because the first is
+  // pure computation and the second is not.
+  //
+  // Welding the vertices and building the BVH is 75% of what a terrain collider
+  // costs -- measured at 22.0ms against 7.3ms for turning voxels into triangles,
+  // over a 9,000 frame walk -- and none of it touches the physics system. It
+  // reads a mesh and returns a shape, so it can run on a worker while the main
+  // thread gets on with the frame. Adding the body cannot: BodyInterface is
+  // shared, and body_ids_ is ours.
+  [[nodiscard]] static auto build_static_mesh_shape(const MeshSource &mesh) -> JPH::ShapeRefC {
+
     // Vertex welding: collapse coincident positions to shared indices at
     // 0.1 mm grid resolution so Jolt's mEnhancedInternalEdgeRemoval can
     // detect internal edges topologically (matching AGENTS.md documentation).
@@ -199,6 +206,17 @@ public:
       return {};  // degenerate mesh — return invalid BodyID
     JPH::ShapeRefC shape = create_result.Get();
 
+    return shape;
+  }
+
+  // Takes a shape built anywhere -- this thread or a worker -- and gives it a
+  // body. Cheap, and the only half that has to be here.
+  [[nodiscard]] auto add_static_mesh_body(
+      const JPH::ShapeRefC &shape, const glm::vec3 &position,
+      const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F),
+      JPH::EMotionType motion_type = JPH::EMotionType::Static) -> JPH::BodyID {
+    if (shape == nullptr)
+      return {};
     // A kinematic mesh still belongs on the non-moving layer: it is something
     // the world collides WITH, not something that collides with the world. What
     // kinematic buys is the right to be driven -- see move_kinematic -- which is
@@ -217,6 +235,13 @@ public:
         settings, kinematic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
     body_ids_.push_back(id);
     return id;
+  }
+
+  [[nodiscard]] auto create_static_mesh(const MeshSource &mesh, const glm::vec3 &position,
+                                        const glm::quat &rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F),
+                                        JPH::EMotionType motion_type = JPH::EMotionType::Static)
+        -> JPH::BodyID {
+    return add_static_mesh_body(build_static_mesh_shape(mesh), position, rotation, motion_type);
   }
 
   [[nodiscard]] auto add_dynamic_body(const JPH::ShapeSettings &shape_settings,
