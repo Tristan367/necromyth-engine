@@ -63,4 +63,33 @@ struct Staging {
   return {std::move(buffer), std::move(memory)};
 }
 
+// A device-local image with its memory allocated and bound.
+//
+// Six files did this by hand: create the image, ask its requirements, find a
+// device-local memory type, allocate, bind. depth_image, msaa_color_image,
+// render_color_image, shadow_map, texture_image and texture_array, all
+// identical apart from the ImageCreateInfo they pass in -- which is the only
+// part that differs between a depth buffer and a texture array, and the only
+// part a caller should have to write.
+struct DeviceImage {
+  vk::raii::Image image{nullptr};
+  vk::raii::DeviceMemory memory{nullptr};
+};
+
+[[nodiscard]] inline auto make_device_image(const vk::raii::Device &device,
+                                            const vk::raii::PhysicalDevice &physical_device,
+                                            const vk::ImageCreateInfo &info) -> DeviceImage {
+  vk::raii::Image image{device, info};
+  const vk::MemoryRequirements requirements = image.getMemoryRequirements();
+  vk::raii::DeviceMemory memory{
+      device, vk::MemoryAllocateInfo{
+                  .allocationSize = requirements.size,
+                  .memoryTypeIndex = find_memory_type(physical_device.getMemoryProperties(),
+                                                      requirements.memoryTypeBits,
+                                                      vk::MemoryPropertyFlagBits::eDeviceLocal),
+              }};
+  image.bindMemory(*memory, 0);
+  return {std::move(image), std::move(memory)};
+}
+
 } // namespace engine::detail

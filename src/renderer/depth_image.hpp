@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/device_memory.hpp"
+
 #include "renderer/buffer.hpp"
 
 #include <vulkan/vulkan_raii.hpp>
@@ -62,19 +64,10 @@ private:
         .sharingMode = vk::SharingMode::eExclusive,
     };
 
-    image_ = vk::raii::Image(*device_, image_info);
-
-    const vk::MemoryRequirements memory_requirements = image_.getMemoryRequirements();
-    const vk::MemoryAllocateInfo allocate_info{
-        .allocationSize = memory_requirements.size,
-        .memoryTypeIndex = detail::find_memory_type(
-            physical_device_->getMemoryProperties(),
-            memory_requirements.memoryTypeBits,
-            vk::MemoryPropertyFlagBits::eDeviceLocal),
-    };
-
-    memory_ = vk::raii::DeviceMemory(*device_, allocate_info);
-    image_.bindMemory(*memory_, 0);
+    detail::DeviceImage allocated =
+        detail::make_device_image(*device_, *physical_device_, image_info);
+    image_ = std::move(allocated.image);
+    memory_ = std::move(allocated.memory);
 
     aspect_mask_ = vk::ImageAspectFlagBits::eDepth;
     if (format_ == vk::Format::eD16UnormS8Uint ||

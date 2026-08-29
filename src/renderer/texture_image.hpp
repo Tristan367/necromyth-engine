@@ -161,18 +161,10 @@ public:
         .sharingMode = vk::SharingMode::eExclusive,
     };
 
-    image_ = vk::raii::Image(device, image_info);
-    const vk::MemoryRequirements image_requirements = image_.getMemoryRequirements();
-    memory_ = vk::raii::DeviceMemory{
-        device,
-        vk::MemoryAllocateInfo{
-            .allocationSize = image_requirements.size,
-            .memoryTypeIndex = detail::find_memory_type(
-                memory_properties,
-                image_requirements.memoryTypeBits,
-                vk::MemoryPropertyFlagBits::eDeviceLocal),
-        }};
-    image_.bindMemory(*memory_, 0);
+    detail::DeviceImage allocated =
+        detail::make_device_image(device, physical_device, image_info);
+    image_ = std::move(allocated.image);
+    memory_ = std::move(allocated.memory);
 
     detail::execute_one_time_commands(device, command_pool, queue, [&](vk::raii::CommandBuffer &command_buffer) {
       transition_image_layout(
