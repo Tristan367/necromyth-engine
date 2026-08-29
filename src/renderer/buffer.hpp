@@ -114,31 +114,8 @@ public:
       vk::DeviceSize size,
       vk::BufferUsageFlags usage,
       const void *data) {
-    const vk::BufferCreateInfo staging_info{
-        .size = size,
-        .usage = vk::BufferUsageFlagBits::eTransferSrc,
-        .sharingMode = vk::SharingMode::eExclusive,
-    };
-
-    vk::raii::Buffer staging_buffer{device, staging_info};
-    const vk::MemoryRequirements staging_requirements = staging_buffer.getMemoryRequirements();
+    const detail::Staging staging = detail::make_staging(device, physical_device, size, data);
     const auto memory_properties = physical_device.getMemoryProperties();
-
-    vk::raii::DeviceMemory staging_memory{
-        device,
-        vk::MemoryAllocateInfo{
-            .allocationSize = staging_requirements.size,
-            .memoryTypeIndex = detail::find_memory_type(
-                memory_properties,
-                staging_requirements.memoryTypeBits,
-                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
-        }};
-
-    staging_buffer.bindMemory(*staging_memory, 0);
-
-    void *mapped = staging_memory.mapMemory(0, size);
-    std::memcpy(mapped, data, static_cast<std::size_t>(size));
-    staging_memory.unmapMemory();
 
     const vk::BufferCreateInfo device_info{
         .size = size,
@@ -159,7 +136,7 @@ public:
         }};
 
     buffer_.bindMemory(*memory_, 0);
-    detail::copy_buffer(device, command_pool, queue, *staging_buffer, *buffer_, size);
+    detail::copy_buffer(device, command_pool, queue, *staging.buffer, *buffer_, size);
   }
 
   // Allocates the device buffer and queues the copy, without waiting. The

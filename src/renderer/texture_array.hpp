@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/device_memory.hpp"
+
 #include "renderer/texture_image.hpp"
 #include "scene/texture_array_layer.hpp"
 
@@ -233,29 +235,13 @@ public:
     const vk::DeviceSize layer_size = chain_size;
     const vk::DeviceSize staging_size = layer_size * layer_count_;
 
-    const vk::BufferCreateInfo staging_info{
-        .size = staging_size,
-        .usage = vk::BufferUsageFlagBits::eTransferSrc,
-        .sharingMode = vk::SharingMode::eExclusive,
-    };
-
-    vk::raii::Buffer staging_buffer{device, staging_info};
-    const vk::MemoryRequirements staging_requirements = staging_buffer.getMemoryRequirements();
+    // No data argument: this one does not memcpy a block in, it maps the
+    // memory and writes a whole mip chain into it below.
+    const detail::Staging staging =
+        detail::make_staging(device, physical_device, staging_size, nullptr);
     const auto memory_properties = physical_device.getMemoryProperties();
 
-    vk::raii::DeviceMemory staging_memory{
-        device,
-        vk::MemoryAllocateInfo{
-            .allocationSize = staging_requirements.size,
-            .memoryTypeIndex = detail::find_memory_type(
-                memory_properties,
-                staging_requirements.memoryTypeBits,
-                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
-        }};
-
-    staging_buffer.bindMemory(*staging_memory, 0);
-
-    void *mapped = staging_memory.mapMemory(0, staging_size);
+    void *mapped = staging.memory.mapMemory(0, staging_size);
     for (std::uint32_t layer = 0; layer < layer_count_; ++layer) {
       auto *chain = static_cast<std::uint8_t *>(mapped)
                   + static_cast<std::size_t>(layer) * static_cast<std::size_t>(layer_size);
@@ -317,7 +303,7 @@ public:
               std::lround(std::clamp(alpha[i], 0.0F, 1.0F) * 255.0F));
       }
     }
-    staging_memory.unmapMemory();
+    staging.memory.unmapMemory();
 
     const vk::ImageCreateInfo image_info{
         .imageType = vk::ImageType::e2D,
@@ -373,7 +359,7 @@ public:
               },
               .imageExtent = {level_size[level].width, level_size[level].height, 1},
           };
-          command_buffer.copyBufferToImage(*staging_buffer, *image_,
+          command_buffer.copyBufferToImage(*staging.buffer, *image_,
                                            vk::ImageLayout::eTransferDstOptimal, region);
         }
       }

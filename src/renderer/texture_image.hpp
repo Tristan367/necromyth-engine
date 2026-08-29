@@ -1,5 +1,7 @@
 #pragma once
 
+#include "renderer/device_memory.hpp"
+
 #include "renderer/buffer.hpp"
 #include "renderer/image_barrier.hpp"
 
@@ -136,31 +138,9 @@ public:
 
     const vk::DeviceSize image_size = static_cast<vk::DeviceSize>(width) * static_cast<vk::DeviceSize>(height) * 4;
 
-    const vk::BufferCreateInfo staging_info{
-        .size = image_size,
-        .usage = vk::BufferUsageFlagBits::eTransferSrc,
-        .sharingMode = vk::SharingMode::eExclusive,
-    };
-
-    vk::raii::Buffer staging_buffer{device, staging_info};
-    const vk::MemoryRequirements staging_requirements = staging_buffer.getMemoryRequirements();
+    const detail::Staging staging =
+        detail::make_staging(device, physical_device, image_size, image.pixels.data());
     const auto memory_properties = physical_device.getMemoryProperties();
-
-    vk::raii::DeviceMemory staging_memory{
-        device,
-        vk::MemoryAllocateInfo{
-            .allocationSize = staging_requirements.size,
-            .memoryTypeIndex = detail::find_memory_type(
-                memory_properties,
-                staging_requirements.memoryTypeBits,
-                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
-        }};
-
-    staging_buffer.bindMemory(*staging_memory, 0);
-
-    void *mapped = staging_memory.mapMemory(0, image_size);
-    std::memcpy(mapped, image.pixels.data(), static_cast<std::size_t>(image_size));
-    staging_memory.unmapMemory();
 
     extent_ = vk::Extent3D{
         .width = static_cast<std::uint32_t>(width),
@@ -218,7 +198,7 @@ public:
           },
           .imageExtent = extent_,
       };
-      command_buffer.copyBufferToImage(*staging_buffer, *image_, vk::ImageLayout::eTransferDstOptimal, region);
+      command_buffer.copyBufferToImage(*staging.buffer, *image_, vk::ImageLayout::eTransferDstOptimal, region);
 
       generate_mipmaps(command_buffer, width, height);
     });

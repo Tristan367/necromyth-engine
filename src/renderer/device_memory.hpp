@@ -3,6 +3,8 @@
 #include <vulkan/vulkan_raii.hpp>
 
 #include <cstdint>
+#include <cstring>
+#include <utility>
 #include <stdexcept>
 
 namespace engine::detail {
@@ -21,6 +23,44 @@ namespace engine::detail {
   }
 
   throw std::runtime_error("Failed to find suitable memory type for buffer");
+}
+
+// A host-visible staging buffer with `bytes` of `data` already in it.
+//
+// This was written out three times -- buffer.hpp, texture_image.hpp and
+// texture_array.hpp -- identically each time: describe a transfer-source
+// buffer, ask it what memory it wants, find a host-visible coherent type, bind,
+// map, memcpy, unmap. Twenty-odd lines, three copies, and the kind of thing
+// that only stays correct while nobody edits one of them.
+struct Staging {
+  vk::raii::Buffer buffer{nullptr};
+  vk::raii::DeviceMemory memory{nullptr};
+};
+
+[[nodiscard]] inline auto make_staging(const vk::raii::Device &device,
+                                       const vk::raii::PhysicalDevice &physical_device,
+                                       vk::DeviceSize bytes, const void *data) -> Staging {
+  vk::raii::Buffer buffer{device, vk::BufferCreateInfo{
+                                      .size = bytes,
+                                      .usage = vk::BufferUsageFlagBits::eTransferSrc,
+                                      .sharingMode = vk::SharingMode::eExclusive,
+                                  }};
+  const vk::MemoryRequirements requirements = buffer.getMemoryRequirements();
+  vk::raii::DeviceMemory memory{
+      device, vk::MemoryAllocateInfo{
+                  .allocationSize = requirements.size,
+                  .memoryTypeIndex = find_memory_type(physical_device.getMemoryProperties(),
+                                                      requirements.memoryTypeBits,
+                                                      vk::MemoryPropertyFlagBits::eHostVisible |
+                                                          vk::MemoryPropertyFlagBits::eHostCoherent),
+              }};
+  buffer.bindMemory(*memory, 0);
+  if (data != nullptr) {
+    void *mapped = memory.mapMemory(0, bytes);
+    std::memcpy(mapped, data, static_cast<std::size_t>(bytes));
+    memory.unmapMemory();
+  }
+  return {std::move(buffer), std::move(memory)};
 }
 
 } // namespace engine::detail
