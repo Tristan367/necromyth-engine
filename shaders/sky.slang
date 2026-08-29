@@ -4,6 +4,7 @@
 // everything else, so it must agree on both.
 #include "lib/textured_push_constants.slang"
 #include "lib/instance_data.slang"
+#include "lib/textured_bindings.slang"
 
 struct VSInput {
     float3 inPosition;
@@ -118,31 +119,38 @@ float4 fragMain(VSOutput vertIn) : SV_Target {
 
     float3 color = rampFive(a, b, c, d, e, direction.y);
 
-    // Stars, before the sun and the horizon glow go over the top.
+    // Stars, from the NASA map, before the sun and the glow go over the top.
     //
-    // Rotated about an axis tilted from vertical, so the field wheels the way it
-    // does at a mid latitude rather than spinning flat about the zenith. Asked
-    // for explicitly: "tilt it and then rotate it on that axis as if we were at
-    // forty five degrees latitude".
+    // This was a hash-based scatter of dots and it looked like a hash-based
+    // scatter of dots: no constellations, no Milky Way, and a bug that left half
+    // the sky empty because the 3D cell hash degenerated along one axis. The
+    // map is 4096x2048 equirectangular and has been sitting in the C# project's
+    // textures folder the whole time -- SkyManager.cs:361 loads exactly this
+    // file and turns it into a cubemap. We can sample it directly.
     if (night > 0.001) {
-        const float kLatitude = 0.7854; // 45 degrees, in radians
-        float3 axis = float3(0.0, cos(kLatitude), sin(kLatitude));
-        // Sidereal angle taken from the sun's own rotation about the same axis,
-        // so the stars and the day agree without another uniform.
+        // Rotated about an axis tilted from vertical, so the sky wheels the way
+        // it does at a mid latitude rather than spinning flat about the zenith:
+        // "tilt it and then rotate it on that axis as if we were at forty five
+        // degrees latitude".
+        const float kLatitude = 0.7854;
+        float3 axis = normalize(float3(0.0, cos(kLatitude), sin(kLatitude)));
         float angle = atan2(sunDir.x, -sunDir.z);
         float ca = cos(angle), sa = sin(angle);
         float3 sd = direction * ca + cross(axis, direction) * sa
                   + axis * dot(axis, direction) * (1.0 - ca);
-        const float kStarDensity = 260.0;
-        float3 cell = floor(sd * kStarDensity);
-        float star = hash31(cell);
-        // A few are brighter than the rest, which is most of what makes a sky
-        // read as stars rather than as noise.
-        float magnitude = hash31(cell + 7.77);
-        float bright = smoothstep(0.9955, 0.9995, star) * (0.35 + 0.65 * magnitude);
-        // Nothing below the horizon, and a soft edge so they do not pop on.
-        bright *= smoothstep(-0.01, 0.22, sd.y);
-        color += float3(bright) * night * 1.1;
+
+        float2 uv = float2(atan2(sd.z, sd.x) / 6.2831853 + 0.5,
+                           acos(clamp(sd.y, -1.0, 1.0)) / 3.14159265);
+        // SampleLevel, not Sample. The uv comes out of an atan2, whose
+        // derivative jumps a whole turn at the seam behind the camera -- and a
+        // Sample picks its mip from that derivative, so the entire sky was
+        // being read from a tiny mip and came out as a blurry smear.
+        float3 stars = texture.SampleLevel(uv, 0.0).rgb;
+        // Lifted, not dimmed. The map is genuinely dark -- mean brightness 3.5
+        // out of 255 and a peak of 57 -- so it needs multiplying up to be seen
+        // at all. Squaring it first, which is what a bright photograph would
+        // want, made it invisible.
+        color += stars * night * 4.0 * smoothstep(-0.05, 0.15, direction.y);
     }
 
     // The horizon glow that makes a sunrise legible.
@@ -159,34 +167,43 @@ float4 fragMain(VSOutput vertIn) : SV_Target {
     float3 glowColor = lerp(float3(0.95, 0.42, 0.18), float3(1.0, 0.72, 0.38), day);
     color += glowColor * pow(glowShape, 3.0) * lowSun * 0.85;
 
-    // Clouds, on a plane above the world.
+    // Clouds: big and puffy, with a hard edge.
     //
-    // Projected by dividing the view direction by its height, which is what
-    // puts them on a flat ceiling and makes them crowd together toward the
-    // horizon the way real cloud cover does. Nothing above the horizon line is
-    // drawn, and the whole layer fades out as it approaches it, because a plane
-    // seen edge-on is infinitely far away and would otherwise be a hard seam.
+    // The first version was fbm faded smoothly by density, which reads as mist.
+    // What is wanted is the C#'s look -- pixelated, and either the cloud is
+    // there or it is not, with no soft gradient in between. So the noise is
+    // quantised on to a grid and then thresholded, which gives a chunky edge
+    // that matches a game made of voxels instead of fighting it.
     if (direction.y > 0.02) {
         float time = ubo.shadowFadeWidth.y;
         float2 plane = direction.xz / direction.y;
         float2 drift = float2(time * 0.004, time * 0.0016);
-        float cover = fbm(plane * 0.55 + drift);
-        // A second, slower layer, so the cover has depth rather than being one
-        // sheet of noise.
-        cover = cover * 0.65 + fbm(plane * 0.19 - drift * 0.6) * 0.45;
 
-        float density = smoothstep(0.52, 0.78, cover);
-        density *= smoothstep(0.02, 0.20, direction.y);   // fade into the horizon
+        // Quantised before the noise is read, which is what makes the edge
+        // blocky rather than smooth. Coarser far away is wrong -- the cells are
+        // in plane space, so they get smaller toward the horizon on their own,
+        // exactly like the voxels do.
+        const float kCell = 0.05;
+        float2 cellular = floor((plane * 0.22 + drift) / kCell) * kCell;
+        float shape = fbm(cellular) * 0.7 + fbm(cellular * 0.36 - drift) * 0.5;
 
-        // Lit from the sun's side, and much darker underneath at night.
+        // Hard cutoff: in or out, one pixel wide so it does not alias to death.
+        // Threshold high enough that the sky is mostly sky. At 0.575 a single
+        // mass swallowed a whole quarter of it.
+        float cover = smoothstep(0.655, 0.668, shape);
+        cover *= smoothstep(0.02, 0.09, direction.y); // still nothing at the seam
+
+        // Lit from the sun's side. Fully lit or fully shadowed, no gradient --
+        // the same argument as the edge.
         float toSun = saturate(dot(normalize(float3(direction.x, 0.0, direction.z)
                                              + float3(1e-5, 0.0, 0.0)), sunFlat));
-        float3 litCloud = lerp(float3(0.62, 0.63, 0.68), float3(1.0, 0.97, 0.92), toSun);
-        float3 duskCloud = lerp(float3(0.35, 0.24, 0.28), float3(1.0, 0.62, 0.34), toSun);
-        float3 nightCloud = float3(0.05, 0.06, 0.10);
+        float sunlit = smoothstep(0.35, 0.55, toSun);
+        float3 litCloud = lerp(float3(0.72, 0.74, 0.80), float3(1.0, 0.99, 0.96), sunlit);
+        float3 duskCloud = lerp(float3(0.30, 0.22, 0.30), float3(1.0, 0.60, 0.30), sunlit);
+        float3 nightCloud = float3(0.06, 0.07, 0.11);
         float3 cloudColor = litCloud * day + duskCloud * twilight + nightCloud * night;
 
-        color = lerp(color, cloudColor, density * 0.9);
+        color = lerp(color, cloudColor, cover);
     }
 
     // The sun itself.

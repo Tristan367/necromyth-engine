@@ -50,6 +50,7 @@
 #include <iostream>
 #include <sstream>
 #include <chrono>
+#include <cstdlib>
 #include <string>
 #include <stdexcept>
 #include <vector>

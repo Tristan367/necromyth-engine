@@ -255,7 +255,13 @@ struct PassRecorder {
   }
 
   [[nodiscard]] auto material_descriptor_index(const DrawCommand &draw) const -> std::optional<std::uint32_t> {
-    if (!is_textured_surface_pipeline(draw.pipeline))
+    // Background counts. It is not a textured SURFACE -- it takes no lighting
+    // and writes no depth -- but it does sample a texture now, the star map,
+    // and this is the function that decides whether anything gets bound at all.
+    // Leaving it out meant bind_material returned early and the sky sampled
+    // whichever material the previous draw happened to leave bound, which was
+    // the terrain's stone: the night sky was a magnified photograph of a rock.
+    if (!is_textured_surface_pipeline(draw.pipeline) && draw.pipeline != PipelineId::Background)
       return std::nullopt;
 
     if (draw.texture_source == TextureSource::Table) {
@@ -419,6 +425,16 @@ struct PassRecorder {
           sizeof(TexturedPushConstants),
           &push_constants);
     } else if (draw.pipeline == PipelineId::Background) {
+      // The sky gets its material bound too, which it did not used to, because
+      // it had nothing to sample. It has a star map now.
+      //
+      // Resolved directly rather than through material_descriptor_index, which
+      // answers nullopt for anything that is not a textured SURFACE pipeline --
+      // and the sky is not one. Guarding on it dropped the sky draw entirely
+      // and the world went back to the clear colour, which is exactly what it
+      // looked like before any of this existed.
+      bind_material(command_buffer, draw, state);
+
       const TexturedPushConstants push_constants{.instance_base = draw.instance_index};
       command_buffer.pushConstants(
           pipelines.layout_for(draw.pipeline),
