@@ -549,7 +549,7 @@ public:
             .view_sky = view_without_translation(scene.camera().view_matrix()),
             .light_direction = glm::vec4(
                 glm::normalize(scene.directional_light().direction_toward_light),
-                0.0F),
+                scene.directional_light().sun_elevation),
             .light_color = glm::vec4(
                 scene.directional_light().color * scene.directional_light().intensity,
                 scene.directional_light().ambient),

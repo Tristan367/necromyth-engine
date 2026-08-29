@@ -11,6 +11,12 @@ struct DirectionalLight {
   glm::vec3 color{1.0F, 0.98F, 0.92F};
   float intensity{1.0F};
   float ambient{0.18F};
+  // How high the real sun is, -1 to 1, regardless of where the shading light
+  // points. At night `direction_toward_light` is swung to a moon vector well
+  // above the horizon so that shadows still have a direction -- which left the
+  // sky shader believing the sun was up and painting a blue midnight. This is
+  // the sky's clock, and nothing else reads it.
+  float sun_elevation{1.0F};
 };
 
 } // namespace engine
