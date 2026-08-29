@@ -13,6 +13,10 @@ namespace engine {
 
 // GPU work, measured with timestamps written into the command buffer.
 enum class GpuZone : std::uint8_t {
+  // Copying newly meshed geometry into device-local buffers. Unmeasured until
+  // now, and it is the one pass whose cost scales with how fast you are walking
+  // into new terrain -- which is exactly when the game staggers.
+  Upload,
   ShadowDirectional,
   ShadowSpot,
   ShadowPoint,
@@ -39,6 +43,7 @@ enum class CpuZone : std::uint8_t {
 
 [[nodiscard]] inline auto gpu_zone_name(GpuZone zone) -> const char * {
   switch (zone) {
+  case GpuZone::Upload:            return "geometry upload";
   case GpuZone::ShadowDirectional: return "shadow (directional)";
   case GpuZone::ShadowSpot:        return "shadow (spot)";
   case GpuZone::ShadowPoint:       return "shadow (point)";

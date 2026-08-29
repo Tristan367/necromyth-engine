@@ -32,6 +32,9 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <string>
+#include <fstream>
+#include <cstdlib>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -68,9 +71,20 @@ public:
     });
 
     temp_allocator_ = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
+    // Jolt's own job threads, and how many of them there should be.
+    //
+    // This asked for hardware_concurrency - 1, which is 15 on an 8-core machine
+    // with SMT -- fifteen physics job threads for a step that measures 0.005ms,
+    // on top of the game's own meshing, lighting and generation threads. A
+    // running game had 39 threads on 8 physical cores and this was the single
+    // largest contributor.
+    //
+    // Physics here is one character controller and a few dozen static bodies.
+    // It does not need a thread per hyperthread; it needs enough to not be the
+    // thing holding up the frame, and the rest of those threads are pure
+    // contention with the streaming work that actually is heavy.
     job_system_ = std::make_unique<JPH::JobSystemThreadPool>(
-        JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
-        std::max(std::thread::hardware_concurrency(), 1U) - 1);
+        JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, physics_job_threads());
 
     physics_system_.Init(
         max_bodies, 0, 1024, 1024,
@@ -163,6 +177,27 @@ public:
   // reads a mesh and returns a shape, so it can run on a worker while the main
   // thread gets on with the frame. Adding the body cannot: BodyInterface is
   // shared, and body_ids_ is ours.
+  // Physical cores, quartered, and at least two. ENGINE_PHYSICS_THREADS
+  // overrides it.
+  [[nodiscard]] static auto physics_job_threads() -> unsigned {
+    if (const char *env = std::getenv("ENGINE_PHYSICS_THREADS"))
+      if (const int forced = std::atoi(env); forced > 0)
+        return static_cast<unsigned>(forced);
+    const auto logical = static_cast<int>(std::max(std::thread::hardware_concurrency(), 1U));
+    int physical = logical;
+#if defined(__linux__)
+    if (std::ifstream siblings("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list");
+        siblings) {
+      std::string list;
+      std::getline(siblings, list);
+      const auto width = static_cast<int>(std::count(list.begin(), list.end(), ',')) + 1;
+      if (width > 1 && logical % width == 0)
+        physical = logical / width;
+    }
+#endif
+    return static_cast<unsigned>(std::clamp(physical / 4, 2, 8));
+  }
+
   [[nodiscard]] static auto build_static_mesh_shape(const MeshSource &mesh) -> JPH::ShapeRefC {
 
     // Vertex welding: collapse coincident positions to shared indices at

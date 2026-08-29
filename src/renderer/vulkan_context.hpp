@@ -632,7 +632,11 @@ public:
     // Geometry uploaded since the last frame is copied here, before anything
     // draws it. Same command buffer, so ordering needs no semaphore -- just the
     // one barrier flush() records.
-    upload_queue_.flush(command_buffer);
+    {
+      const PassRecorder recorder = pass_recorder();
+      const PassRecorder::ScopedGpuZone upload_zone(recorder, command_buffer, GpuZone::Upload);
+      upload_queue_.flush(command_buffer);
+    }
     pass_recorder().record_shadow_pass(command_buffer, frame_index_, pass_layouts_, shadow_draw_list_,
                                          cascades.light_view_proj);
 
