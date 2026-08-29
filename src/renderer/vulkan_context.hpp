@@ -49,6 +49,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <chrono>
 #include <string>
 #include <stdexcept>
 #include <vector>
@@ -263,6 +264,12 @@ public:
 
   // Human-readable snapshot of the last profiling window. Set ENGINE_PROFILE=1
   // to have it printed periodically, or call this to drive a debug overlay.
+  // Wall-clock since the context was made. Only the sky reads it, to drift
+  // clouds; nothing depends on it being any particular epoch.
+  [[nodiscard]] auto elapsed_seconds() const -> float {
+    return std::chrono::duration<float>(std::chrono::steady_clock::now() - started_at_).count();
+  }
+
   [[nodiscard]] auto profile_report() const -> std::string {
     std::ostringstream out;
     out << "\n-- frame profile (avg / max ms over " << k_profile_window_frames << " frames) --\n";
@@ -561,7 +568,8 @@ public:
                 shadow_settings.cascade_blend_range,
                 0.0F,
                 0.0F),
-            .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width, 0.0F, 0.0F, 0.0F),
+            .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width,
+                                          elapsed_seconds(), 0.0F, 0.0F),
         });
 
     light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(), shadow_slots,
@@ -1445,6 +1453,7 @@ private:
   bool skinned_pipelines_built_{false};
   std::vector<MeshGpuSlot> mesh_gpus_;
   DeferredDelete<MeshGpu> retired_meshes_;
+  std::chrono::steady_clock::time_point started_at_{std::chrono::steady_clock::now()};
   void capture_swapchain_image(std::uint32_t image_index) {
     const std::string path = screenshot_path_;
     screenshot_path_.clear();

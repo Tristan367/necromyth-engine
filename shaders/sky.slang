@@ -54,6 +54,35 @@ float hash31(float3 p) {
     return frac((p.x + p.y) * p.z);
 }
 
+// Value noise and a small fbm, for cloud cover.
+//
+// The C# bakes cloud textures from seamless cellular noise because Godot's sky
+// wanted a texture and generating one needed an async round trip through a
+// NoiseTexture2D. We are already in a shader, so the noise can just be
+// evaluated -- which also means the cover can change without regenerating
+// anything.
+float valueNoise(float2 p) {
+    float2 i = floor(p);
+    float2 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash31(float3(i, 0.0));
+    float b = hash31(float3(i + float2(1.0, 0.0), 0.0));
+    float c = hash31(float3(i + float2(0.0, 1.0), 0.0));
+    float d = hash31(float3(i + float2(1.0, 1.0), 0.0));
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+float fbm(float2 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    for (int i = 0; i < 5; ++i) {
+        sum += valueNoise(p) * amp;
+        p *= 2.03;
+        amp *= 0.5;
+    }
+    return sum;
+}
+
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_Target {
     float3 direction = normalize(vertIn.direction);
@@ -129,6 +158,36 @@ float4 fragMain(VSOutput vertIn) : SV_Target {
     float lowSun = 1.0 - saturate(abs(sunElev) * 3.2);
     float3 glowColor = lerp(float3(0.95, 0.42, 0.18), float3(1.0, 0.72, 0.38), day);
     color += glowColor * pow(glowShape, 3.0) * lowSun * 0.85;
+
+    // Clouds, on a plane above the world.
+    //
+    // Projected by dividing the view direction by its height, which is what
+    // puts them on a flat ceiling and makes them crowd together toward the
+    // horizon the way real cloud cover does. Nothing above the horizon line is
+    // drawn, and the whole layer fades out as it approaches it, because a plane
+    // seen edge-on is infinitely far away and would otherwise be a hard seam.
+    if (direction.y > 0.02) {
+        float time = ubo.shadowFadeWidth.y;
+        float2 plane = direction.xz / direction.y;
+        float2 drift = float2(time * 0.004, time * 0.0016);
+        float cover = fbm(plane * 0.55 + drift);
+        // A second, slower layer, so the cover has depth rather than being one
+        // sheet of noise.
+        cover = cover * 0.65 + fbm(plane * 0.19 - drift * 0.6) * 0.45;
+
+        float density = smoothstep(0.52, 0.78, cover);
+        density *= smoothstep(0.02, 0.20, direction.y);   // fade into the horizon
+
+        // Lit from the sun's side, and much darker underneath at night.
+        float toSun = saturate(dot(normalize(float3(direction.x, 0.0, direction.z)
+                                             + float3(1e-5, 0.0, 0.0)), sunFlat));
+        float3 litCloud = lerp(float3(0.62, 0.63, 0.68), float3(1.0, 0.97, 0.92), toSun);
+        float3 duskCloud = lerp(float3(0.35, 0.24, 0.28), float3(1.0, 0.62, 0.34), toSun);
+        float3 nightCloud = float3(0.05, 0.06, 0.10);
+        float3 cloudColor = litCloud * day + duskCloud * twilight + nightCloud * night;
+
+        color = lerp(color, cloudColor, density * 0.9);
+    }
 
     // The sun itself.
     const float kSunCosRadius = 0.99965;
