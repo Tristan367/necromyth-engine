@@ -571,7 +571,8 @@ public:
                 0.0F),
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width,
                                           elapsed_seconds(),
-                                          scene.directional_light().snow, 0.0F),
+                                          scene.directional_light().snow,
+                                          scene.directional_light().cloudiness),
         });
 
     light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(), shadow_slots,

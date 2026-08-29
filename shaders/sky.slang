@@ -167,51 +167,69 @@ float4 fragMain(VSOutput vertIn) : SV_Target {
     float3 glowColor = lerp(float3(0.95, 0.42, 0.18), float3(1.0, 0.72, 0.38), day);
     color += glowColor * pow(glowShape, 3.0) * lowSun * 0.85;
 
-    // Clouds: big and puffy, with a hard edge.
-    //
-    // The first version was fbm faded smoothly by density, which reads as mist.
-    // What is wanted is the C#'s look -- pixelated, and either the cloud is
-    // there or it is not, with no soft gradient in between. So the noise is
-    // quantised on to a grid and then thresholded, which gives a chunky edge
-    // that matches a game made of voxels instead of fighting it.
-    if (direction.y > 0.02) {
-        float time = ubo.shadowFadeWidth.y;
-        float2 plane = direction.xz / direction.y;
-        float2 drift = float2(time * 0.004, time * 0.0016);
-
-        // Quantised before the noise is read, which is what makes the edge
-        // blocky rather than smooth. Coarser far away is wrong -- the cells are
-        // in plane space, so they get smaller toward the horizon on their own,
-        // exactly like the voxels do.
-        const float kCell = 0.05;
-        float2 cellular = floor((plane * 0.22 + drift) / kCell) * kCell;
-        float shape = fbm(cellular) * 0.7 + fbm(cellular * 0.36 - drift) * 0.5;
-
-        // Hard cutoff: in or out, one pixel wide so it does not alias to death.
-        // Threshold high enough that the sky is mostly sky. At 0.575 a single
-        // mass swallowed a whole quarter of it.
-        float cover = smoothstep(0.655, 0.668, shape);
-        cover *= smoothstep(0.02, 0.09, direction.y); // still nothing at the seam
-
-        // Lit from the sun's side. Fully lit or fully shadowed, no gradient --
-        // the same argument as the edge.
-        float toSun = saturate(dot(normalize(float3(direction.x, 0.0, direction.z)
-                                             + float3(1e-5, 0.0, 0.0)), sunFlat));
-        float sunlit = smoothstep(0.35, 0.55, toSun);
-        float3 litCloud = lerp(float3(0.72, 0.74, 0.80), float3(1.0, 0.99, 0.96), sunlit);
-        float3 duskCloud = lerp(float3(0.30, 0.22, 0.30), float3(1.0, 0.60, 0.30), sunlit);
-        float3 nightCloud = float3(0.06, 0.07, 0.11);
-        float3 cloudColor = litCloud * day + duskCloud * twilight + nightCloud * night;
-
-        color = lerp(color, cloudColor, cover);
-    }
-
     // The sun itself.
     const float kSunCosRadius = 0.99965;
     const float kSunEdge = 0.00035;
     float sun = smoothstep(kSunCosRadius - kSunEdge, 1.0, dot(direction, sunDir));
     float3 sunColor = min(ubo.lightColor.rgb, float3(1.0, 1.0, 1.0));
     color = lerp(color, max(sunColor, float3(1.0, 0.95, 0.85)), sun);
+
+    // Clouds, as the C# does them (shaders/Clouds.gdshader).
+    //
+    // Two values from the noise, doing different jobs, which is the part I had
+    // missed entirely:
+    //
+    //   COVERAGE decides whether there is a cloud here at all. The C# discards
+    //   where `c.g > cloudiness`, so raising cloudiness lets more of the sky
+    //   through the test -- that is how a clear morning becomes an overcast
+    //   afternoon without the cloud shapes changing.
+    //
+    //   THICKNESS decides how bright it is: `r = c.r + (1.0 - cloudiness)`.
+    //   When there is little cloud the offset is large and everything saturates
+    //   to white; when it is overcast the offset is small and the thin parts go
+    //   grey. So an overcast sky is darker, and a thick cloud is darker in the
+    //   middle where the noise is deepest, which is what a real one does.
+    //
+    // And they are slightly transparent -- ALPHA 0.9 with
+    // alpha_to_coverage_and_one -- so the sun is still visible behind them. A
+    // sun that vanishes the moment a cloud crosses it leaves no evidence it
+    // exists at all.
+    if (direction.y > 0.02) {
+        float time = ubo.shadowFadeWidth.y;
+        float cloudiness = ubo.shadowFadeWidth.w;
+        float2 plane = direction.xz / direction.y;
+        float2 drift = float2(time * 0.004, time * 0.0016);
+
+        // Quantised before the noise is read, so the edge is blocky rather than
+        // smooth. Wispy was the wrong look; this is made of voxels.
+        const float kCell = 0.05;
+        float2 cellular = floor((plane * 0.22 + drift) / kCell) * kCell;
+
+        float coverage = fbm(cellular);
+        float thickness = fbm(cellular * 0.41 + 11.3);
+
+        // The C#'s discard, as a mask. One pixel of softness so the edge does
+        // not crawl with aliasing, and no more than that.
+        float inCloud = 1.0 - smoothstep(cloudiness - 0.004, cloudiness + 0.004, coverage);
+        inCloud *= smoothstep(0.02, 0.09, direction.y);
+
+        // Thicker toward the middle, and darker there when the sky is heavy.
+        float bright = saturate(thickness + (1.0 - cloudiness));
+        float3 base = float3(bright);
+
+        // Warmed toward the sun, and toward grey as it gets heavier -- the C#
+        // lerps its sunset orange toward grey by cloudiness cubed.
+        float toSun = saturate(dot(normalize(float3(direction.x, 0.0, direction.z)
+                                             + float3(1e-5, 0.0, 0.0)), sunFlat));
+        float heavy = saturate(cloudiness);
+        float3 warm = lerp(float3(1.0, 0.62, 0.34), float3(0.75, 0.75, 0.75),
+                           heavy * heavy * heavy);
+        float3 cloudColor = base * lerp(float3(1.0, 1.0, 1.0), warm, twilight * toSun);
+        cloudColor *= lerp(float3(0.22, 0.24, 0.32), float3(1.0, 1.0, 1.0), day + twilight);
+
+        // 0.9, not 1.0. The sun is drawn before this and shows through.
+        color = lerp(color, cloudColor, inCloud * 0.9);
+    }
 
     return float4(color, 1.0);
 }

@@ -22,6 +22,11 @@ struct DirectionalLight {
   // The C# flips this as a boolean per material (VoxelClient.SetCold); a float
   // lets it arrive and leave gradually.
   float snow{0.0F};
+  // How much of the sky has cloud in it. The C#'s `cloudiness`: 0.333 is an
+  // ordinary day, and it moves toward 1.333 when it is about to rain, which is
+  // past full cover on purpose -- the extra range is what makes an overcast sky
+  // uniformly grey instead of merely crowded. See shaders/Clouds.gdshader.
+  float cloudiness{0.333F};
 };
 
 } // namespace engine
