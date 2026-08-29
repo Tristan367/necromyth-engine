@@ -24,7 +24,7 @@ struct FrameUniformBufferObject {
   alignas(16) std::array<glm::mat4, k_max_spot_shadow_lights> spot_light_vp{};
   alignas(16) glm::vec4 point_light_params{};    // z = face_size for PCF offset
   alignas(16) glm::vec4 cascade_params{};
-  // x = shadow coverage fade width. y = seconds elapsed, which the sky uses to
+  // x = shadow coverage fade width. z = how much winter there is. y = seconds elapsed, which the sky uses to
   // drift its clouds -- packed here because a vec4 is padded to sixteen bytes
   // whether the other three components hold anything or not, and adding a
   // uniform for one float would cost another sixteen.

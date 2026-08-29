@@ -17,6 +17,11 @@ struct DirectionalLight {
   // sky shader believing the sun was up and painting a blue midnight. This is
   // the sky's clock, and nothing else reads it.
   float sun_elevation{1.0F};
+  // How much of winter there is, 0 to 1. Snow on upward faces and a cold cast
+  // over everything; see applySnow and applyCold in shaders/lib/surface.slang.
+  // The C# flips this as a boolean per material (VoxelClient.SetCold); a float
+  // lets it arrive and leave gradually.
+  float snow{0.0F};
 };
 
 } // namespace engine

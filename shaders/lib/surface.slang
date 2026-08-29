@@ -56,6 +56,37 @@ float3 shadeDirectional(float3 worldPos, float3 normal, int filterModeSingle, in
     return ambient + ubo.lightColor.rgb * wrappedDiffuse(normal, lightDir) * sun;
 }
 
+// Snow on anything facing up.
+//
+// The C# lays an actual snow voxel on the topmost solid voxel of every column
+// and flips a `cold` shader parameter -- VoxelClient.AddSnow, VoxelServer.AddSnow.
+// Doing it in the shader instead means winter arriving and leaving costs nothing,
+// touches no saved voxels, and cannot get out of step with the world.
+//
+// Weighted by how far up the surface faces, so a roof and a lawn go white while
+// a wall stays what it is, and by depth under an overhang -- which comes free
+// from the baked light, since a surface with no sky above it never gets snowed
+// on.
+float3 applySnow(float3 color, float3 normal, float sky) {
+    float amount = ubo.shadowFadeWidth.z;
+    if (amount <= 0.001)
+        return color;
+    float facing = smoothstep(0.35, 0.85, normal.y);
+    float outside = smoothstep(0.25, 0.7, sky);
+    const float3 kSnow = float3(0.92, 0.94, 0.98);
+    return lerp(color, kSnow, saturate(amount * facing * outside));
+}
+
+// What winter does to everything else: the light goes blue and loses a little
+// warmth. `cold` in the C#, which sets it on every material at once.
+float3 applyCold(float3 color) {
+    float amount = ubo.shadowFadeWidth.z;
+    if (amount <= 0.001)
+        return color;
+    float3 chilled = color * float3(0.88, 0.94, 1.06);
+    return lerp(color, chilled, saturate(amount));
+}
+
 float4 shadeOpaqueSingle(VSOutput vertIn, int filterMode) {
     float4 texColor = sampleBaseColor(vertIn.fragTexCoord, vertIn.textureLayer, vertIn.sampleTextureArray);
     float3 baseColor = texColor.rgb * vertIn.fragColor;
@@ -64,7 +95,8 @@ float4 shadeOpaqueSingle(VSOutput vertIn, int filterMode) {
     float3 lit = applyBakedLight(shadeDirectional(vertIn.worldPos, normal, filterMode, -1),
                                  vertIn.bakedLight)
                + evaluateAllLights(vertIn.worldPos, normal, viewDir);
-    return float4(baseColor * lit, texColor.a);
+    baseColor = applySnow(baseColor, normal, vertIn.bakedLight.x);
+    return float4(applyCold(baseColor * lit), texColor.a);
 }
 
 float4 shadeOpaqueDual(VSOutput vertIn, int filterMode) {
@@ -72,10 +104,11 @@ float4 shadeOpaqueDual(VSOutput vertIn, int filterMode) {
     float3 baseColor = texColor.rgb * vertIn.fragColor;
     float3 normal = normalize(vertIn.worldNormal);
     float3 viewDir = normalize(ubo.cameraPosition.xyz - vertIn.worldPos);
+    baseColor = applySnow(baseColor, normal, vertIn.bakedLight.x);
     float3 lit = applyBakedLight(shadeDirectional(vertIn.worldPos, normal, -1, filterMode),
                                  vertIn.bakedLight)
                + evaluateAllLights(vertIn.worldPos, normal, viewDir);
-    return float4(baseColor * lit, texColor.a);
+    return float4(applyCold(baseColor * lit), texColor.a);
 }
 
 float4 shadeCutoutSingle(VSOutput vertIn, int filterMode) {
