@@ -216,10 +216,26 @@ struct PassRecorder {
 
   // Null when the slot is out of range or holds no live geometry (a chunk that
   // streamed out this frame, whose instances have not been retired yet).
+  // Alive AND actually holding buffers.
+  //
+  // `alive` says the slot is in use; it does not say the geometry has arrived.
+  // A mesh whose upload has not landed yet, or whose buffers were released
+  // while an instance still pointed at it, has null handles -- and binding
+  // those is undefined behaviour that happens to survive on this driver.
+  //
+  // Found by cycling dimensions under validation: every change frees the
+  // world's meshes while the scene still has instances referring to them for
+  // one frame, and the validation layer reported thirty-three
+  // VK_NULL_HANDLE binds and draws. Silent in normal play, because normal play
+  // does not free every mesh at once.
   [[nodiscard]] auto mesh_for(std::uint32_t mesh_index) const -> const MeshGpu * {
     if (mesh_index >= mesh_gpus.size() || !mesh_gpus[mesh_index].alive)
       return nullptr;
-    return &mesh_gpus[mesh_index].gpu;
+    const MeshGpu &mesh = mesh_gpus[mesh_index].gpu;
+    if (mesh.vertex_buffer() == vk::Buffer{} || mesh.index_buffer() == vk::Buffer{} ||
+        mesh.index_count() == 0)
+      return nullptr;
+    return &mesh;
   }
 
   // Conservative light-volume test on the draw's precomputed world sphere. A
