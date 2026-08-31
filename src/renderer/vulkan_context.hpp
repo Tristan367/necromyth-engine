@@ -1159,8 +1159,16 @@ private:
     vk::SamplerCreateInfo samp_info{};
     samp_info.magFilter = vk::Filter::eLinear;
     samp_info.minFilter = vk::Filter::eLinear;
-    samp_info.compareEnable = VK_TRUE;
-    samp_info.compareOp = vk::CompareOp::eLessOrEqual;
+    // NOT a comparison sampler. lighting.slang binds this as a plain
+    // SamplerState, reads raw depths with SampleLevel and does its own
+    // compares -- and sampling through a compareEnable sampler with a non-Dref
+    // instruction is undefined per the spec's texel-comparison rules. It read
+    // correctly on this driver, which is the worst outcome for a bug. The
+    // directional map and the point cubemap keep their comparison samplers;
+    // their shaders use SampleCmp, which is the pairing the spec means.
+    samp_info.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+    samp_info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+    samp_info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
     spot_atlas_sampler_ = vk::raii::Sampler(device_.device(), samp_info);
   }
 
