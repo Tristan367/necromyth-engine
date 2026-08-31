@@ -28,6 +28,13 @@ picked up automatically (CONFIGURE_DEPENDS glob); keep it self-contained.
 A GPU-side change still needs `cd ../necromyth-engine-demo && make debug` and an
 actual run with validation layers on.
 
+**The demo is a caller `make` cannot see.** An engine commit titled "Delete 179
+lines nothing called" removed ten members -- and the demo called every one of
+them, so the engine's GPU verification vehicle silently stopped building and
+stayed broken across several engine changes. Before deleting engine API, build
+the demo; "nothing calls this" measured against the engine alone is not a
+measurement.
+
 ### Validation is a test result, not a thing you read
 
 Core validation checks each call is legal in isolation. **Synchronization

@@ -620,6 +620,13 @@ struct GltfImportResult {
   std::vector<InstanceHandle> instances;
   std::uint32_t skeleton_index{k_invalid_skin_index};
 
+  // Called by the DEMO, not the game -- deleted once as "nothing calls this"
+  // because the engine's own build cannot see demo callers. The demo is the
+  // engine's GPU verification vehicle; check it still builds before deleting
+  // API the engine itself does not use.
+  [[nodiscard]] auto first_instance() const -> InstanceHandle {
+    return instances.empty() ? InstanceHandle{} : instances.front();
+  }
   [[nodiscard]] auto instance_count() const -> std::size_t { return instances.size(); }
 };
 

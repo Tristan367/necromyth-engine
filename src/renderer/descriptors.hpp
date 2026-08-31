@@ -305,7 +305,13 @@ public:
     return *material_skinned_layout_;
   }
 
+  [[nodiscard]] auto pipeline_set_layouts() const -> std::array<vk::DescriptorSetLayout, 2> {
+    return {*frame_layout_, *material_layout_};
+  }
 
+  [[nodiscard]] auto skinned_pipeline_set_layouts() const -> std::array<vk::DescriptorSetLayout, 2> {
+    return {*frame_layout_, *material_skinned_layout_};
+  }
 
   [[nodiscard]] auto frame_set(std::uint32_t frame_index) const -> vk::DescriptorSet {
     return frame_sets_.at(frame_index);

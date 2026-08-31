@@ -233,6 +233,9 @@ public:
   // For tests that have to record their own command buffer -- they need the
   // graphics queue family to make a pool, which nothing else outside here does.
   [[nodiscard]] auto gpu() -> VulkanDevice & { return device_; }
+  [[nodiscard]] auto color_fmt() const -> vk::Format { return swapchain_.image_format(); }
+  [[nodiscard]] auto depth_fmt() const -> vk::Format { return depth_image_.format(); }
+  [[nodiscard]] auto frame_layout_obj() const -> vk::DescriptorSetLayout { return descriptor_resources_.frame_layout(); }
 
   [[nodiscard]] auto &particle_system() { return particle_system_; }
   // The HUD. Call begin() on it each frame and draw into it; whatever is in it
@@ -240,6 +243,7 @@ public:
   [[nodiscard]] auto &ui() { return ui_draw_list_; }
   [[nodiscard]] auto swapchain_extent() const -> vk::Extent2D { return swapchain_.extent(); }
   [[nodiscard]] auto sample_count() const -> vk::SampleCountFlagBits { return device_.msaa_samples(); }
+  [[nodiscard]] auto frame_set_obj(std::uint32_t i) const -> vk::DescriptorSet { return descriptor_resources_.frame_set(i); }
   [[nodiscard]] auto phys_dev() -> vk::raii::PhysicalDevice { return device_.physical_device(); }
   [[nodiscard]] auto mem_props() -> vk::PhysicalDeviceMemoryProperties { return device_.physical_device().getMemoryProperties(); }
 
@@ -368,8 +372,23 @@ public:
   // path and a correct picture matters more than the frame it costs.
   void request_screenshot(std::string path) { screenshot_path_ = std::move(path); }
 
+  // True between request_screenshot() and the frame that actually writes it.
+  //
+  // A caller cannot just count frames and quit: draw_frame returns without
+  // drawing when the swapchain has no image ready, so the Nth call to it is not
+  // necessarily the Nth rendered frame. Anything scripting a capture should
+  // keep looping until this goes false.
+  [[nodiscard]] auto screenshot_pending() const -> bool { return !screenshot_path_.empty(); }
 
+  // Writes the spot shadow atlas to a greyscale image, after the next frame
+  // renders it. Near is dark, far is white, and an untouched tile is pure
+  // white -- so the picture shows both what each light saw and which slots were
+  // used at all.
+  void request_spot_atlas_dump(std::string path) { spot_atlas_dump_path_ = std::move(path); }
 
+  [[nodiscard]] auto spot_atlas_dump_pending() const -> bool {
+    return !spot_atlas_dump_path_.empty();
+  }
 
   void sync_scene(const Scene &scene) {
     if (gpu_shutdown_complete_)
@@ -833,6 +852,8 @@ public:
       capture_swapchain_image(image_index);
     // Only meaningful once the pass has actually run; dumping a cleared atlas
     // would say nothing.
+    if (!spot_atlas_dump_path_.empty() && has_spot_shadows)
+      capture_spot_atlas(startup_spot_atlas_size_);
 
 
 
@@ -1327,8 +1348,14 @@ private:
       instance_bufs[i] = instance_buffer_.buffer(i);
     descriptor_resources_.update_instance_buffers(device_.device(), instance_bufs);
 
-    std::array<vk::Buffer, 2> particle_bufs{};
-    for (std::uint32_t i = 0; i < 2; ++i)
+    // All frames in flight, not two. The particle system is created with
+    // max_frames_in_flight buffers, but this literal survived the
+    // k_frames_in_flight unification -- so frame slot 2's particle SSBO at
+    // binding 7 was never written, and any frame that drew particles on that
+    // slot read an undefined descriptor. The same disease k_pt_shadow_frames
+    // died of; it hid because nothing in the benchmarks ever ignites.
+    std::array<vk::Buffer, detail::max_frames_in_flight> particle_bufs{};
+    for (std::uint32_t i = 0; i < detail::max_frames_in_flight; ++i)
       particle_bufs[i] = particle_system_.buffer(i);
     descriptor_resources_.update_particle_ssbo(device_.device(), particle_bufs);
 
@@ -1737,8 +1764,91 @@ private:
               << extent.height << ")\n";
   }
 
+  // Reads the D32 spot atlas back and writes it as a greyscale PGM.
+  //
+  // Slow and fully synchronising, like the screenshot path, and for the same
+  // reason: it runs when a human asks to look at something, never in a frame
+  // that matters.
+  void capture_spot_atlas(std::uint32_t atlas_size) {
+    const std::string path = spot_atlas_dump_path_;
+    spot_atlas_dump_path_.clear();
+
+    device_.device().waitIdle();
+
+    const vk::DeviceSize bytes =
+        static_cast<vk::DeviceSize>(atlas_size) * atlas_size * sizeof(float);
+
+    vk::raii::Buffer staging(device_.device(), vk::BufferCreateInfo{
+        .size = bytes,
+        .usage = vk::BufferUsageFlagBits::eTransferDst,
+        .sharingMode = vk::SharingMode::eExclusive,
+    });
+    const vk::MemoryRequirements requirements = staging.getMemoryRequirements();
+    vk::raii::DeviceMemory memory(device_.device(), vk::MemoryAllocateInfo{
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = detail::find_memory_type(
+            device_.physical_device().getMemoryProperties(), requirements.memoryTypeBits,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
+    });
+    staging.bindMemory(*memory, 0);
+
+    vk::raii::CommandBuffers buffers(device_.device(), vk::CommandBufferAllocateInfo{
+        .commandPool = *command_pool_,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    });
+    vk::raii::CommandBuffer &copy = buffers.front();
+    copy.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+    // The pass leaves the atlas in DEPTH_STENCIL_READ_ONLY_OPTIMAL, and puts it
+    // back before returning, so the tracked layout stays true.
+    transition_image_layout(copy, *spot_atlas_, pass_layouts_.spot_atlas_layout,
+                            vk::ImageLayout::eTransferSrcOptimal,
+                            vk::AccessFlagBits2::eShaderRead, vk::AccessFlagBits2::eTransferRead,
+                            vk::PipelineStageFlagBits2::eFragmentShader,
+                            vk::PipelineStageFlagBits2::eTransfer,
+                            vk::ImageAspectFlagBits::eDepth);
+    copy.copyImageToBuffer(*spot_atlas_, vk::ImageLayout::eTransferSrcOptimal, *staging,
+                           vk::BufferImageCopy{
+                               .imageSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
+                               .imageExtent = {atlas_size, atlas_size, 1},
+                           });
+    transition_image_layout(copy, *spot_atlas_, vk::ImageLayout::eTransferSrcOptimal,
+                            pass_layouts_.spot_atlas_layout,
+                            vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eShaderRead,
+                            vk::PipelineStageFlagBits2::eTransfer,
+                            vk::PipelineStageFlagBits2::eFragmentShader,
+                            vk::ImageAspectFlagBits::eDepth);
+    copy.end();
+
+    device_.graphics_queue().submit(vk::SubmitInfo{
+        .commandBufferCount = 1, .pCommandBuffers = &*copy});
+    device_.graphics_queue().waitIdle();
+
+    const auto *depths = static_cast<const float *>(memory.mapMemory(0, bytes));
+
+    // A depth buffer is almost all values very near 1.0, so a linear mapping
+    // renders as a white square with nothing in it. Stretching the range that
+    // is actually occupied is what makes the tiles visible.
+    float nearest = 1.0F;
+    for (std::uint32_t i = 0; i < atlas_size * atlas_size; ++i)
+      nearest = std::min(nearest, depths[i]);
+    const float span = std::max(1.0F - nearest, 1e-4F);
+
+    std::ofstream out(path, std::ios::binary);
+    out << "P5\n" << atlas_size << " " << atlas_size << "\n255\n";
+    for (std::uint32_t i = 0; i < atlas_size * atlas_size; ++i) {
+      const float normalised = (depths[i] - nearest) / span;
+      const auto value = static_cast<char>(std::clamp(normalised, 0.0F, 1.0F) * 255.0F);
+      out.write(&value, 1);
+    }
+    memory.unmapMemory();
+    std::cout << "spot atlas written to " << path << " (" << atlas_size << 'x' << atlas_size
+              << ", nearest depth " << nearest << ")\n";
+  }
 
   std::string screenshot_path_;
+  std::string spot_atlas_dump_path_;
   UploadQueue upload_queue_;
   std::uint64_t upload_deferrals_{0};
   std::size_t pending_mesh_uploads_{0};
