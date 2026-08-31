@@ -113,7 +113,7 @@ public:
 
     for (std::uint32_t index = 0; index < blocks_.size(); ++index) {
       Block &block = blocks_[index];
-      if (block.memory_type != memory_type || block.dedicated)
+      if (block.size == 0 || block.memory_type != memory_type || block.dedicated)
         continue;
       if (const Allocation allocation = take_from(block, index, requirements.size, alignment);
           allocation.valid()) {
@@ -167,6 +167,39 @@ public:
         block.free_ranges.erase(inserted);
       }
     }
+    reclaim_empty_blocks();
+  }
+
+  // Give a wholly-unused block back to the driver.
+  //
+  // Blocks were never released, so the pool was a permanent high-water mark:
+  // walk somewhere dense once and the memory is held for the rest of the
+  // session. At a 32-chunk render distance that reached eleven of twelve
+  // gigabytes of VRAM and starved everything else on the machine -- reported
+  // by another application refusing to start.
+  //
+  // One spare is kept. Freeing the last empty block the instant it empties
+  // would hand it back and immediately re-allocate it on the next mesh, and a
+  // 64MB vkAllocateMemory is the 1.8ms call this engine already went to some
+  // trouble to move off the frame.
+  // The SLOT stays; only the memory goes back.
+  //
+  // Allocation::block is an index into blocks_, so erasing an element would
+  // renumber every allocation that came after it and corrupt the next free().
+  // An emptied slot is left in place with size 0 and no memory; allocate()
+  // skips it and open_block() reuses it.
+  void reclaim_empty_blocks() {
+    std::size_t empty_seen = 0;
+    for (Block &block : blocks_) {
+      if (block.size == 0 || block.dedicated || block.in_use != 0)
+        continue;
+      if (++empty_seen <= 1)
+        continue; // keep one spare, see above
+      block.memory = nullptr; // frees it: vk::raii owns the handle
+      block.size = 0;
+      block.free_ranges.clear();
+      ++blocks_released_;
+    }
   }
 
   // Observability, because an allocator you cannot see inside is one you cannot
@@ -198,6 +231,8 @@ public:
   [[nodiscard]] auto worst_block_open_ms() const -> float { return worst_open_ms_; }
   // Blocks that were opened ahead of need rather than mid-frame.
   [[nodiscard]] auto prefetched_blocks() const -> std::uint64_t { return prefetched_blocks_; }
+  // Blocks handed back to the driver once nothing was using them.
+  [[nodiscard]] auto blocks_released() const -> std::uint64_t { return blocks_released_; }
   // For tests that want the old, entirely synchronous behaviour.
   void set_prefetch_enabled(bool enabled) { prefetch_enabled_ = enabled; }
 
@@ -299,7 +334,16 @@ private:
     block.memory_type = prefetch_memory_type_;
     block.dedicated = false;
     block.free_ranges.push_back(Range{.offset = 0, .size = block_bytes_});
-    blocks_.push_back(std::move(block));
+    bool placed = false;
+    for (Block &slot : blocks_) {
+      if (slot.size == 0 && !slot.dedicated) {
+        slot = std::move(block);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed)
+      blocks_.push_back(std::move(block));
     ++device_allocations_;
     ++prefetched_blocks_;
     prefetch_in_flight_ = false;
@@ -334,6 +378,15 @@ private:
     block.memory_type = memory_type;
     block.dedicated = dedicated;
     block.free_ranges.push_back(Range{.offset = 0, .size = size});
+    // Reuse a reclaimed slot if there is one, so blocks_ does not grow without
+    // bound as areas are entered and left.
+    for (Block &slot : blocks_) {
+      if (slot.size == 0 && !slot.dedicated) {
+        slot = std::move(block);
+        ++device_allocations_;
+        return;
+      }
+    }
     blocks_.push_back(std::move(block));
     ++device_allocations_;
   }
@@ -382,6 +435,7 @@ private:
   std::vector<Block> blocks_;
   std::uint64_t device_allocations_{0};
   std::uint64_t prefetched_blocks_{0};
+  std::uint64_t blocks_released_{0};
   float worst_open_ms_{0.0F};
   bool prefetch_enabled_{true};
   bool prefetch_in_flight_{false};
