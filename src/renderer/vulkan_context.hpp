@@ -117,7 +117,10 @@ public:
     create_point_cubemap(point_cube_face_size_ = scaled_shadow_map_resolution(1024, config.shadow_scale),
                          config.max_point_shadow_lights);
     create_point_light_shadow_ssbo(config.max_point_shadow_lights);
-    particle_system_.create(device_.physical_device(), device_.device(), config.max_particles, 2);
+    // Frames in flight, not 2 -- same bug as k_pt_shadow_frames above. Slot 2's
+    // particle descriptor went unwritten while draw_particles bound it anyway.
+    particle_system_.create(device_.physical_device(), device_.device(), config.max_particles,
+                            detail::max_frames_in_flight);
     upload_queue_.create(device_.physical_device(), device_.device(),
                          config.staging_bytes_per_frame, detail::max_frames_in_flight);
     mesh_upload_budget_ms_ = config.mesh_upload_budget_ms;
@@ -432,6 +435,43 @@ public:
 
     {
       const ScopedCpuZone wait_zone(cpu_profiler_, CpuZone::WaitForFrame);
+      // Pace on ACTUAL PRESENTATION, not on image availability.
+      //
+      // Without this the only thing throttling the loop is
+      // vkAcquireNextImageKHR blocking, and that is documented as the wrong
+      // place to throttle -- Hans-Kristian Arntzen (Granite, Mesa WSI):
+      // "Frame limiting in AcquireNextImageKHR is broken since you can acquire
+      // multiple images in Vulkan and may happen at arbitrary times." It shows
+      // up exactly as described: measured here at 1080x1920 with FIFO on a real
+      // composited surface, ~1% of frames took 33ms with THIRTY of those
+      // milliseconds inside acquire, while the GPU wanted 6ms and the CPU 1ms.
+      // The application was idle and waiting, and which phase it settled into
+      // was luck -- identical runs gave 0.2% and 27% of frames dropped.
+      //
+      // vkWaitForPresentKHR blocks until a specific present has actually been
+      // displayed, so the loop is released a fixed offset from a real vblank
+      // instead of whenever the presentation engine happens to free an image.
+      // Granite's default is a maximum of one outstanding present; two is
+      // kept here because it leaves a frame of slack for a late GPU while
+      // still pinning the phase.
+      //
+      // The id waited on is (last presented - N), NOT (last presented - N + 1).
+      // Off by one here means waiting for the frame just submitted, which
+      // removes all CPU/GPU overlap and pins the whole game to half refresh
+      // rate: measured at 100% of frames on exactly 33.33ms.
+      //
+      // Only under FIFO. Mailbox and Immediate discard presents, so a present
+      // id may never be displayed at all and the wait would be a stall with no
+      // pacing value.
+      if (max_outstanding_presents_ > 0 && device_.present_wait_supported() &&
+          swapchain_.present_mode() == vk::PresentModeKHR::eFifo &&
+          last_presented_id_ > max_outstanding_presents_) {
+        const vk::Result paced = swapchain_.handle().waitForPresent(
+            last_presented_id_ - max_outstanding_presents_, detail::frame_fence_timeout_ns);
+        // A timeout or an out-of-date swapchain is not fatal here: pacing is an
+        // optimisation, and the frame is perfectly renderable without it.
+        (void)paced;
+      }
       // Bounded for the same reason the acquire below is, even though this one
       // waits on our own GPU work rather than on the compositor. A shader that
       // hangs the device, or a driver reset, leaves this fence unsignalled --
@@ -792,9 +832,14 @@ public:
     if (present_result == vk::Result::eErrorOutOfDateKHR) {
       if (!recreate_swapchain())
         framebuffer_resized_ = true;
-    }
-    else if (present_result != vk::Result::eSuccess && present_result != vk::Result::eSuboptimalKHR)
+    } else if (present_result != vk::Result::eSuccess &&
+               present_result != vk::Result::eSuboptimalKHR) {
       throw std::runtime_error("Failed to present swapchain image");
+    } else {
+      // Accepted by the presentation engine, so this id will be displayed and
+      // is safe to wait on. Suboptimal still presents.
+      last_presented_id_ = present_id_;
+    }
 
     frame_index_ = (frame_index_ + 1) % detail::max_frames_in_flight;
     ++frame_counter_;
@@ -1425,6 +1470,10 @@ private:
       return false;
     device_.wait_idle();
     frame_index_ = 0;
+    // Present ids belong to the swapchain that issued them. Waiting on an id
+    // from the old one after a recreate is meaningless, so the count restarts.
+    present_id_ = 0;
+    last_presented_id_ = 0;
     swapchain_.recreate();
     recreate_render_targets();
     pipelines_.recreate(device_.device(), swapchain_.image_format(), depth_image_.format());
@@ -1513,7 +1562,14 @@ private:
   };
   static_assert(sizeof(GpuPointLightShadowData) == 480,
                 "GpuPointLightShadowData must be 480 bytes to match Slang SSBO layout");
-  static constexpr std::uint32_t k_pt_shadow_frames = 2;
+  // One per frame in flight, NOT two.
+  //
+  // This was 2 while the engine runs 3 frames in flight, so frame slot 2's
+  // storage-buffer descriptor at binding 6 was never written -- and there are
+  // no PARTIALLY_BOUND binding flags, so any shader read of it on every third
+  // frame is undefined behaviour, on top of the point-shadow matrices simply
+  // being stale. Exactly the mismatch frames_in_flight.hpp exists to prevent.
+  static constexpr std::uint32_t k_pt_shadow_frames = detail::max_frames_in_flight;
   std::array<std::optional<vk::raii::Buffer>, k_pt_shadow_frames> pt_shadow_buffers_{};
   std::array<std::optional<vk::raii::DeviceMemory>, k_pt_shadow_frames> pt_shadow_memory_{};
   std::array<GpuPointLightShadowData *, k_pt_shadow_frames> pt_shadow_mapped_{};
@@ -1641,6 +1697,19 @@ private:
   float worst_mesh_upload_ms_{0.0F};
   std::uint64_t upload_bytes_last_frame_{0};
   std::uint64_t present_id_{0};
+  // ENGINE_OUTSTANDING_PRESENTS, 0 to pace on acquire as before.
+  std::uint64_t max_outstanding_presents_{[] {
+    if (const char *env = std::getenv("ENGINE_OUTSTANDING_PRESENTS");
+        env != nullptr && env[0] != '\0')
+      return std::strtoull(env, nullptr, 10);
+    return 1ULL;
+  }()};
+  // The last id that was actually handed to a working swapchain. present_id_
+  // is incremented before the call, so a present that fails with
+  // eErrorOutOfDateKHR consumes an id that will never be displayed -- and
+  // waiting on it then blocks for the full timeout, two seconds, every time
+  // the window is resized. Only ids in here are ever waited on.
+  std::uint64_t last_presented_id_{0};
   std::chrono::steady_clock::time_point last_displayed_at_{std::chrono::steady_clock::now()};
   std::chrono::steady_clock::time_point last_present_called_at_{std::chrono::steady_clock::now()};
   float last_display_interval_ms_{0.0F};
