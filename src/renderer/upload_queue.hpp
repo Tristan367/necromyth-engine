@@ -101,9 +101,22 @@ public:
 
     // Copy offsets want to be 4-byte aligned; over-aligning costs nothing here.
     const vk::DeviceSize aligned = (offset_ + 15) & ~vk::DeviceSize{15};
-    if (aligned + size > segment_size_) {
-      overflowed_ = true;
-      return false;
+    const vk::DeviceSize limit = budget_ == 0 ? segment_size_ : std::min(budget_, segment_size_);
+    if (aligned + size > limit) {
+      // One exception: a single mesh larger than the whole budget would never
+      // fit and would be retried forever, so the first upload of a frame is
+      // always allowed through. Deferring is meant to spread a burst, not to
+      // make a big mesh undrawable.
+      if (!(copies_.empty() && aligned + size <= segment_size_)) {
+        // Hitting the budget is the system working; hitting the ring is the
+        // system out of room. Reporting both as "the ring is full" told the
+        // reader to raise a number that was not the one being reached.
+        if (aligned + size > segment_size_)
+          overflowed_ = true;
+        else
+          budget_reached_ = true;
+        return false;
+      }
     }
     offset_ = aligned;
 
@@ -137,8 +150,19 @@ public:
     });
   }
 
+  // How many bytes one frame may stage before the rest waits for the next one.
+  //
+  // The ring's segment is sized for a worst case; this is the number that keeps
+  // an ORDINARY frame ordinary. sync_scene_meshes uploads every changed mesh it
+  // can fit, so a batch of sections landing together used to be memcpy'd whole
+  // on the main thread in a single frame -- 32 MB of it, with a vkCreateBuffer
+  // pair per mesh on top. That is a visible stagger and it happens exactly when
+  // you walk into new terrain. Zero means "no budget", the old behaviour.
+  void set_frame_budget(vk::DeviceSize bytes) { budget_ = bytes; }
+
   [[nodiscard]] auto overflowed() const -> bool { return overflowed_; }
-  void clear_overflow() { overflowed_ = false; }
+  [[nodiscard]] auto budget_reached() const -> bool { return budget_reached_; }
+  void clear_overflow() { overflowed_ = false; budget_reached_ = false; }
   [[nodiscard]] auto bytes_used() const -> vk::DeviceSize { return offset_; }
 
   [[nodiscard]] auto empty() const -> bool { return copies_.empty(); }
@@ -183,12 +207,14 @@ private:
   vk::raii::DeviceMemory memory_{nullptr};
   std::byte *mapped_{nullptr};
   vk::DeviceSize segment_size_{0};
+  vk::DeviceSize budget_{0};
   vk::DeviceSize segment_base_{0};
   vk::DeviceSize offset_{0};
   std::uint32_t segment_count_{1};
   std::uint64_t current_frame_{0};
   bool started_{false};
   bool overflowed_{false};
+  bool budget_reached_{false};
   std::vector<Copy> copies_;
 };
 

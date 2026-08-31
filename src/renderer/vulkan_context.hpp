@@ -120,6 +120,7 @@ public:
     particle_system_.create(device_.physical_device(), device_.device(), config.max_particles, 2);
     upload_queue_.create(device_.physical_device(), device_.device(),
                          config.staging_bytes_per_frame, detail::max_frames_in_flight);
+    upload_queue_.set_frame_budget(config.staging_budget_per_frame);
     instance_buffer_.create(device_.physical_device(), device_.device(),
                             std::max(config.max_draw_instances, 1U), detail::max_frames_in_flight);
     max_skinned_instances_ = std::max(config.max_skinned_instances, 1U);
@@ -338,6 +339,14 @@ public:
   // for a frame or two is normal streaming; nonzero and STUCK means geometry
   // that will never appear -- an invisible chunk you can still walk on.
   [[nodiscard]] auto pending_mesh_uploads() const -> std::size_t { return pending_mesh_uploads_; }
+  // What the LAST frame actually uploaded, rather than what is still owed. A
+  // stagger is one frame's worth of work; the backlog is not the measurement.
+  [[nodiscard]] auto mesh_uploads_last_frame() const -> std::size_t {
+    return mesh_uploads_last_frame_;
+  }
+  [[nodiscard]] auto upload_bytes_last_frame() const -> std::uint64_t {
+    return upload_bytes_last_frame_;
+  }
 
   // Writes the next presented frame to an image file.
   //
@@ -852,17 +861,19 @@ private:
   }
 
   void sync_mesh_slots(const Scene &scene) {
-    if (upload_queue_.overflowed()) {
+    if (upload_queue_.overflowed() || upload_queue_.budget_reached()) {
+      const bool ring_full = upload_queue_.overflowed();
       ++upload_deferrals_;
       upload_queue_.clear_overflow();
-      if (!logged_upload_overflow_) {
+      if (ring_full && !logged_upload_overflow_) {
         std::cout << "Mesh staging ring is full; uploads are being deferred to later "
-                     "frames. Raise EngineConfig::upload_bytes_per_frame if this is "
+                     "frames. Raise EngineConfig::staging_bytes_per_frame if this is "
                      "constant.\n";
         logged_upload_overflow_ = true;
       }
     }
-    engine::sync_scene_meshes(
+    const vk::DeviceSize before = upload_queue_.bytes_used();
+    mesh_uploads_last_frame_ = engine::sync_scene_meshes(
         scene,
         buffer_allocator_,
         device_.device(),
@@ -870,6 +881,8 @@ private:
         mesh_gpus_,
         [this](MeshGpu retired) { retired_meshes_.retire(std::move(retired), frame_counter_); },
         &pending_mesh_uploads_);
+    const vk::DeviceSize after = upload_queue_.bytes_used();
+    upload_bytes_last_frame_ = after >= before ? after - before : after;
   }
 
   // Republishes the averaged numbers every window. A window of 120 frames is
@@ -1554,6 +1567,8 @@ private:
   UploadQueue upload_queue_;
   std::uint64_t upload_deferrals_{0};
   std::size_t pending_mesh_uploads_{0};
+  std::size_t mesh_uploads_last_frame_{0};
+  std::uint64_t upload_bytes_last_frame_{0};
   bool logged_upload_overflow_{false};
   // Monotonic frame number, for deciding when retired GPU resources are safe
   // to free. Distinct from frame_index_, which cycles 0..max_frames_in_flight-1.

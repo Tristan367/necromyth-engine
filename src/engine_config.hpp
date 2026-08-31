@@ -39,6 +39,16 @@ struct EngineConfig {
   // fit; anything that does not is deferred to the next frame rather than
   // stalling. 32 MB comfortably covers a streaming voxel world.
   std::uint64_t staging_bytes_per_frame{32ULL * 1024 * 1024};
+  // How much of that ring ONE frame is allowed to fill. The ring is sized for a
+  // worst case; this is what keeps an ordinary frame ordinary.
+  //
+  // Mesh sync uploads every changed mesh that still fits, so a batch of voxel
+  // sections finishing together landed as one frame's memcpy of the whole ring,
+  // with a vkCreateBuffer pair per mesh on top -- which is a stagger, arriving
+  // precisely when you walk into new terrain. Spreading the same bytes over a
+  // few frames costs those sections a few frames of lateness and costs the
+  // frame rate nothing. 0 means no budget.
+  std::uint64_t staging_budget_per_frame{4ULL * 1024 * 1024};
   // Alpha modes the application will use later, on top of whatever the scene
   // already contains when the device is created.
   //
@@ -67,6 +77,10 @@ struct EngineConfig {
   config.present_mode = present_mode_preference_from_environment();
   if (const char *env = std::getenv("ENGINE_PROFILE"); env != nullptr && env[0] != '\0')
     config.profile_to_stdout = env[0] != '0';
+  // ENGINE_UPLOAD_BUDGET=<kilobytes>, 0 to remove the cap. Exists so the cap can
+  // be measured against no cap in the same session rather than argued about.
+  if (const char *env = std::getenv("ENGINE_UPLOAD_BUDGET"); env != nullptr && env[0] != '\0')
+    config.staging_budget_per_frame = std::strtoull(env, nullptr, 10) * 1024ULL;
   // ENGINE_WINDOW=1920x1080. Chiefly so a benchmark can put a real fragment
   // load on the GPU: a profile taken in a 960x540 window is measuring the
   // vertex path and calling it a frame time.

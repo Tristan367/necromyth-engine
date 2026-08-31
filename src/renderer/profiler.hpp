@@ -203,12 +203,21 @@ public:
       const std::size_t end = begin + 2;
       const bool available = results[begin + 1] != 0 && results[end + 1] != 0;
       if (!available || results[end] < results[begin]) {
+        last_[zone] = 0.0F;
         accumulators_[zone].add(0.0F);
         continue;
       }
       const double ticks = static_cast<double>(results[end] - results[begin]);
-      accumulators_[zone].add(static_cast<float>(ticks * timestamp_period_ns_ * 1e-6));
+      last_[zone] = static_cast<float>(ticks * timestamp_period_ns_ * 1e-6);
+      accumulators_[zone].add(last_[zone]);
     }
+  }
+
+  // What this pass cost on the GPU in the frame just collected. The average is
+  // the wrong instrument for a stagger: a single 30ms pass inside a hundred 3ms
+  // ones reads as 3.3ms and looks like nothing happened.
+  [[nodiscard]] auto last_ms(GpuZone zone) const -> float {
+    return last_[static_cast<std::uint32_t>(zone)];
   }
 
   void flush() {
@@ -227,6 +236,7 @@ private:
   }
 
   vk::raii::QueryPool pool_{nullptr};
+  std::array<float, k_zone_count> last_{};
   std::array<detail::ZoneAccumulator, k_zone_count> accumulators_{};
   std::array<bool, k_zone_count> zone_written_{};
   std::vector<bool> frame_written_;
@@ -247,7 +257,15 @@ public:
   void end(CpuZone zone) {
     const auto index = static_cast<std::uint32_t>(zone);
     const auto elapsed = std::chrono::duration<float, std::milli>(Clock::now() - starts_[index]);
+    last_[index] = elapsed.count();
     accumulators_[index].add(elapsed.count());
+  }
+
+  // What this zone cost in the frame just gone, rather than averaged over the
+  // profiling window. A stagger is one frame in a hundred; an average over a
+  // hundred frames is exactly the wrong instrument for finding it.
+  [[nodiscard]] auto last_ms(CpuZone zone) const -> float {
+    return last_[static_cast<std::uint32_t>(zone)];
   }
 
   void flush() {
@@ -261,6 +279,7 @@ public:
 
 private:
   std::array<Clock::time_point, k_zone_count> starts_{};
+  std::array<float, k_zone_count> last_{};
   std::array<detail::ZoneAccumulator, k_zone_count> accumulators_{};
 };
 
