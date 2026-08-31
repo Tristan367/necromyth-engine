@@ -77,10 +77,13 @@ public:
   VulkanContext(SDL_Window *window, const EngineConfig &config, const Scene &scene)
       : window_(window),
         streaming_alpha_modes_(config.streaming_alpha_modes),
+        terrain_alpha_modes_(config.terrain_alpha_modes),
         msaa_config_(resolve_msaa_for_scene(
             config.msaa,
             scene_uses_alpha_to_coverage(scene.instances()) ||
                 config.streaming_alpha_modes[static_cast<std::size_t>(
+                    MeshAlphaMode::AlphaToCoverage)] ||
+                config.terrain_alpha_modes[static_cast<std::size_t>(
                     MeshAlphaMode::AlphaToCoverage)])),
         startup_point_shadow_filter_(scene.shadow_settings().point_shadow_filter),
         startup_shadow_filter_mode_(scene.shadow_settings().filter_mode),
@@ -1394,6 +1397,7 @@ private:
         .shadow_filter = startup_shadow_filter_mode_,
         .cascade_mode = startup_cascade_mode_,
         .textured_alpha_modes = alpha_modes,
+        .terrain_alpha_modes = terrain_alpha_modes_,
         .build_skinned = has_skinned_instances(scene.instances(), scene),
         .has_point_shadows = has_point_shadow_lights(scene.point_lights()),
     };
@@ -1403,10 +1407,19 @@ private:
       if (used)
         ++textured_pipeline_count;
     }
+    std::size_t terrain_pipeline_count = 0;
+    for (const bool used : profile.terrain_alpha_modes) {
+      if (used)
+        ++terrain_pipeline_count;
+    }
+    if (terrain_pipeline_count > 0)
+      ++terrain_pipeline_count; // + ShadowDepthTerrain
     const std::size_t skinned_count = profile.build_skinned ? textured_pipeline_count + 1 : 0;
     const std::size_t point_count = profile.has_point_shadows ? 2 : 0; // PointShadowDepth + skinned
-    std::cout << "Graphics pipelines: " << (2 + textured_pipeline_count + skinned_count + point_count)
+    std::cout << "Graphics pipelines: "
+              << (2 + textured_pipeline_count + terrain_pipeline_count + skinned_count + point_count)
               << " (background + shadow depth + " << textured_pipeline_count << " textured"
+              << (terrain_pipeline_count > 0 ? " + " + std::to_string(terrain_pipeline_count) + " terrain" : "")
               << (profile.build_skinned ? " + " + std::to_string(skinned_count) + " skinned" : "")
               << (profile.has_point_shadows ? " + " + std::to_string(point_count) + " point shadow" : "")
               << ")\n";
@@ -1595,6 +1608,7 @@ private:
   std::uint32_t profile_window_frames_{0};
   // Declared before msaa_config_ on purpose: the MSAA decision reads it.
   AlphaModeSet streaming_alpha_modes_{};
+  AlphaModeSet terrain_alpha_modes_{};
   MsaaSettings msaa_config_{};
   bool startup_point_shadow_filter_{false};
   ShadowFilterMode startup_shadow_filter_mode_{ShadowFilterMode::Pcf3x3};

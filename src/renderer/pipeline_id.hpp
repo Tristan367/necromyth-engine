@@ -34,17 +34,42 @@ enum class PipelineId : std::uint8_t {
   ParticleBillboard = 13,
   // The game's own HUD: screen-space quads, pixel font, one instanced draw.
   Ui = 14,
+  // The packed 36-byte terrain format (TerrainVertex): same fragment shaders
+  // as the static set, a vertex input without colour or joints, and its own
+  // depth-only variants because the stride differs. Appended rather than
+  // inserted so every range check above keeps meaning what it says.
+  TexturedOpaqueTerrain = 15,
+  TexturedCutoutTerrain = 16,
+  TexturedAlphaToCoverageTerrain = 17,
+  TexturedBlendTerrain = 18,
+  ShadowDepthTerrain = 19,
+  PointShadowDepthTerrain = 20,
 };
 
 inline constexpr auto k_first_textured = static_cast<std::uint8_t>(PipelineId::TexturedOpaque);
 inline constexpr auto k_first_textured_skinned =
     static_cast<std::uint8_t>(PipelineId::TexturedOpaqueSkinned);
+inline constexpr auto k_first_textured_terrain =
+    static_cast<std::uint8_t>(PipelineId::TexturedOpaqueTerrain);
 
 [[nodiscard]] constexpr auto textured_pipeline(MeshAlphaMode alpha_mode, bool skinned = false) -> PipelineId {
   auto index = static_cast<std::uint8_t>(alpha_mode);
   if (index >= k_alpha_mode_count)
     index = 0;
   return static_cast<PipelineId>((skinned ? k_first_textured_skinned : k_first_textured) + index);
+}
+
+[[nodiscard]] constexpr auto terrain_textured_pipeline(MeshAlphaMode alpha_mode) -> PipelineId {
+  auto index = static_cast<std::uint8_t>(alpha_mode);
+  if (index >= k_alpha_mode_count)
+    index = 0;
+  return static_cast<PipelineId>(k_first_textured_terrain + index);
+}
+
+[[nodiscard]] constexpr auto is_terrain_pipeline(PipelineId id) -> bool {
+  const auto v = static_cast<std::uint8_t>(id);
+  return v >= k_first_textured_terrain &&
+         v <= static_cast<std::uint8_t>(PipelineId::PointShadowDepthTerrain);
 }
 
 [[nodiscard]] inline auto textured_fragment_entry(
@@ -88,11 +113,13 @@ using AlphaModeSet = std::array<bool, k_alpha_mode_count>;
 [[nodiscard]] constexpr auto is_textured_surface_pipeline(PipelineId id) -> bool {
   const auto v = static_cast<std::uint8_t>(id);
   return (v >= k_first_textured && v < k_first_textured + k_alpha_mode_count) ||
-         (v >= k_first_textured_skinned && v < k_first_textured_skinned + k_alpha_mode_count);
+         (v >= k_first_textured_skinned && v < k_first_textured_skinned + k_alpha_mode_count) ||
+         (v >= k_first_textured_terrain && v < k_first_textured_terrain + k_alpha_mode_count);
 }
 
 [[nodiscard]] constexpr auto is_blend_pipeline(PipelineId id) -> bool {
-  return id == PipelineId::TexturedBlend || id == PipelineId::TexturedBlendSkinned;
+  return id == PipelineId::TexturedBlend || id == PipelineId::TexturedBlendSkinned ||
+         id == PipelineId::TexturedBlendTerrain;
 }
 
 [[nodiscard]] constexpr auto is_skinned_pipeline(PipelineId id) -> bool {
@@ -116,8 +143,18 @@ struct PipelineBuildProfile {
   ShadowFilterMode shadow_filter{ShadowFilterMode::Pcf3x3};
   ShadowCascadeMode cascade_mode{ShadowCascadeMode::Dual};
   AlphaModeSet textured_alpha_modes{{true, false, false, false}};
+  // Which alpha modes the packed terrain format needs. All false = no terrain
+  // pipelines at all; an app that never streams terrain pays nothing.
+  AlphaModeSet terrain_alpha_modes{};
   bool build_skinned{false};
   bool has_point_shadows{false};
+
+  [[nodiscard]] constexpr auto build_terrain() const -> bool {
+    for (const bool used : terrain_alpha_modes)
+      if (used)
+        return true;
+    return false;
+  }
 };
 
 } // namespace engine

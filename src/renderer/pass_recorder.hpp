@@ -366,11 +366,17 @@ struct PassRecorder {
       return;
 
     const bool is_skinned = is_skinned_pipeline(draw.pipeline);
+    const bool is_terrain = is_terrain_pipeline(draw.pipeline);
     const bool is_point = kind == ShadowPassKind::Point;
 
+    // Terrain gets its own depth pipelines for the same reason it has its own
+    // main-pass ones: the vertex stride is pipeline state, and a 36-byte buffer
+    // walked at 80-byte steps casts garbage.
     const PipelineId shadow_pipeline = is_point
-        ? (is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth)
-        : (is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth);
+        ? (is_terrain ? PipelineId::PointShadowDepthTerrain
+           : is_skinned ? PipelineId::PointShadowDepthSkinned : PipelineId::PointShadowDepth)
+        : (is_terrain ? PipelineId::ShadowDepthTerrain
+           : is_skinned ? PipelineId::ShadowDepthSkinned : PipelineId::ShadowDepth);
     bind_pipeline(command_buffer, shadow_pipeline, state);
 
     if (is_skinned && draw.bone_instance_index != k_invalid_skin_index &&

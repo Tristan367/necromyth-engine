@@ -61,6 +61,31 @@ namespace engine {
   }};
 }
 
+// The packed terrain format. Same locations as the static set minus colour
+// (location 2), so the fragment shaders are shared and only the vertex entry
+// differs (vertMainTerrain supplies white).
+[[nodiscard]] inline auto terrain_binding_description() -> vk::VertexInputBindingDescription {
+  return {.binding = 0, .stride = sizeof(TerrainVertex), .inputRate = vk::VertexInputRate::eVertex};
+}
+
+[[nodiscard]] inline auto terrain_attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 4> {
+  return {{
+      {.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(TerrainVertex, pos)},
+      {.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(TerrainVertex, normal)},
+      {.location = 3, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(TerrainVertex, tex_coord)},
+      {.location = 6, .binding = 0, .format = vk::Format::eR32Uint, .offset = offsetof(TerrainVertex, material)},
+  }};
+}
+
+// Depth-only passes read position alone, but the STRIDE still has to be the
+// terrain one -- the shadow pipelines built from mesh_binding_description walk
+// 80-byte steps through a 36-byte buffer.
+[[nodiscard]] inline auto terrain_shadow_attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 1> {
+  return {{
+      {.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(TerrainVertex, pos)},
+  }};
+}
+
 [[nodiscard]] inline auto shadow_skinned_attribute_descriptions() -> std::array<vk::VertexInputAttributeDescription, 3> {
   return {{
       {.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(MeshVertex, pos)},

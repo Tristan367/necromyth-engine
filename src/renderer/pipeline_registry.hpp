@@ -99,6 +99,9 @@ private:
 
     const auto mesh_binding = mesh_binding_description();
     const auto static_mesh_attributes = static_attribute_descriptions();
+    const auto terrain_binding = terrain_binding_description();
+    const auto terrain_attributes = terrain_attribute_descriptions();
+    const auto terrain_shadow_attributes = terrain_shadow_attribute_descriptions();
     const auto skinned_mesh_attributes = skinned_attribute_descriptions();
     const std::array sky_attributes{attribute_descriptions()[0]};
     const std::array shadow_attributes{attribute_descriptions()[0]};
@@ -183,6 +186,36 @@ private:
                 *pipeline_cache_, raster, "vertMainSkinned", frag_entry, &frag_spec_info);
     }
 
+    // The packed terrain format: same fragment entries, same raster decisions,
+    // a 36-byte vertex without colour or joints, and its own vertex entry that
+    // supplies the white the fragment shaders expect at location 2's place.
+    for (const MeshAlphaMode alpha_mode : k_alpha_modes) {
+      const auto alpha_index = static_cast<std::size_t>(alpha_mode);
+      if (!profile_.terrain_alpha_modes[alpha_index])
+        continue;
+
+      GraphicsPipelineRasterState raster{};
+      if (alpha_mode == MeshAlphaMode::AlphaToCoverage) {
+        raster.cull_mode = vk::CullModeFlagBits::eNone;
+        raster.alpha_to_coverage = sample_count_ != vk::SampleCountFlagBits::e1;
+      }
+      if (alpha_mode == MeshAlphaMode::Blend) {
+        raster.cull_mode = vk::CullModeFlagBits::eNone;
+        raster.depth_write = false;
+        raster.blend_enable = true;
+      }
+
+      const char *frag_entry = textured_fragment_entry(
+          profile_.shadow_filter, alpha_mode, profile_.cascade_mode);
+
+      pipelines_[static_cast<std::size_t>(terrain_textured_pipeline(alpha_mode))] =
+          create_graphics_pipeline(
+              device, color_format_, depth_format_,
+              textured_mesh_spirv_, textured_mesh_spirv_,
+              *pipeline_layout_, sample_count_, terrain_binding, terrain_attributes,
+              *pipeline_cache_, raster, "vertMainTerrain", frag_entry, &frag_spec_info);
+    }
+
     pipelines_[static_cast<std::size_t>(PipelineId::ShadowDepth)] =
         create_depth_only_graphics_pipeline(
             device, shadow_depth_format_, shadow_depth_spirv_,
@@ -209,6 +242,19 @@ private:
                .depth_bias_constant = k_shadow_depth_bias_constant,
                .depth_bias_slope = k_shadow_depth_bias_slope},
               "vertMainSkinned");
+
+    if (profile_.build_terrain())
+      pipelines_[static_cast<std::size_t>(PipelineId::ShadowDepthTerrain)] =
+          create_depth_only_graphics_pipeline(
+              device, shadow_depth_format_, shadow_depth_spirv_,
+              *pipeline_layout_, *pipeline_cache_, terrain_binding, terrain_shadow_attributes,
+              {.cull_mode = vk::CullModeFlagBits::eNone,
+               .front_face = vk::FrontFace::eCounterClockwise,
+               .depth_test = true, .depth_write = true,
+               .depth_compare = vk::CompareOp::eLessOrEqual,
+               .depth_bias_enable = true,
+               .depth_bias_constant = k_shadow_depth_bias_constant,
+               .depth_bias_slope = k_shadow_depth_bias_slope});
 
     // Point shadow cubemap (depth-only, SV_Depth fragment output, hardware PCF)
     const vk::Format point_cube_depth_format = vk::Format::eD32Sfloat;
@@ -246,6 +292,24 @@ private:
                .depth_bias_slope = k_shadow_depth_bias_slope},
                    "vertMainSkinned", "fragMain", nullptr, 0b111111);
     }
+
+    // Terrain in a point light's cubemap: same multiview shader, terrain stride.
+    if (profile_.build_terrain() && profile_.has_point_shadows)
+      pipelines_[static_cast<std::size_t>(PipelineId::PointShadowDepthTerrain)] =
+          create_graphics_pipeline(
+              device, vk::Format::eUndefined, point_cube_depth_format,
+              point_shadow_spirv_, point_shadow_spirv_,
+              *pipeline_layout_, vk::SampleCountFlagBits::e1,
+              terrain_binding, terrain_shadow_attributes,
+              *pipeline_cache_,
+              {.cull_mode = vk::CullModeFlagBits::eNone,
+               .front_face = vk::FrontFace::eCounterClockwise,
+               .depth_test = true, .depth_write = true,
+               .depth_compare = vk::CompareOp::eLessOrEqual,
+               .depth_bias_enable = true,
+               .depth_bias_constant = k_shadow_depth_bias_constant,
+               .depth_bias_slope = k_shadow_depth_bias_slope},
+              "vertMain", "fragMain", nullptr, 0b111111);
 
     // Particle billboard: no vertex input, push constants (96 bytes -- a
     // view-projection and the two camera axes). Colour and size used to be in
@@ -323,7 +387,8 @@ private:
   vk::raii::PipelineLayout skinned_pipeline_layout_{nullptr};
   vk::raii::PipelineLayout particle_pipeline_layout_{nullptr};
   vk::raii::PipelineLayout ui_pipeline_layout_{nullptr};
-  static constexpr auto k_pipeline_count = static_cast<std::size_t>(PipelineId::Ui) + 1;
+  static constexpr auto k_pipeline_count =
+      static_cast<std::size_t>(PipelineId::PointShadowDepthTerrain) + 1;
   std::array<std::optional<vk::raii::Pipeline>, k_pipeline_count> pipelines_{};
 };
 

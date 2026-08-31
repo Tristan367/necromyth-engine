@@ -97,6 +97,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMain
+                -entry vertMainTerrain
                 -entry fragOpaqueHard
                 -entry fragCutoutHard
                 -entry fragA2CHard
@@ -127,6 +128,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
                 -emit-spirv-directly
                 -fvk-use-entrypoint-name
                 -entry vertMain
+                -entry vertMainTerrain
                 -entry fragOpaqueHard
                 -entry fragCutoutHard
                 -entry fragA2CHard

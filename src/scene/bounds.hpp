@@ -42,6 +42,8 @@ struct AABB {
   AABB bounds{};
   for (const MeshVertex &v : mesh.vertices)
     bounds.extend(glm::vec3(v.pos[0], v.pos[1], v.pos[2]));
+  for (const TerrainVertex &v : mesh.terrain_vertices)
+    bounds.extend(glm::vec3(v.pos[0], v.pos[1], v.pos[2]));
   return bounds;
 }
 

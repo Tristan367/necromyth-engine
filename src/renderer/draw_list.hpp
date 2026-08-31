@@ -92,9 +92,15 @@ inline void build_draw_list(const Scene &scene, std::vector<DrawCommand> &out) {
 
     // Must match every other bone-slot walker exactly — see instance_uses_skinning().
     const bool has_valid_skin = instance_uses_skinning(instance, scene);
+    // A terrain-format mesh draws with the terrain pipeline family: the vertex
+    // stride is baked into the pipeline, so binding the wrong family walks the
+    // buffer at the wrong step and draws noise. The mesh decides, not the
+    // instance -- format is a property of the geometry.
     const PipelineId pipeline = instance.layer == RenderLayer::Background
         ? PipelineId::Background
-        : textured_pipeline(instance.alpha_mode, has_valid_skin);
+        : scene.mesh_is_terrain(instance.mesh_index)
+            ? terrain_textured_pipeline(instance.alpha_mode)
+            : textured_pipeline(instance.alpha_mode, has_valid_skin);
 
     const std::uint32_t bone_index = has_valid_skin ? bone_instance_count : k_invalid_skin_index;
 

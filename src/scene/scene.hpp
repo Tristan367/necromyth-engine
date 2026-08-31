@@ -53,6 +53,12 @@ public:
     return index < meshes_.size() ? meshes_[index].bounds : k_empty;
   }
 
+  // Whether a slot holds the packed terrain format, which decides the pipeline
+  // family its instances draw with. Asked per instance in build_draw_list.
+  [[nodiscard]] auto mesh_is_terrain(std::uint32_t index) const -> bool {
+    return index < meshes_.size() && meshes_[index].source.is_terrain();
+  }
+
   [[nodiscard]] auto instances() const -> const std::vector<MeshInstance> & {
     return instances_;
   }
@@ -192,7 +198,7 @@ public:
   // Counted rather than thrown: a bad mesh should be visible in a report, not
   // take the game down mid-session.
   void validate_mesh(std::uint32_t index, const MeshSource &mesh) {
-    const auto vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
+    const auto vertex_count = static_cast<std::uint32_t>(mesh.vertex_count());
     for (const std::uint32_t i : mesh.indices) {
       if (i < vertex_count)
         continue;

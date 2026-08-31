@@ -11,6 +11,16 @@ struct VSInput {
     [[vk::location(6)]] uint inMaterial;
 };
 
+// The packed terrain vertex: 36 bytes, no colour, no skinning. Locations match
+// VSInput's minus 2 (colour) -- vertMainTerrain supplies white there so every
+// fragment entry is shared between the two formats.
+struct VSInputTerrain {
+    [[vk::location(0)]] float3 inPosition;
+    [[vk::location(1)]] float3 inNormal;
+    [[vk::location(3)]] float2 inTexCoord;
+    [[vk::location(6)]] uint inMaterial;
+};
+
 struct VSOutput {
     float4 pos : SV_Position;
     float3 worldNormal;

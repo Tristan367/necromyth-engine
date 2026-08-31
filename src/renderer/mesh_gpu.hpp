@@ -29,13 +29,21 @@ public:
       const AABB &bounds) -> bool {
     index_count_ = static_cast<std::uint32_t>(mesh.indices.size());
     bounds_ = bounds;
+    // Whichever vertex vector the mesh filled decides the stride; the terrain
+    // pipelines are built for exactly this 36-byte layout.
+    const vk::DeviceSize vertex_bytes = mesh.is_terrain()
+        ? static_cast<vk::DeviceSize>(sizeof(TerrainVertex) * mesh.terrain_vertices.size())
+        : static_cast<vk::DeviceSize>(sizeof(MeshVertex) * mesh.vertices.size());
+    const void *vertex_data = mesh.is_terrain()
+        ? static_cast<const void *>(mesh.terrain_vertices.data())
+        : static_cast<const void *>(mesh.vertices.data());
     const bool vertices_staged = vertex_buffer_.upload_deferred(
         allocator,
         device,
         uploads,
-        static_cast<vk::DeviceSize>(sizeof(MeshVertex) * mesh.vertices.size()),
+        vertex_bytes,
         vk::BufferUsageFlagBits::eVertexBuffer,
-        mesh.vertices.data());
+        vertex_data);
     const bool indices_staged = index_buffer_.upload_deferred(
         allocator,
         device,

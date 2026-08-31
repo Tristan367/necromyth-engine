@@ -63,6 +63,16 @@ struct EngineConfig {
     streaming_alpha_modes[static_cast<std::size_t>(mode)] = true;
   }
 
+  // Which alpha modes STREAMING TERRAIN (the packed TerrainVertex format) will
+  // use. Separate from the set above because terrain draws with its own
+  // pipeline family -- declaring a mode here builds the terrain variant, and
+  // an application that never streams terrain builds none of them.
+  AlphaModeSet terrain_alpha_modes{};
+
+  void declare_terrain_alpha_mode(MeshAlphaMode mode) {
+    terrain_alpha_modes[static_cast<std::size_t>(mode)] = true;
+  }
+
   // Print a per-pass CPU/GPU timing breakdown every profiling window.
   // ENGINE_PROFILE=1. Timestamps are always collected and readable via
   // VulkanContext::profile_report(); this only controls the periodic dump.

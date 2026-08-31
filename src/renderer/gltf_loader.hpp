@@ -641,7 +641,7 @@ struct GltfImportResult {
 
   result.instances.reserve(model.primitives.size());
   for (const LoadedGltfPrimitive &prim : model.primitives) {
-    const std::uint32_t mesh_idx = scene.add_mesh({prim.mesh.vertices, prim.mesh.indices});
+    const std::uint32_t mesh_idx = scene.add_mesh({.vertices = prim.mesh.vertices, .indices = prim.mesh.indices});
     const std::uint32_t tex_idx = prim.material.base_color_texture_path
         ? scene.add_texture(*prim.material.base_color_texture_path)
         : 0;

@@ -7,6 +7,24 @@
 
 namespace engine {
 
+// The streaming-terrain vertex: what a voxel chunk actually needs and nothing
+// else. 36 bytes against MeshVertex's 80 -- the colour is always white and the
+// sixteen bytes of joints and sixteen of weights are meaningless for terrain,
+// so carrying MeshVertex cost 44 dead bytes per vertex, which at a streaming
+// world's vertex counts was most of the VRAM and most of the upload bandwidth.
+//
+// This is the C# reference's layout (36 bytes: position, normal, UV, and one
+// scalar carrying the texture index and both baked light channels -- decoded in
+// Voxel.gdshader). `material` keeps the exact encoding MeshVertex::material
+// already had, so the shader-side decode is shared.
+struct TerrainVertex {
+  float pos[3];
+  float normal[3];
+  float tex_coord[2];
+  std::uint32_t material;
+};
+static_assert(sizeof(TerrainVertex) == 36, "terrain vertex must stay packed");
+
 struct MeshVertex {
   float pos[3];
   float normal[3];
