@@ -767,7 +767,16 @@ public:
 
 
 
+    // Tag the present with an id, so vkWaitForPresentKHR can be asked later
+    // when this exact frame reached the display. Ids must increase; 0 means
+    // "untagged", so they start at 1.
+    ++present_id_;
+    const vk::PresentIdKHR present_id_info{
+        .swapchainCount = 1,
+        .pPresentIds = &present_id_,
+    };
     const vk::PresentInfoKHR present_info{
+        .pNext = device_.present_wait_supported() ? &present_id_info : nullptr,
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &*render_finished_semaphores_[image_index],
         .swapchainCount = 1,
@@ -776,8 +785,10 @@ public:
     };
 
     cpu_profiler_.begin(CpuZone::Present);
+    const auto present_called_at = std::chrono::steady_clock::now();
     const vk::Result present_result = device_.present_queue().presentKHR(present_info);
     cpu_profiler_.end(CpuZone::Present);
+    last_present_called_at_ = present_called_at;
     if (present_result == vk::Result::eErrorOutOfDateKHR) {
       if (!recreate_swapchain())
         framebuffer_resized_ = true;
@@ -788,6 +799,47 @@ public:
     frame_index_ = (frame_index_ + 1) % detail::max_frames_in_flight;
     ++frame_counter_;
     advance_profile_window();
+  }
+
+  // Blocks until the frame presented `behind` presents ago has actually been
+  // displayed, and reports how long that took.
+  //
+  // This is the measurement that nothing else on the CPU side can make. Every
+  // other number in the frame log is from before the compositor; this one comes
+  // back from the other side of it, so the interval between two of them is a
+  // real refresh interval and the drift between them is real drift.
+  //
+  // Returns 0 when unsupported or when there is nothing to wait for yet.
+  auto wait_for_present(std::uint64_t behind = 1) -> float {
+    if (!device_.present_wait_supported() || present_id_ <= behind)
+      return 0.0F;
+    const auto started = std::chrono::steady_clock::now();
+    // On the swapchain, not the device: vkWaitForPresentKHR takes the swapchain
+    // the id was presented on.
+    const vk::Result result =
+        swapchain_.handle().waitForPresent(present_id_ - behind, detail::frame_fence_timeout_ns);
+    const auto now = std::chrono::steady_clock::now();
+    if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+      return 0.0F;
+    last_display_interval_ms_ =
+        std::chrono::duration<float, std::milli>(now - last_displayed_at_).count();
+    // How long after we handed the frame over it actually appeared. A loop that
+    // is comfortably ahead of the display shows a large, steady number here; one
+    // that is about to miss a refresh shows it collapsing toward zero.
+    last_present_to_display_ms_ =
+        std::chrono::duration<float, std::milli>(now - last_present_called_at_).count();
+    last_displayed_at_ = now;
+    return std::chrono::duration<float, std::milli>(now - started).count();
+  }
+
+  [[nodiscard]] auto present_wait_supported() const -> bool {
+    return device_.present_wait_supported();
+  }
+  // Interval between the last two frames that actually reached the display.
+  [[nodiscard]] auto display_interval_ms() const -> float { return last_display_interval_ms_; }
+  // Time from vkQueuePresentKHR returning to that frame being displayed.
+  [[nodiscard]] auto present_to_display_ms() const -> float {
+    return last_present_to_display_ms_;
   }
 
 private:
@@ -1588,6 +1640,11 @@ private:
   float mesh_upload_ms_last_frame_{0.0F};
   float worst_mesh_upload_ms_{0.0F};
   std::uint64_t upload_bytes_last_frame_{0};
+  std::uint64_t present_id_{0};
+  std::chrono::steady_clock::time_point last_displayed_at_{std::chrono::steady_clock::now()};
+  std::chrono::steady_clock::time_point last_present_called_at_{std::chrono::steady_clock::now()};
+  float last_display_interval_ms_{0.0F};
+  float last_present_to_display_ms_{0.0F};
   bool logged_upload_overflow_{false};
   // Monotonic frame number, for deciding when retired GPU resources are safe
   // to free. Distinct from frame_index_, which cycles 0..max_frames_in_flight-1.

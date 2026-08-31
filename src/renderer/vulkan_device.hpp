@@ -162,6 +162,9 @@ struct QueueFamilyIndices {
 
 class VulkanDevice {
 public:
+  // Whether the frame loop may use presentId / vkWaitForPresentKHR.
+  [[nodiscard]] auto present_wait_supported() const -> bool { return present_id_supported_; }
+
   explicit VulkanDevice(
       SDL_Window *window,
       MsaaSettings msaa_settings = {},
@@ -265,6 +268,7 @@ public:
   }
 
 private:
+  bool present_id_supported_{false};
   void create_instance() {
     if (!SDL_Vulkan_LoadLibrary(nullptr))
       throw std::runtime_error(std::string("Failed to load Vulkan through SDL: ") + SDL_GetError());
@@ -466,11 +470,15 @@ private:
     vk::StructureChain<
         vk::PhysicalDeviceFeatures2,
         vk::PhysicalDeviceVulkan11Features,
-        vk::PhysicalDeviceVulkan13Features> feature_chain{
+        vk::PhysicalDeviceVulkan13Features,
+        vk::PhysicalDevicePresentIdFeaturesKHR,
+        vk::PhysicalDevicePresentWaitFeaturesKHR> feature_chain{
         {},
         // multiview: single-pass 6-face point-shadow cubemap rendering.
         {.multiview = vk::True, .shaderDrawParameters = vk::True},
         {.synchronization2 = vk::True, .dynamicRendering = vk::True},
+        {.presentId = vk::False},
+        {.presentWait = vk::False},
     };
 
     const vk::PhysicalDeviceFeatures available_features = physical_device_.getFeatures();
@@ -485,6 +493,34 @@ private:
 
     std::vector<const char *> device_extensions{vk::KHRSwapchainExtensionName};
     const auto available_device_extensions = physical_device_.enumerateDeviceExtensionProperties();
+
+    // VK_KHR_present_id / VK_KHR_present_wait: the only way to learn when a
+    // frame was actually SHOWN.
+    //
+    // Everything else the frame loop can measure is on this side of the
+    // compositor -- when we submitted, when acquire returned. None of it says
+    // where the vblank was, so a loop that is drifting out of phase with the
+    // display looks identical to one that is not, right up until it misses a
+    // refresh and the frame time doubles. Present-wait closes that: present
+    // with an id, then block until that id has been presented, and the return
+    // is a real vblank timestamp.
+    //
+    // Both are optional. Without them the loop behaves exactly as before.
+    present_id_supported_ =
+        detail::has_name(vk::KHRPresentIdExtensionName, available_device_extensions) &&
+        detail::has_name(vk::KHRPresentWaitExtensionName, available_device_extensions);
+    if (present_id_supported_) {
+      device_extensions.push_back(vk::KHRPresentIdExtensionName);
+      device_extensions.push_back(vk::KHRPresentWaitExtensionName);
+      feature_chain.get<vk::PhysicalDevicePresentIdFeaturesKHR>().presentId = vk::True;
+      feature_chain.get<vk::PhysicalDevicePresentWaitFeaturesKHR>().presentWait = vk::True;
+    } else {
+      // Asking for a feature whose extension is not enabled is invalid, so the
+      // structures come out of the chain entirely rather than being left off.
+      feature_chain.unlink<vk::PhysicalDevicePresentWaitFeaturesKHR>();
+      feature_chain.unlink<vk::PhysicalDevicePresentIdFeaturesKHR>();
+    }
+
     if (portability_enumeration_enabled_) {
       if (detail::has_name(detail::portability_subset_extension, available_device_extensions))
         device_extensions.push_back(detail::portability_subset_extension);
