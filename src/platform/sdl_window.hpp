@@ -48,16 +48,39 @@ public:
         // actually doing. Without this, every headless run yanks the caret out
         // of their editor for the second and a half it lives.
         SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+        //
+        // =1 hides the window entirely. =2 maps it but refuses focus.
+        //
+        // The difference is not cosmetic and it cost days. A HIDDEN window is
+        // never composited, so vkQueuePresentKHR has no compositor on the other
+        // end of it and the whole presentation path -- the part where a
+        // stuttering game actually stutters -- is not exercised at all. Every
+        // "no frame over 28ms" measured headless was measuring a code path that
+        // cannot stagger. =2 is the mode that can: a real mapped surface going
+        // through the real compositor, which still will not take the keyboard
+        // away from whoever is using the desktop.
         if (const char *env = std::getenv("ENGINE_BACKGROUND_WINDOW");
-            env != nullptr && env[0] == '1') {
-            // Never mapped, never focusable. The compositor does not show it,
-            // does not give it the keyboard, and does not move the pointer to
-            // it -- which is the only arrangement that lets an automated run
-            // share a desktop with a person who is using it.
-            flags |= SDL_WINDOW_NOT_FOCUSABLE | SDL_WINDOW_HIDDEN;
+            env != nullptr && (env[0] == '1' || env[0] == '2')) {
+            flags |= SDL_WINDOW_NOT_FOCUSABLE;
+            if (env[0] == '1')
+                flags |= SDL_WINDOW_HIDDEN;
         }
 
-        window_ = SDL_CreateWindow(std::string(title).c_str(), width, height, flags);
+        // A benchmark window says so in its title, so a compositor rule can
+        // put it somewhere out of the way without also catching the real game
+        // window. On Hyprland:
+        //
+        //   hyprctl keyword windowrulev2 \
+        //     'workspace 7 silent, title:^(Necromyth \(benchmark\))$'
+        //
+        // `silent` opens it on workspace 7 without switching to it, which is
+        // the difference between a benchmark you can ignore and one that takes
+        // over the screen every time it runs.
+        std::string window_title(title);
+        if (const char *env = std::getenv("ENGINE_BACKGROUND_WINDOW");
+            env != nullptr && env[0] == '2')
+            window_title += " (benchmark)";
+        window_ = SDL_CreateWindow(window_title.c_str(), width, height, flags);
 
         if (window_ == nullptr)
             throw detail::sdl_error("Failed to create SDL window");

@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <iostream>
 #include <vector>
 
 namespace engine {
@@ -156,6 +157,7 @@ public:
   // vector. A streaming world recycles a bounded pool of slots this way instead
   // of growing one forever.
   [[nodiscard]] auto add_mesh(MeshSource mesh) -> std::uint32_t {
+    validate_mesh(static_cast<std::uint32_t>(meshes_.size()), mesh);
     if (!free_mesh_slots_.empty()) {
       const std::uint32_t index = free_mesh_slots_.back();
       free_mesh_slots_.pop_back();
@@ -178,9 +180,43 @@ public:
 
   // Replace a slot's geometry in place, keeping its index valid. This is the
   // remesh path -- an edited or LOD-swapped chunk keeps its instances.
+  // Every index must name a vertex that exists.
+  //
+  // An index past the end of the vertex buffer is not a crash and not a
+  // validation error -- Vulkan reads whatever is there, which is usually zero,
+  // so the triangle collapses to the origin. On screen that is a fan of
+  // geometry all converging on one point, which is what got reported from play.
+  // Checking it here names the mesh that did it; checking it on the GPU is not
+  // possible at all.
+  //
+  // Counted rather than thrown: a bad mesh should be visible in a report, not
+  // take the game down mid-session.
+  void validate_mesh(std::uint32_t index, const MeshSource &mesh) {
+    const auto vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
+    for (const std::uint32_t i : mesh.indices) {
+      if (i < vertex_count)
+        continue;
+      ++bad_mesh_uploads_;
+      if (bad_mesh_uploads_ <= 8)
+        std::cerr << "MESH BUG: slot " << index << " has index " << i << " but only "
+                  << vertex_count << " vertices (" << mesh.indices.size()
+                  << " indices). Triangles will collapse to the origin.\n";
+      return;
+    }
+    if (mesh.indices.size() % 3 != 0) {
+      ++bad_mesh_uploads_;
+      if (bad_mesh_uploads_ <= 8)
+        std::cerr << "MESH BUG: slot " << index << " has " << mesh.indices.size()
+                  << " indices, which is not a whole number of triangles.\n";
+    }
+  }
+
+  [[nodiscard]] auto bad_mesh_uploads() const -> std::uint64_t { return bad_mesh_uploads_; }
+
   void update_mesh(std::uint32_t index, MeshSource mesh) {
     if (index >= meshes_.size())
       return;
+    validate_mesh(index, mesh);
     MeshSlot &slot = meshes_[index];
     slot.bounds = compute_bounds(mesh);
     slot.source = std::move(mesh);
@@ -325,6 +361,7 @@ private:
   DirectionalLightShadowSettings shadow_settings_{};
   std::vector<MeshSlot> meshes_;
   std::vector<std::uint32_t> free_mesh_slots_;
+  std::uint64_t bad_mesh_uploads_{0};
   std::vector<std::string> texture_paths_;
   std::unordered_map<std::string, std::uint32_t> texture_path_index_;
   std::vector<TextureArrayLayer> texture_array_layer_paths_;

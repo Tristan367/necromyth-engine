@@ -66,7 +66,13 @@ public:
 
 private:
   [[nodiscard]] static auto choose_min_image_count(const vk::SurfaceCapabilitiesKHR &capabilities) -> std::uint32_t {
-    auto image_count = std::max(3U, capabilities.minImageCount);
+    // ENGINE_SWAPCHAIN_IMAGES overrides, so the depth of the present queue can
+    // be measured rather than assumed. It is one of the few numbers that
+    // changes frame pacing without changing a single line of rendering.
+    std::uint32_t wanted = 3U;
+    if (const char *env = std::getenv("ENGINE_SWAPCHAIN_IMAGES"); env != nullptr && env[0] != '\0')
+      wanted = static_cast<std::uint32_t>(std::strtoul(env, nullptr, 10));
+    auto image_count = std::max(wanted, capabilities.minImageCount);
     if (capabilities.maxImageCount > 0)
       image_count = std::min(image_count, capabilities.maxImageCount);
     return image_count;
@@ -201,6 +207,10 @@ private:
     present_mode_ = create_info.presentMode;
     swapchain_ = vk::raii::SwapchainKHR(device_->device(), create_info);
     swapchain_images_ = swapchain_.getImages();
+    std::cout << "Swapchain: " << swapchain_images_.size() << " images, requested " << image_count
+              << " (device minimum " << capabilities.minImageCount << ", maximum "
+              << (capabilities.maxImageCount == 0 ? 0 : capabilities.maxImageCount)
+              << "); ENGINE_SWAPCHAIN_IMAGES overrides\n";
   }
 
   void create_image_views() {
