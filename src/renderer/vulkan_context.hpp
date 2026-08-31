@@ -120,7 +120,7 @@ public:
     particle_system_.create(device_.physical_device(), device_.device(), config.max_particles, 2);
     upload_queue_.create(device_.physical_device(), device_.device(),
                          config.staging_bytes_per_frame, detail::max_frames_in_flight);
-    upload_queue_.set_frame_budget(config.staging_budget_per_frame);
+    mesh_upload_budget_ms_ = config.mesh_upload_budget_ms;
     instance_buffer_.create(device_.physical_device(), device_.device(),
                             std::max(config.max_draw_instances, 1U), detail::max_frames_in_flight);
     max_skinned_instances_ = std::max(config.max_skinned_instances, 1U);
@@ -134,7 +134,7 @@ public:
                         device_.graphics_queue());
     gpu_profiler_.create(device_.physical_device(), device_.device(),
                          detail::max_frames_in_flight, device_.queue_families().graphics);
-    sync_mesh_slots(scene);
+    sync_mesh_slots(scene, 0.0F);
     engine::load_scene_textures(
         scene,
         device_.physical_device(),
@@ -347,6 +347,14 @@ public:
   [[nodiscard]] auto upload_bytes_last_frame() const -> std::uint64_t {
     return upload_bytes_last_frame_;
   }
+  // What mesh sync actually cost on the main thread. This is the number the
+  // budget is set against, so it is the number worth reporting.
+  [[nodiscard]] auto mesh_upload_ms_last_frame() const -> float {
+    return mesh_upload_ms_last_frame_;
+  }
+  // The costliest single mesh seen this run. A high-water mark, not per-frame:
+  // it answers "is the budget the limit, or is one mesh?".
+  [[nodiscard]] auto worst_mesh_upload_ms() const -> float { return worst_mesh_upload_ms_; }
 
   // Writes the next presented frame to an image file.
   //
@@ -373,7 +381,7 @@ public:
     // retired and freed a few frames later instead. This is the path a
     // streaming world hits every frame.
     retired_meshes_.collect(frame_counter_, detail::max_frames_in_flight);
-    sync_mesh_slots(scene);
+    sync_mesh_slots(scene, mesh_upload_budget_ms_);
 
     // Skinned instances no longer appear here: they share one bone buffer
     // indexed by dynamic offset, so spawning or despawning a character needs no
@@ -860,12 +868,14 @@ private:
     (void)scene;
   }
 
-  void sync_mesh_slots(const Scene &scene) {
-    if (upload_queue_.overflowed() || upload_queue_.budget_reached()) {
-      const bool ring_full = upload_queue_.overflowed();
+  // `budget_ms` of 0 means "upload everything now". That is what the startup
+  // call wants: there is no next frame to defer to yet, and the initial scene
+  // has to be complete before the first one is drawn.
+  void sync_mesh_slots(const Scene &scene, float budget_ms) {
+    if (upload_queue_.overflowed()) {
       ++upload_deferrals_;
       upload_queue_.clear_overflow();
-      if (ring_full && !logged_upload_overflow_) {
+      if (!logged_upload_overflow_) {
         std::cout << "Mesh staging ring is full; uploads are being deferred to later "
                      "frames. Raise EngineConfig::staging_bytes_per_frame if this is "
                      "constant.\n";
@@ -873,6 +883,7 @@ private:
       }
     }
     const vk::DeviceSize before = upload_queue_.bytes_used();
+    const auto upload_started = std::chrono::steady_clock::now();
     mesh_uploads_last_frame_ = engine::sync_scene_meshes(
         scene,
         buffer_allocator_,
@@ -880,7 +891,12 @@ private:
         upload_queue_,
         mesh_gpus_,
         [this](MeshGpu retired) { retired_meshes_.retire(std::move(retired), frame_counter_); },
-        &pending_mesh_uploads_);
+        &pending_mesh_uploads_,
+        budget_ms,
+        &worst_mesh_upload_ms_);
+    mesh_upload_ms_last_frame_ =
+        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - upload_started)
+            .count();
     const vk::DeviceSize after = upload_queue_.bytes_used();
     upload_bytes_last_frame_ = after >= before ? after - before : after;
   }
@@ -1568,6 +1584,9 @@ private:
   std::uint64_t upload_deferrals_{0};
   std::size_t pending_mesh_uploads_{0};
   std::size_t mesh_uploads_last_frame_{0};
+  float mesh_upload_budget_ms_{0.0F};
+  float mesh_upload_ms_last_frame_{0.0F};
+  float worst_mesh_upload_ms_{0.0F};
   std::uint64_t upload_bytes_last_frame_{0};
   bool logged_upload_overflow_{false};
   // Monotonic frame number, for deciding when retired GPU resources are safe

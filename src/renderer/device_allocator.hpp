@@ -5,7 +5,9 @@
 #include <vulkan/vulkan_raii.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <future>
 #include <limits>
 #include <stdexcept>
 #include <vector>
@@ -78,6 +80,21 @@ public:
     block_bytes_ = std::max<vk::DeviceSize>(block_bytes, 1024 * 1024);
   }
 
+  // A prefetch in flight holds the device and returns a VkDeviceMemory, so it
+  // has to be finished with before either can go away. std::async's future does
+  // that on destruction and `prefetch_` is the last member declared -- so it is
+  // the first destroyed -- but the ordering is load-bearing enough to say out
+  // loud rather than leave to whoever next adds a member.
+  ~DeviceAllocator() {
+    if (prefetch_.valid())
+      prefetch_.wait();
+  }
+  DeviceAllocator() = default;
+  DeviceAllocator(DeviceAllocator &&) = default;
+  auto operator=(DeviceAllocator &&) -> DeviceAllocator & = default;
+  DeviceAllocator(const DeviceAllocator &) = delete;
+  auto operator=(const DeviceAllocator &) -> DeviceAllocator & = delete;
+
   [[nodiscard]] auto created() const -> bool { return device_ != nullptr; }
 
   // Finds room for `requirements`, opening a new block if nothing fits.
@@ -92,13 +109,17 @@ public:
         memory_properties_, requirements.memoryTypeBits, properties);
     const vk::DeviceSize alignment = std::max<vk::DeviceSize>(requirements.alignment, 1);
 
+    adopt_prefetched_block();
+
     for (std::uint32_t index = 0; index < blocks_.size(); ++index) {
       Block &block = blocks_[index];
       if (block.memory_type != memory_type || block.dedicated)
         continue;
       if (const Allocation allocation = take_from(block, index, requirements.size, alignment);
-          allocation.valid())
+          allocation.valid()) {
+        request_prefetch(memory_type);
         return allocation;
+      }
     }
 
     const bool dedicated = requirements.size > block_bytes_;
@@ -110,6 +131,7 @@ public:
                   requirements.size, alignment);
     if (!allocation.valid())
       throw std::runtime_error("DeviceAllocator: fresh block could not satisfy its own request");
+    request_prefetch(memory_type);
     return allocation;
   }
 
@@ -170,6 +192,15 @@ public:
   // the exercise is that it no longer does.
   [[nodiscard]] auto device_allocations() const -> std::uint64_t { return device_allocations_; }
 
+  // The slowest vkAllocateMemory this pool has made ON THE CALLING THREAD, in
+  // milliseconds. Prefetched blocks are deliberately not counted: they cost the
+  // frame nothing, which is the entire point of them.
+  [[nodiscard]] auto worst_block_open_ms() const -> float { return worst_open_ms_; }
+  // Blocks that were opened ahead of need rather than mid-frame.
+  [[nodiscard]] auto prefetched_blocks() const -> std::uint64_t { return prefetched_blocks_; }
+  // For tests that want the old, entirely synchronous behaviour.
+  void set_prefetch_enabled(bool enabled) { prefetch_enabled_ = enabled; }
+
   // How many separate free ranges a block has been broken into.
   //
   // This is the fragmentation measure, and the reason it is exposed: an
@@ -220,12 +251,85 @@ private:
     std::vector<Range> free_ranges;
   };
 
+  // Opens the next block on a worker thread, BEFORE the pool runs out of room.
+  //
+  // Measured, autowalking 3,000 frames: the costliest single mesh upload took
+  // 1.81ms, of which 1.78ms was one vkAllocateMemory for a fresh 64 MB block.
+  // That is the whole cost -- the memcpy, the two vkCreateBuffers and the
+  // suballocation together are the remaining 0.03ms. It lands mid-frame,
+  // whenever the pool happens to run out, which is while you are walking into
+  // new terrain. A per-frame time budget cannot help: it can only stop BETWEEN
+  // meshes, and this is one mesh.
+  //
+  // Doing it on another thread is legal, checked against the registry rather
+  // than assumed: vk.xml lists no externsync parameter for vkAllocateMemory --
+  // not even VkDevice -- so it may be called concurrently with anything else on
+  // the same device. (vkFreeMemory externally syncs on `memory`; nothing here
+  // frees a block.) Only the worker touches Vulkan; blocks_ stays main-thread.
+  void request_prefetch(std::uint32_t memory_type) {
+    if (!prefetch_enabled_ || prefetch_in_flight_)
+      return;
+    // Only worth doing while the pool is running low. Above the threshold the
+    // next allocation will land in an existing block and no new one is due.
+    if (largest_free_range(memory_type) > block_bytes_ / 4)
+      return;
+
+    prefetch_in_flight_ = true;
+    prefetch_memory_type_ = memory_type;
+    prefetch_ = std::async(std::launch::async, [this, memory_type] {
+      return vk::raii::DeviceMemory(*device_, vk::MemoryAllocateInfo{
+          .allocationSize = block_bytes_,
+          .memoryTypeIndex = memory_type,
+      });
+    });
+  }
+
+  // Takes a prefetched block into the pool if one is ready. Never waits: a
+  // block that has not arrived yet is simply not there this time round, and the
+  // synchronous path in allocate() still covers the case.
+  void adopt_prefetched_block() {
+    if (!prefetch_in_flight_ || !prefetch_.valid())
+      return;
+    if (prefetch_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+      return;
+
+    Block block;
+    block.memory = prefetch_.get();
+    block.size = block_bytes_;
+    block.memory_type = prefetch_memory_type_;
+    block.dedicated = false;
+    block.free_ranges.push_back(Range{.offset = 0, .size = block_bytes_});
+    blocks_.push_back(std::move(block));
+    ++device_allocations_;
+    ++prefetched_blocks_;
+    prefetch_in_flight_ = false;
+  }
+
+  [[nodiscard]] auto largest_free_range(std::uint32_t memory_type) const -> vk::DeviceSize {
+    vk::DeviceSize largest = 0;
+    for (const Block &block : blocks_) {
+      if (block.memory_type != memory_type || block.dedicated)
+        continue;
+      for (const Range &range : block.free_ranges)
+        largest = std::max(largest, range.size);
+    }
+    return largest;
+  }
+
   void open_block(std::uint32_t memory_type, vk::DeviceSize size, bool dedicated) {
     Block block;
+    const auto started = std::chrono::steady_clock::now();
     block.memory = vk::raii::DeviceMemory(*device_, vk::MemoryAllocateInfo{
         .allocationSize = size,
         .memoryTypeIndex = memory_type,
     });
+    // Opening a block is the one thing here that can cost a millisecond, and it
+    // happens mid-frame, whenever the pool runs out. Worth knowing when a
+    // single mesh upload turns out to be expensive: it is usually this.
+    const float ms =
+        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - started).count();
+    if (ms > worst_open_ms_)
+      worst_open_ms_ = ms;
     block.size = size;
     block.memory_type = memory_type;
     block.dedicated = dedicated;
@@ -277,6 +381,12 @@ private:
   vk::DeviceSize block_bytes_{k_default_block_bytes};
   std::vector<Block> blocks_;
   std::uint64_t device_allocations_{0};
+  std::uint64_t prefetched_blocks_{0};
+  float worst_open_ms_{0.0F};
+  bool prefetch_enabled_{true};
+  bool prefetch_in_flight_{false};
+  std::uint32_t prefetch_memory_type_{0};
+  std::future<vk::raii::DeviceMemory> prefetch_;
 };
 
 } // namespace engine

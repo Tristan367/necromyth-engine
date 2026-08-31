@@ -8,6 +8,7 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <chrono>
 #include <stdexcept>
 #include <vector>
 
@@ -30,6 +31,31 @@ struct MeshGpuSlot {
 // in-flight command buffer may still reference them. That is what lets a
 // streaming world remesh continuously without a device stall.
 //
+// `budget_ms` is how long this is allowed to spend uploading before the rest
+// waits for the next frame. Ported from the C# reference implementation, which
+// does exactly this at VoxelClient.cs:3225 and :6314 -- a Stopwatch, uploads
+// while it reads under 2ms, then a yield of exactly one frame:
+//
+//     var sw = Stopwatch.StartNew();
+//     foreach (var i in heightmapMeshesToUpdate) {
+//         UpdateHeightmapMeshInstance(...);
+//         if (sw.ElapsedMilliseconds > 2) {
+//             await ROOT_NODE.ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+//             sw.Restart();
+//         }
+//     }
+//
+// A byte cap was tried here first and is the wrong instrument: it prices the
+// work by how much memory moves, when what actually costs is the memory copy
+// AND the vkCreateBuffer pair AND the suballocation AND whatever the driver
+// decides to do -- on a machine whose speed at all of that is unknown at build
+// time. The clock measures the real cost of the real work, and needs no
+// tuning per machine. Zero means no budget.
+//
+// The check is AFTER the upload, not before, so a frame always makes at least
+// one mesh of progress. A single mesh larger than the whole budget would
+// otherwise be deferred forever and never drawn.
+//
 // Returns the number of slots that changed.
 template <typename RetireFn>
 auto sync_scene_meshes(
@@ -39,9 +65,15 @@ auto sync_scene_meshes(
     UploadQueue &uploads,
     std::vector<MeshGpuSlot> &slots,
     RetireFn &&retire,
-    std::size_t *out_pending = nullptr) -> std::size_t {
+    std::size_t *out_pending = nullptr,
+    float budget_ms = 0.0F,
+    float *out_worst_mesh_ms = nullptr) -> std::size_t {
   if (slots.size() < scene.meshes().size())
     slots.resize(scene.meshes().size());
+
+  const auto started = std::chrono::steady_clock::now();
+  auto mesh_started = started;
+  bool out_of_time = false;
 
   std::size_t changed = 0;
   std::size_t pending = 0;
@@ -51,6 +83,12 @@ auto sync_scene_meshes(
     if (slot.revision == source.revision)
       continue;
     ++pending; // alive in the Scene, not yet matching on the GPU
+
+    // Out of time: keep scanning so `pending` still reports the whole backlog,
+    // but upload nothing more this frame. The scan itself is a revision
+    // compare, which is free next to what it is choosing not to do.
+    if (out_of_time)
+      continue;
 
     if (source.alive) {
       // Upload into a fresh slot and only take it once it has succeeded.
@@ -76,6 +114,19 @@ auto sync_scene_meshes(
     slot.revision = source.revision;
     slot.alive = source.alive;
     ++changed;
+
+    // The budget can only stop BETWEEN meshes, so one expensive mesh sets the
+    // floor on how small a frame's upload can be made. Reporting the worst
+    // single mesh is how you find out whether the budget is the limit or the
+    // mesh is.
+    const auto now = std::chrono::steady_clock::now();
+    const float this_mesh_ms = std::chrono::duration<float, std::milli>(now - mesh_started).count();
+    if (out_worst_mesh_ms != nullptr && this_mesh_ms > *out_worst_mesh_ms)
+      *out_worst_mesh_ms = this_mesh_ms;
+    mesh_started = now;
+
+    if (budget_ms > 0.0F)
+      out_of_time = std::chrono::duration<float, std::milli>(now - started).count() >= budget_ms;
   }
   if (out_pending != nullptr)
     *out_pending = pending;
