@@ -27,6 +27,13 @@ struct DirectionalLight {
   // past full cover on purpose -- the extra range is what makes an overcast sky
   // uniformly grey instead of merely crowded. See shaders/Clouds.gdshader.
   float cloudiness{0.333F};
+  // How far the star field has wheeled, in radians. Driven by the GAME CLOCK
+  // at a constant rate -- the C#'s starsRot, SkyManager.cs:1244 -- and never
+  // by the light vector: the shading direction is swung to a synthetic moon at
+  // nightfall so shadows keep a source, and a star map keyed to that vector
+  // lurched every dusk. Stars turn because time passes, not because the light
+  // moved.
+  float star_angle{0.0F};
 };
 
 } // namespace engine

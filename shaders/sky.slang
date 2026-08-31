@@ -134,7 +134,12 @@ float4 fragMain(VSOutput vertIn) : SV_Target {
         // degrees latitude".
         const float kLatitude = 0.7854;
         float3 axis = normalize(float3(0.0, cos(kLatitude), sin(kLatitude)));
-        float angle = atan2(sunDir.x, -sunDir.z);
+        // The angle comes from the game clock (cascadeParams.z), at a constant
+        // rate -- the C#'s starsRot. It used to come from the light direction,
+        // which is swung to a synthetic moon at nightfall so shadows keep a
+        // source, and the whole star field lurched with the swing: "it rotates
+        // weirdly when it becomes night". Stars wheel because time passes.
+        float angle = ubo.cascadeParams.z;
         float ca = cos(angle), sa = sin(angle);
         float3 sd = direction * ca + cross(axis, direction) * sa
                   + axis * dot(axis, direction) * (1.0 - ca);

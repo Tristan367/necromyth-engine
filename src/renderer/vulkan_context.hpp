@@ -675,7 +675,10 @@ public:
             .cascade_params = glm::vec4(
                 cascades.split_view_z,
                 shadow_settings.cascade_blend_range,
-                0.0F,
+                // z: the star field's rotation, in radians. See
+                // DirectionalLight::star_angle for why this is a clock and not
+                // a light direction.
+                scene.directional_light().star_angle,
                 0.0F),
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width,
                                           elapsed_seconds(),
