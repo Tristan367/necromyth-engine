@@ -470,7 +470,17 @@ public:
             last_presented_id_ - max_outstanding_presents_, detail::frame_fence_timeout_ns);
         // A timeout or an out-of-date swapchain is not fatal here: pacing is an
         // optimisation, and the frame is perfectly renderable without it.
-        (void)paced;
+        if (paced == vk::Result::eSuccess || paced == vk::Result::eSuboptimalKHR) {
+          // Record the phase. This is the only point in the frame that hears
+          // back from the other side of the compositor, so it is the only place
+          // these can be measured at all -- and they were previously written
+          // only by a helper that nothing called, which is why they read zero.
+          const auto now = std::chrono::steady_clock::now();
+          last_display_interval_ms_ =
+              std::chrono::duration<float, std::milli>(now - last_displayed_at_).count();
+          last_displayed_at_ = now;
+          paced_released_at_ = now;
+        }
       }
       // Bounded for the same reason the acquire below is, even though this one
       // waits on our own GPU work rather than on the compositor. A shader that
@@ -829,6 +839,16 @@ public:
     const vk::Result present_result = device_.present_queue().presentKHR(present_info);
     cpu_profiler_.end(CpuZone::Present);
     last_present_called_at_ = present_called_at;
+    // How much of the display's window this frame used between being released
+    // by the pacer and handing the finished frame back.
+    //
+    // This is the number that says how close to the edge the loop is running:
+    // the refresh interval minus this is the slack before the compositor's
+    // latch deadline. Measuring present-to-DISPLAY instead compares two
+    // different frames' events and produces a figure that looks alarming and
+    // means nothing, which is what it did on the first attempt.
+    last_present_to_display_ms_ =
+        std::chrono::duration<float, std::milli>(present_called_at - paced_released_at_).count();
     if (present_result == vk::Result::eErrorOutOfDateKHR) {
       if (!recreate_swapchain())
         framebuffer_resized_ = true;
@@ -882,7 +902,8 @@ public:
   }
   // Interval between the last two frames that actually reached the display.
   [[nodiscard]] auto display_interval_ms() const -> float { return last_display_interval_ms_; }
-  // Time from vkQueuePresentKHR returning to that frame being displayed.
+  // How long this frame took between the pacer releasing it and its present.
+  // Refresh interval minus this is the slack before the compositor's deadline.
   [[nodiscard]] auto present_to_display_ms() const -> float {
     return last_present_to_display_ms_;
   }
@@ -1714,6 +1735,7 @@ private:
   std::chrono::steady_clock::time_point last_present_called_at_{std::chrono::steady_clock::now()};
   float last_display_interval_ms_{0.0F};
   float last_present_to_display_ms_{0.0F};
+  std::chrono::steady_clock::time_point paced_released_at_{std::chrono::steady_clock::now()};
   bool logged_upload_overflow_{false};
   // Monotonic frame number, for deciding when retired GPU resources are safe
   // to free. Distinct from frame_index_, which cycles 0..max_frames_in_flight-1.
