@@ -168,11 +168,20 @@ public:
     }
   }
 
+  // Everything else handed to the renderer arrives in render space -- world
+  // minus a floating origin the client re-anchors as the camera travels.
+  // Particles are simulated in WORLD space (an emitter is a place in the
+  // world), so the origin is subtracted here, at upload, where it also stays
+  // correct for particles already in flight when the origin moves. Without
+  // this, a fire lit a kilometre from the origin drew its flames a kilometre
+  // from the fire.
+  void set_origin(const glm::vec3 &origin) { origin_ = origin; }
+
   void upload(std::uint32_t frame_index) const {
     if (frame_index >= mapped_.size()) return;
     auto *dst = mapped_[frame_index];
     for (std::size_t i = 0; i < particles_.size(); ++i) {
-      dst[i].pos_size = glm::vec4(particles_[i].pos, particles_[i].size);
+      dst[i].pos_size = glm::vec4(particles_[i].pos - origin_, particles_[i].size);
       dst[i].color = particles_[i].color;
     }
   }
@@ -193,6 +202,7 @@ private:
     particles_.pop_back();
   }
 
+  glm::vec3 origin_{0.0F};
   std::vector<Particle> particles_;
   std::vector<Emitter> emitters_;
   std::vector<std::uint32_t> free_emitters_;
