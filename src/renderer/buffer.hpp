@@ -37,38 +37,6 @@ namespace detail {
       });
 }
 
-inline void copy_buffer(
-    vk::raii::Device &device,
-    vk::raii::CommandPool &command_pool,
-    vk::raii::Queue &queue,
-    vk::Buffer src,
-    vk::Buffer dst,
-    vk::DeviceSize size) {
-  const vk::CommandBufferAllocateInfo allocate_info{
-      .commandPool = *command_pool,
-      .level = vk::CommandBufferLevel::ePrimary,
-      .commandBufferCount = 1,
-  };
-
-  vk::raii::CommandBuffer command_buffer = std::move(
-      vk::raii::CommandBuffers(device, allocate_info).front());
-
-  command_buffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-  command_buffer.copyBuffer(src, dst, vk::BufferCopy{.size = size});
-  command_buffer.end();
-
-  const vk::CommandBufferSubmitInfo command_buffer_info{.commandBuffer = *command_buffer};
-  const vk::SubmitInfo2 submit_info{
-      .commandBufferInfoCount = 1,
-      .pCommandBufferInfos = &command_buffer_info,
-  };
-
-  vk::raii::Fence fence(device, vk::FenceCreateInfo{});
-  queue.submit2(submit_info, *fence);
-  if (device.waitForFences(*fence, vk::True, UINT64_MAX) != vk::Result::eSuccess)
-    throw std::runtime_error("Failed to wait for buffer upload fence");
-}
-
 } // namespace detail
 
 // A device-local buffer whose memory comes from the shared DeviceAllocator
@@ -106,38 +74,12 @@ public:
     return *this;
   }
 
-  void upload(
-      const vk::raii::PhysicalDevice &physical_device,
-      vk::raii::Device &device,
-      vk::raii::CommandPool &command_pool,
-      vk::raii::Queue &queue,
-      vk::DeviceSize size,
-      vk::BufferUsageFlags usage,
-      const void *data) {
-    const detail::Staging staging = detail::make_staging(device, physical_device, size, data);
-    const auto memory_properties = physical_device.getMemoryProperties();
-
-    const vk::BufferCreateInfo device_info{
-        .size = size,
-        .usage = usage | vk::BufferUsageFlagBits::eTransferDst,
-        .sharingMode = vk::SharingMode::eExclusive,
-    };
-
-    buffer_ = vk::raii::Buffer(device, device_info);
-    const vk::MemoryRequirements device_requirements = buffer_.getMemoryRequirements();
-    memory_ = vk::raii::DeviceMemory{
-        device,
-        vk::MemoryAllocateInfo{
-            .allocationSize = device_requirements.size,
-            .memoryTypeIndex = detail::find_memory_type(
-                memory_properties,
-                device_requirements.memoryTypeBits,
-                vk::MemoryPropertyFlagBits::eDeviceLocal),
-        }};
-
-    buffer_.bindMemory(*memory_, 0);
-    detail::copy_buffer(device, command_pool, queue, *staging.buffer, *buffer_, size);
-  }
+  // There is deliberately no blocking upload here any more. One existed --
+  // dedicated vkAllocateMemory, one-shot command buffer, fence wait per call
+  // -- and it had NO callers, while its dedicated-memory member was silently
+  // dropped by the hand-written move operations below. Dead code whose only
+  // possible future was a use-after-free; everything uploads through
+  // upload_deferred.
 
   // Allocates the device buffer and queues the copy, without waiting. The
   // caller flushes the queue into the frame's command buffer. This is the path
@@ -206,9 +148,6 @@ private:
   // release. Not an ownership pointer: the queue lives in the VulkanContext and
   // outlives every buffer that stages into it.
   UploadQueue *pending_queue_{nullptr};
-  // Only set on the pooled path (upload_deferred). The blocking upload() above
-  // is startup-only and keeps its own dedicated allocation.
-  vk::raii::DeviceMemory memory_{nullptr};
   DeviceAllocator *allocator_{nullptr};
   DeviceAllocator::Allocation allocation_{};
 };

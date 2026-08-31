@@ -376,6 +376,18 @@ public:
       return;
 
     const ScopedCpuZone cpu_zone(cpu_profiler_, CpuZone::SyncScene);
+    // This frame slot's staging segment was last READ by the GPU when this
+    // slot's previous command buffer ran, and the slot's fence is the only
+    // thing that proves that read has finished. draw_frame waits it -- but
+    // draw_frame runs AFTER the memcpys below, so the writes raced the read.
+    // Under FIFO with present pacing the GPU is long done and it never showed;
+    // under mailbox the CPU runs ahead until the fence gates it, so the
+    // segment is routinely still in flight right here. Wait first. The wait in
+    // draw_frame then lands on an already-signalled fence and costs nothing.
+    const vk::Result staged_fence = device_.device().waitForFences(
+        *in_flight_fences_[frame_index_], vk::True, detail::frame_fence_timeout_ns);
+    if (staged_fence != vk::Result::eSuccess)
+      return; // hung GPU: skip uploads; draw_frame notices and says so
     upload_queue_.begin_frame(frame_counter_, frame_index_);
 
     // Mesh slots first. Mesh buffers are bound directly (bindVertexBuffers), not
@@ -432,6 +444,16 @@ public:
     }
 
     const ScopedCpuZone frame_zone(cpu_profiler_, CpuZone::FrameTotal);
+
+    // Before the acquire, not after. An acquired swapchain image can only be
+    // given back by presenting it, and a zero-extent frame never presents --
+    // checking here used to happen after the acquire, so every zero-extent
+    // frame leaked an image until the swapchain had none left to hand out.
+    // The extent is our own swapchain state, known without asking the
+    // compositor for anything.
+    const vk::Extent2D internal_extent = render_extent();
+    if (internal_extent.height == 0 || internal_extent.width == 0)
+      return;
 
     {
       const ScopedCpuZone wait_zone(cpu_profiler_, CpuZone::WaitForFrame);
@@ -552,9 +574,6 @@ public:
       }
     } submit_guard{this};
 
-    const vk::Extent2D internal_extent = render_extent();
-    if (internal_extent.height == 0 || internal_extent.width == 0)
-      return;
     const float aspect = static_cast<float>(internal_extent.width) /
                          static_cast<float>(internal_extent.height);
     scene.camera().set_aspect(aspect);
@@ -1402,6 +1421,14 @@ private:
   }
 
   void create_render_finished_semaphores() {
+    // The outgoing semaphores are kept for one more swapchain generation, not
+    // destroyed here: a present may still be waiting on one of them, and
+    // device wait-idle covers the queues, not the presentation engine --
+    // vkQueuePresentKHR offers no way to ask when it has let go. One
+    // generation is a resize away, which is orders of magnitude past any
+    // present latency. (The airtight answer is VK_EXT_swapchain_maintenance1
+    // present fences, if this is ever worth an extension.)
+    retired_render_finished_semaphores_ = std::move(render_finished_semaphores_);
     render_finished_semaphores_.clear();
     render_finished_semaphores_.reserve(swapchain_.image_count());
     for (std::size_t i = 0; i < swapchain_.image_count(); ++i)
@@ -1556,6 +1583,9 @@ private:
   vk::raii::CommandBuffers command_buffers_{nullptr};
   std::vector<vk::raii::Semaphore> image_available_semaphores_;
   std::vector<vk::raii::Semaphore> render_finished_semaphores_;
+  // The previous swapchain generation's present semaphores. See
+  // create_render_finished_semaphores.
+  std::vector<vk::raii::Semaphore> retired_render_finished_semaphores_;
   std::vector<vk::raii::Fence> in_flight_fences_;
   MsaaColorImage msaa_color_image_;
   RenderColorImage render_color_image_;
