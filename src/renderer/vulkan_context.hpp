@@ -685,7 +685,8 @@ public:
                                           elapsed_seconds(),
                                           scene.directional_light().snow,
                                           scene.directional_light().cloudiness),
-            .moon_direction = glm::vec4(scene.directional_light().moon_direction, 0.0F),
+            .moon_direction = glm::vec4(scene.directional_light().moon_direction,
+                                        scene.directional_light().blood_moon),
         });
 
     light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(), shadow_slots,

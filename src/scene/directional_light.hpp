@@ -39,6 +39,8 @@ struct DirectionalLight {
   // (SkyManager.cs MOON_DEGREES_PER_DAY). The sky lights the disc off the
   // sun direction, so this vector is all the phase machinery there is.
   glm::vec3 moon_direction{0.3F, 0.85F, 0.42F};
+  // 0 = an ordinary moon, 1 = full blood. The sky reddens the disc by it.
+  float blood_moon{0.0F};
   // The REAL sun's angle around its track, radians. lightDirection is swung
   // to a synthetic moon at night so shadows keep a source; the sky's moon
   // must be lit by the actual sun -- below the horizon and all -- or every

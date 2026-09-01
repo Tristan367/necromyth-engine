@@ -205,7 +205,11 @@ float4 fragMain(VSOutput vertIn) : SV_Target {
             float lit = saturate(dot(normal, realSun));
             // Earthshine keeps the dark limb readable instead of a bite out
             // of the star field.
-            float3 face = float3(0.92, 0.93, 0.90) * (lit * 0.95 + 0.035);
+            // The blood moon: the C#'s colour (1, 0.2, 0.1), by the factor
+            // the game derives from the fourteen-day pair of fulls.
+            float3 tone = lerp(float3(0.92, 0.93, 0.90), float3(1.0, 0.20, 0.10),
+                               ubo.moonDirection.w);
+            float3 face = tone * (lit * 0.95 + 0.035 + ubo.moonDirection.w * 0.25);
             float edge = smoothstep(1.0, 0.92, r2); // one soft pixel of limb
             float show = max(night, twilight * 0.6);
             color = lerp(color, face, edge * show);
