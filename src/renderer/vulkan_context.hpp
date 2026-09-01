@@ -679,11 +679,13 @@ public:
                 // DirectionalLight::star_angle for why this is a clock and not
                 // a light direction.
                 scene.directional_light().star_angle,
-                0.0F),
+                // w: the real sun's track angle; see DirectionalLight::sun_angle.
+                scene.directional_light().sun_angle),
             .shadow_fade_width = glm::vec4(shadow_settings.coverage_fade_uv_width,
                                           elapsed_seconds(),
                                           scene.directional_light().snow,
                                           scene.directional_light().cloudiness),
+            .moon_direction = glm::vec4(scene.directional_light().moon_direction, 0.0F),
         });
 
     light_buffer_.write(frame_index_, scene.point_lights(), scene.spot_lights(), shadow_slots,

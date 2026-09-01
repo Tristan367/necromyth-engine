@@ -29,6 +29,10 @@ struct FrameUniformBufferObject {
   // whether the other three components hold anything or not, and adding a
   // uniform for one float would cost another sixteen.
   alignas(16) glm::vec4 shadow_fade_width{};
+  // xyz = direction toward the moon, w unused. Its own slot because the sky
+  // draws the moon as a sphere lit by the real sun, so both directions have
+  // to exist at once -- lightDirection alone cannot carry two bodies.
+  alignas(16) glm::vec4 moon_direction{0.0F, 1.0F, 0.0F, 0.0F};
 };
 
 [[nodiscard]] inline auto view_without_translation(const glm::mat4 &view) -> glm::mat4 {

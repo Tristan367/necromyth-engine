@@ -14,6 +14,9 @@ struct FrameUniforms {
     float4 cascadeParams;
     // x = UV coverage fade width (0 = hard edge)
     float4 shadowFadeWidth;
+    // xyz = direction toward the moon (the sky lights its disc off the real
+    // sun direction, so phases fall out of geometry rather than a counter)
+    float4 moonDirection;
 };
 [[vk::binding(0, 0)]]
 ConstantBuffer<FrameUniforms> ubo;

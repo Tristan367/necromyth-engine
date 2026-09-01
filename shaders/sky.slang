@@ -172,10 +172,55 @@ float4 fragMain(VSOutput vertIn) : SV_Target {
     float3 glowColor = lerp(float3(0.95, 0.42, 0.18), float3(1.0, 0.72, 0.38), day);
     color += glowColor * pow(glowShape, 3.0) * lowSun * 0.85;
 
+    // The moon, drawn as what it is: a sphere lit by the sun.
+    //
+    // No phase textures and no phase counter -- the disc reconstructs its
+    // surface normal per pixel and lights it off the real sun direction, so
+    // crescent, quarter, gibbous and full fall out of geometry. The C# carried
+    // a texture array of phases (SkyManager.cs CreateMoonPhaseTextureArray);
+    // the mechanism kept is the ORBIT (a seventh of a turn slower than the
+    // sun, so the phase cycles weekly), which is where the gameplay lives --
+    // what the phase IS on a given night matters to a game about nights.
+    {
+        float3 moonDir = normalize(ubo.moonDirection.xyz);
+        const float kMoonCosRadius = 0.99940;      // a touch wider than the sun
+        float md = dot(direction, moonDir);
+        if (md > kMoonCosRadius && direction.y > -0.05) {
+            const float kSinMax = sqrt(1.0 - kMoonCosRadius * kMoonCosRadius);
+            float3 t1 = normalize(cross(moonDir, float3(0.0, 1.0, 0.001)));
+            float3 t2 = cross(moonDir, t1);
+            float3 off = direction - moonDir * md;
+            float2 disc = float2(dot(off, t1), dot(off, t2)) / kSinMax;
+            float r2 = dot(disc, disc);
+            float z = sqrt(max(1.0 - r2, 0.0));
+            // The visible hemisphere faces the viewer, so its normal leans
+            // back along -moonDir at the centre of the disc.
+            float3 normal = t1 * disc.x + t2 * disc.y - moonDir * z;
+            // Lit by the REAL sun, rebuilt from its track angle
+            // (cascadeParams.w) -- lightDirection is swung to a synthetic
+            // night vector for shadows, and a moon lit by THAT hangs next to
+            // its own light source and renders permanently new.
+            float sunAngle = ubo.cascadeParams.w;
+            float3 realSun = normalize(float3(cos(sunAngle) * 0.6, sin(sunAngle), 0.35));
+            float lit = saturate(dot(normal, realSun));
+            // Earthshine keeps the dark limb readable instead of a bite out
+            // of the star field.
+            float3 face = float3(0.92, 0.93, 0.90) * (lit * 0.95 + 0.035);
+            float edge = smoothstep(1.0, 0.92, r2); // one soft pixel of limb
+            float show = max(night, twilight * 0.6);
+            color = lerp(color, face, edge * show);
+        }
+    }
+
     // The sun itself.
     const float kSunCosRadius = 0.99965;
     const float kSunEdge = 0.00035;
     float sun = smoothstep(kSunCosRadius - kSunEdge, 1.0, dot(direction, sunDir));
+    // Only while the real sun is actually up. lightDirection swings to a
+    // synthetic overhead vector at night so shadows keep a source -- and this
+    // disc used to follow it, hanging in the night sky as a warm blob beside
+    // the actual moon.
+    sun *= smoothstep(-0.10, -0.02, sunElev);
     float3 sunColor = min(ubo.lightColor.rgb, float3(1.0, 1.0, 1.0));
     color = lerp(color, max(sunColor, float3(1.0, 0.95, 0.85)), sun);
 

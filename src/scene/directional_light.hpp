@@ -34,6 +34,17 @@ struct DirectionalLight {
   // lurched every dusk. Stars turn because time passes, not because the light
   // moved.
   float star_angle{0.0F};
+  // Where the moon is. Driven by the game clock at the C#'s rate: one lap
+  // per day MINUS a seventh, so the phase against the sun cycles weekly
+  // (SkyManager.cs MOON_DEGREES_PER_DAY). The sky lights the disc off the
+  // sun direction, so this vector is all the phase machinery there is.
+  glm::vec3 moon_direction{0.3F, 0.85F, 0.42F};
+  // The REAL sun's angle around its track, radians. lightDirection is swung
+  // to a synthetic moon at night so shadows keep a source; the sky's moon
+  // must be lit by the actual sun -- below the horizon and all -- or every
+  // night is new moon. The angle travels instead of the vector because one
+  // float slot was free and the track's shape is a constant.
+  float sun_angle{0.0F};
 };
 
 } // namespace engine
